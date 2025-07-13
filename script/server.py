@@ -62,8 +62,23 @@ def upload_file():
 @app.route('/files')
 def list_files():
     try:
-        files = os.listdir(app.config['UPLOAD_FOLDER'])
-        return render_template('files.html', files=files)
+        files_data = []
+        for filename in os.listdir(app.config['UPLOAD_FOLDER']):
+            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            if os.path.isfile(filepath):
+                # Skip 'latest.jpg' as it's a duplicate of the most recent image
+                if filename == 'latest.jpg':
+                    continue
+                
+                file_stat = os.stat(filepath)
+                files_data.append({
+                    'name': filename,
+                    'size': file_stat.st_size, # in bytes
+                    'last_modified': time.ctime(file_stat.st_mtime) # human-readable time
+                })
+        # Sort files by last modified time, newest first
+        files_data.sort(key=lambda x: x['last_modified'], reverse=True)
+        return render_template('files.html', files=files_data)
     except Exception as e:
         app.logger.error(f'Exception occurred: {str(e)}')
         return jsonify({'message': 'Error listing files', 'error': str(e)}), 500
