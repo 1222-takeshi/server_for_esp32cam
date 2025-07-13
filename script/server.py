@@ -37,11 +37,11 @@ def upload_file():
             return jsonify({'message': 'No selected file'}), 400
 
         if file:
-    allowed_extensions = {'jpg', 'jpeg', 'png', 'gif'}
-     if '.' not in file.filename or \
-       file.filename.rsplit('.', 1)[1].lower() not in allowed_extensions:
-        app.logger.error(f'Invalid file type uploaded: {file.filename}')
-        return jsonify({'message': 'Invalid file type'}), 400
+            allowed_extensions = {'jpg', 'jpeg', 'png', 'gif'}
+             if '.' not in file.filename or \
+               file.filename.rsplit('.', 1)[1].lower() not in allowed_extensions:
+                app.logger.error(f'Invalid file type uploaded: {file.filename}')
+                return jsonify({'message': 'Invalid file type'}), 400
 
             # Save with a timestamped filename
             timestamp_filename = f'image_{int(time.time())}.jpg'
