@@ -4,11 +4,55 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ESP32 Camera Server</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin-top: 20px;
+        }
+        #camera-feed {
+            width: 640px; /* Adjust as needed */
+            height: 480px; /* Adjust as needed */
+            border: 1px solid #ccc;
+            margin-top: 20px;
+        }
+    </style>
 </head>
 <body>
     <h1>ESP32 Camera Server</h1>
+    <img id="camera-feed" src="/files/latest.jpg" alt="Camera Feed">
+    <p>Last updated: <span id="last-updated"></span></p>
     <ul>
         <li><a href="{{ url_for('list_files') }}">View Uploaded Files</a></li>
     </ul>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.0/socket.io.min.js"></script>
+    <script>
+        const cameraFeed = document.getElementById('camera-feed');
+        const lastUpdated = document.getElementById('last-updated');
+
+        // Connect to Socket.IO server
+        const socket = io();
+
+        socket.on('connect', () => {
+            console.log('Connected to WebSocket server');
+        });
+
+        socket.on('disconnect', () => {
+            console.log('Disconnected from WebSocket server');
+        });
+
+        socket.on('new_image', (data) => {
+            if (data && data.image) {
+                cameraFeed.src = `data:image/jpeg;base64,${data.image}`;
+                lastUpdated.textContent = new Date(data.timestamp * 1000).toLocaleTimeString();
+            }
+        });
+
+        // Initial load (optional, as WebSocket will push new images)
+        // refreshImage(); // Removed as WebSocket will handle updates
+    </script>
 </body>
 </html>
