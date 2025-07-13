@@ -1,7 +1,9 @@
 import os
 import socket
 import time
+import logging
 from flask import Flask, request, jsonify, send_from_directory, render_template
+from werkzeug.exceptions import NotFound
 
 # Set socket default timeout to 60 seconds
 socket.setdefaulttimeout(60)
@@ -10,6 +12,10 @@ socket.setdefaulttimeout(60)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 app = Flask(__name__, template_folder=os.path.join(BASE_DIR, 'templates'))
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
 UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
@@ -18,6 +24,7 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 @app.route('/')
 def index():
+    app.logger.info('Accessing index page')
     return render_template('index.html')
 
 @app.route('/upload', methods=['POST'])
