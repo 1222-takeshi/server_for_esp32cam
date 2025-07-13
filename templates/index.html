@@ -4,11 +4,45 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ESP32 Camera Server</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin-top: 20px;
+        }
+        #camera-feed {
+            width: 640px; /* Adjust as needed */
+            height: 480px; /* Adjust as needed */
+            border: 1px solid #ccc;
+            margin-top: 20px;
+        }
+    </style>
 </head>
 <body>
     <h1>ESP32 Camera Server</h1>
+    <img id="camera-feed" src="/files/latest.jpg" alt="Camera Feed">
+    <p>Last updated: <span id="last-updated"></span></p>
     <ul>
         <li><a href="{{ url_for('list_files') }}">View Uploaded Files</a></li>
     </ul>
+
+    <script>
+        const cameraFeed = document.getElementById('camera-feed');
+        const lastUpdated = document.getElementById('last-updated');
+
+        function refreshImage() {
+            const timestamp = new Date().getTime();
+            cameraFeed.src = `/files/latest.jpg?_=${timestamp}`;
+            lastUpdated.textContent = new Date().toLocaleTimeString();
+        }
+
+        // Refresh image every 1 second
+        setInterval(refreshImage, 1000);
+
+        // Initial load
+        refreshImage();
+    </script>
 </body>
 </html>
