@@ -2,6 +2,7 @@ import os
 import socket
 import time
 from flask import Flask, request, jsonify, send_from_directory, render_template
+from werkzeug.exceptions import NotFound
 
 # Set socket default timeout to 60 seconds
 socket.setdefaulttimeout(60)
@@ -38,7 +39,7 @@ def upload_file():
 
         if file:
             allowed_extensions = {'jpg', 'jpeg', 'png', 'gif'}
-             if '.' not in file.filename or \
+            if '.' not in file.filename or \
                file.filename.rsplit('.', 1)[1].lower() not in allowed_extensions:
                 app.logger.error(f'Invalid file type uploaded: {file.filename}')
                 return jsonify({'message': 'Invalid file type'}), 400
@@ -72,6 +73,9 @@ def list_files():
 def get_file(filename):
     try:
         return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+    except NotFound:
+        app.logger.error(f'File not found: {filename}')
+        return jsonify({'message': 'File not found'}), 404
     except Exception as e:
         app.logger.error(f'Exception occurred: {str(e)}')
         return jsonify({'message': 'Error retrieving file', 'error': str(e)}), 500
