@@ -1,7 +1,13 @@
 import os
 import socket
 import time
+import logging
+import base64
+from threading import Thread, Event
+
 from flask import Flask, request, jsonify, send_from_directory, render_template
+from flask_socketio import SocketIO, emit
+from werkzeug.exceptions import NotFound
 
 # Set socket default timeout to 60 seconds
 socket.setdefaulttimeout(60)
@@ -10,14 +16,39 @@ socket.setdefaulttimeout(60)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 app = Flask(__name__, template_folder=os.path.join(BASE_DIR, 'templates'))
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+# Initialize SocketIO
+socketio = SocketIO(app, cors_allowed_origins="*") # CORSを許可
+
 UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
+# Thread for sending images via WebSocket
+thread = None
+thread_stop_event = Event()
+
+def background_image_stream():
+    while not thread_stop_event.is_set():
+        latest_filepath = os.path.join(UPLOAD_FOLDER, 'latest.jpg')
+        if os.path.exists(latest_filepath):
+            try:
+                with open(latest_filepath, 'rb') as f:
+                    image_data = f.read()
+                encoded_image = base64.b64encode(image_data).decode('utf-8')
+                socketio.emit('new_image', {'image': encoded_image, 'timestamp': time.time()})
+            except Exception as e:
+                app.logger.error(f'Error reading or sending image via WebSocket: {e}')
+        socketio.sleep(1) # Sleep for 1 second
+
 @app.route('/')
 def index():
+    app.logger.info('Accessing index page')
     return render_template('index.html')
 
 @app.route('/upload', methods=['POST'])
@@ -38,7 +69,7 @@ def upload_file():
 
         if file:
             allowed_extensions = {'jpg', 'jpeg', 'png', 'gif'}
-             if '.' not in file.filename or \
+            if '.' not in file.filename or \
                file.filename.rsplit('.', 1)[1].lower() not in allowed_extensions:
                 app.logger.error(f'Invalid file type uploaded: {file.filename}')
                 return jsonify({'message': 'Invalid file type'}), 400
@@ -54,6 +85,12 @@ def upload_file():
             file.save(latest_filepath)
 
             app.logger.info(f'File uploaded successfully: {timestamp_filepath} and {latest_filepath}')
+
+            # No longer emit from here, background thread will handle it
+            # import base64
+            # encoded_image = base64.b64encode(image_data).decode('utf-8')
+            # socketio.emit('new_image', {'image': encoded_image, 'timestamp': time.time()})
+
             return jsonify({'message': 'File uploaded successfully'}), 200
     except Exception as e:
         app.logger.error(f'Exception occurred during file upload: {str(e)}')
@@ -72,9 +109,24 @@ def list_files():
 def get_file(filename):
     try:
         return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+    except NotFound:
+        app.logger.error(f'File not found: {filename}')
+        return jsonify({'message': 'File not found'}), 404
     except Exception as e:
         app.logger.error(f'Exception occurred: {str(e)}')
         return jsonify({'message': 'Error retrieving file', 'error': str(e)}), 500
 
+@socketio.on('connect')
+def handle_connect():
+    global thread
+    app.logger.info('Client connected')
+    if thread is None or not thread.is_alive():
+        app.logger.info('Starting background image stream thread')
+        thread = socketio.start_background_task(target=background_image_stream)
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    app.logger.info('Client disconnected')
+
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080)
+    socketio.run(app, host='0.0.0.0', port=8080, debug=True)
