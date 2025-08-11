@@ -25,15 +25,20 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH_MB * 1024 * 1024
 
 
+
 def allowed_file(filename: str) -> bool:
     if '.' not in filename:
         return False
     ext = filename.rsplit('.', 1)[1].lower()
     return ext in ALLOWED_IMAGE_EXTS
 
+
+
 @app.route('/')
 def index():
     return render_template('index.html')
+
+
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
@@ -81,6 +86,7 @@ def upload_file():
         app.logger.error(f'Exception occurred during file upload: {str(e)}')
         return jsonify({'message': 'File upload failed', 'error': str(e)}), 500
 
+
 @app.route('/files')
 def list_files():
     try:
@@ -94,6 +100,7 @@ def list_files():
     except Exception as e:
         app.logger.error(f'Exception occurred: {str(e)}')
         return jsonify({'message': 'Error listing files', 'error': str(e)}), 500
+
 
 @app.route('/files/<filename>')
 def get_file(filename):
