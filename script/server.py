@@ -2,19 +2,34 @@ import os
 import socket
 import time
 from flask import Flask, request, jsonify, send_from_directory, render_template
+from werkzeug.utils import secure_filename
 
 # Set socket default timeout to 60 seconds
 socket.setdefaulttimeout(60)
 
-# Set the base directory
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# Configuration
+DEFAULT_UPLOAD_ROOT = os.path.join(BASE_DIR, 'uploads')
+UPLOAD_FOLDER = os.environ.get('UPLOAD_ROOT', DEFAULT_UPLOAD_ROOT)
+ALLOWED_IMAGE_EXTS = set(
+    ext.strip().lower() for ext in os.environ.get('ALLOWED_IMAGE_EXTS', 'jpg,jpeg,png,gif').split(',') if ext
+)
+MAX_CONTENT_LENGTH_MB = int(os.environ.get('MAX_CONTENT_LENGTH_MB', '5'))
+
 app = Flask(__name__, template_folder=os.path.join(BASE_DIR, 'templates'))
-UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
+
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH_MB * 1024 * 1024
+
+
+def allowed_file(filename: str) -> bool:
+    if '.' not in filename:
+        return False
+    ext = filename.rsplit('.', 1)[1].lower()
+    return ext in ALLOWED_IMAGE_EXTS
 
 @app.route('/')
 def index():
@@ -37,23 +52,30 @@ def upload_file():
             return jsonify({'message': 'No selected file'}), 400
 
         if file:
-            allowed_extensions = {'jpg', 'jpeg', 'png', 'gif'}
-             if '.' not in file.filename or \
-               file.filename.rsplit('.', 1)[1].lower() not in allowed_extensions:
-                app.logger.error(f'Invalid file type uploaded: {file.filename}')
+            filename = secure_filename(file.filename)
+            if not allowed_file(filename):
+                app.logger.error(f'Invalid file type uploaded: {filename}')
                 return jsonify({'message': 'Invalid file type'}), 400
 
+            # Preserve the original extension
+            ext = filename.rsplit('.', 1)[1].lower()
             # Save with a timestamped filename
-            timestamp_filename = f'image_{int(time.time())}.jpg'
-            timestamp_filepath = os.path.join(UPLOAD_FOLDER, timestamp_filename)
+            timestamp_filename = f'image_{int(time.time())}.{ext}'
+            timestamp_filepath = os.path.join(app.config['UPLOAD_FOLDER'], timestamp_filename)
             file.save(timestamp_filepath)
 
-            # Also save as 'latest.jpg' (overwriting previous latest)
-            latest_filepath = os.path.join(UPLOAD_FOLDER, 'latest.jpg')
-            file.seek(0) # Reset file pointer to the beginning before saving again
+            # Also save as 'latest.<ext>' (overwriting previous latest)
+            latest_filename = f'latest.{ext}'
+            latest_filepath = os.path.join(app.config['UPLOAD_FOLDER'], latest_filename)
+            try:
+                file.stream.seek(0)
+            except Exception:
+                pass
             file.save(latest_filepath)
 
-            app.logger.info(f'File uploaded successfully: {timestamp_filepath} and {latest_filepath}')
+            app.logger.info(
+                f'File uploaded successfully: {timestamp_filepath} and {latest_filepath}'
+            )
             return jsonify({'message': 'File uploaded successfully'}), 200
     except Exception as e:
         app.logger.error(f'Exception occurred during file upload: {str(e)}')
@@ -62,7 +84,12 @@ def upload_file():
 @app.route('/files')
 def list_files():
     try:
-        files = os.listdir(app.config['UPLOAD_FOLDER'])
+        files = []
+        for name in os.listdir(app.config['UPLOAD_FOLDER']):
+            path = os.path.join(app.config['UPLOAD_FOLDER'], name)
+            if os.path.isfile(path):
+                files.append(name)
+        files.sort()
         return render_template('files.html', files=files)
     except Exception as e:
         app.logger.error(f'Exception occurred: {str(e)}')
