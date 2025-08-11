@@ -1,0 +1,6 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Q&A / サポート
+    url: https://github.com/1222-takeshi/server_for_esp32cam/discussions
+    about: 使い方や一般的な質問はこちらへ
+
