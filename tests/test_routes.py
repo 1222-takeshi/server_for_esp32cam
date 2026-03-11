@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 
 def test_healthz_returns_ok(client):
     response = client.get("/healthz")
@@ -52,6 +54,7 @@ def test_files_page_lists_latest_upload_first(client):
         data=b"\xff\xd8first-image",
         headers={"Content-Type": "image/jpeg"},
     ).get_json()
+    time.sleep(0.01)
     second = client.post(
         "/upload",
         data=b"\xff\xd8second-image",
