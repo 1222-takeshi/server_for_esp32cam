@@ -34,6 +34,7 @@
     *   サーバーと同じWi-Fiネットワークに接続する。
     *   JPEG スナップショットを撮影する。
     *   各スナップショットを HTTP POST リクエストとして `http://<server_ip_address>:8080/upload` に送信する。
+    *   各 upload に `X-Device-Id` と timezone 付きの `X-Captured-At` を付ける。
     *   必要に応じて撮影の間に deep sleep に戻る。
 *   ESP32-CAM に電源を投入して実行します。
 
@@ -52,7 +53,7 @@
 ### 将来の機能強化:
 
 後続フェーズで次を追加する可能性があります:
-*   複数カメラ識別
+*   camera-aware な一覧や保存整理
 *   保存先の切替（NAS / Google Drive）
 *   短い動画クリップ
 *   ML 処理

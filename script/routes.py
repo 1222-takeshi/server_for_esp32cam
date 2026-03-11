@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+from datetime import datetime, timezone
 
 from flask import Blueprint, current_app, jsonify, render_template, request, send_file
 
@@ -15,6 +16,17 @@ def _storage() -> Storage:
 
 def _looks_like_jpeg(data: bytes) -> bool:
     return len(data) >= 4 and data.startswith(b"\xff\xd8")
+
+
+def _parse_captured_at(value: str) -> datetime:
+    normalized = value.strip()
+    if normalized.endswith("Z"):
+        normalized = f"{normalized[:-1]}+00:00"
+
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is None:
+        raise ValueError("captured_at must include timezone")
+    return parsed.astimezone(timezone.utc)
 
 
 @server.route("/")
@@ -43,6 +55,19 @@ def upload_file():
         current_app.logger.error("Invalid JPEG payload received")
         return jsonify({"message": "Invalid JPEG payload"}), 400
 
+    device_id = request.headers.get("X-Device-Id", "").strip()
+    captured_at_raw = request.headers.get("X-Captured-At", "").strip()
+
+    if not device_id or not captured_at_raw:
+        current_app.logger.error("Missing device metadata")
+        return jsonify({"message": "Missing device metadata"}), 400
+
+    try:
+        captured_at = _parse_captured_at(captured_at_raw)
+    except ValueError:
+        current_app.logger.error("Invalid captured_at metadata: %s", captured_at_raw)
+        return jsonify({"message": "Invalid captured_at metadata"}), 400
+
     try:
         stored = _storage().save_image(request.data, request.mimetype)
         current_app.logger.info("File uploaded successfully: %s", stored.name)
@@ -52,6 +77,8 @@ def upload_file():
                     "message": "File uploaded successfully",
                     "filename": stored.name,
                     "size": stored.size,
+                    "device_id": device_id,
+                    "captured_at": captured_at.isoformat(),
                     "stored_at": stored.created_at.isoformat(),
                 }
             ),

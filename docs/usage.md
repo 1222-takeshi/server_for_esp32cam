@@ -15,17 +15,17 @@ This project provides a web server with the following functionalities:
         Send an HTTP POST request with the image data in the body.
         *   **Method:** `POST`
         *   **URL:** `http://<server_ip>:8080/upload`
-        *   **Headers:** `Content-Type: image/jpeg`
+        *   **Headers:** `Content-Type: image/jpeg`, `X-Device-Id: <camera_name>`, `X-Captured-At: <ISO-8601-with-timezone>`
         *   **Body:** Raw JPEG binary data.
     *   **Response (Success):**
         *   **Status Code:** `200 OK`
-        *   **Body (JSON):** `{"message": "File uploaded successfully", "filename": "<saved_name>", "size": <bytes>, "stored_at": "<timestamp>"}`
+        *   **Body (JSON):** `{"message": "File uploaded successfully", "filename": "<saved_name>", "size": <bytes>, "device_id": "<camera_name>", "captured_at": "<timestamp>", "stored_at": "<timestamp>"}`
     *   **Response (Failure):**
-        *   **Status Code:** `400 Bad Request` for empty data or invalid JPEG payload
+        *   **Status Code:** `400 Bad Request` for empty data, missing device metadata, invalid metadata, or invalid JPEG payload
         *   **Status Code:** `413 Payload Too Large` for uploads beyond the configured size limit
         *   **Status Code:** `415 Unsupported Media Type` for non-JPEG uploads
         *   **Status Code:** `500 Internal Server Error` for storage failures
-    *   **Notes:** Uploaded files are saved with unique server-generated filenames.
+    *   **Notes:** Uploaded files are saved with unique server-generated filenames. `X-Captured-At` must be timezone-aware ISO 8601, for example `2026-03-11T12:34:56Z`.
 
 *   **`GET /files`**
     *   **Description:** Displays an HTML page (`templates/files.html`) listing stored files in reverse chronological order.
@@ -59,7 +59,7 @@ This project provides a web server with the following functionalities:
 
 1.  **ESP32-CAM:** Captures an image.
 2.  **ESP32-CAM:** Connects to Wi-Fi.
-3.  **ESP32-CAM:** Sends the JPEG bytes via an HTTP POST request to `http://<server_ip>:8080/upload`.
+3.  **ESP32-CAM:** Sends the JPEG bytes via an HTTP POST request to `http://<server_ip>:8080/upload` with `X-Device-Id` and `X-Captured-At` headers.
 4.  **Server:** Receives the data, stores it using the configured storage backend, and responds with a success message plus metadata.
 5.  **User:** Opens `http://<server_ip>:8080/files` in a browser to see the list of uploaded images.
 6.  **User:** Clicks on an image filename to view it.
