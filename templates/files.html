@@ -7,11 +7,18 @@
 </head>
 <body>
     <h1>Uploaded Files</h1>
+    {% if files %}
     <ul>
         {% for file in files %}
-        <li><a href="{{ url_for('get_file', filename=file) }}">{{ file }}</a></li>
+        <li>
+            <a href="{{ url_for('server.get_file', filename=file.name) }}">{{ file.name }}</a>
+            ({{ file.size }} bytes, {{ file.created_at.isoformat() }})
+        </li>
         {% endfor %}
     </ul>
-    <a href="{{ url_for('index') }}">Back to Home</a>
+    {% else %}
+    <p>No uploaded files found.</p>
+    {% endif %}
+    <a href="{{ url_for('server.index') }}">Back to Home</a>
 </body>
 </html>
