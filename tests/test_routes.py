@@ -182,6 +182,19 @@ def test_get_file_returns_uploaded_image_bytes(client):
     assert response.mimetype == "image/jpeg"
 
 
+def test_get_file_rejects_metadata_sidecar_requests(client):
+    upload = client.post(
+        "/upload",
+        data=b"\xff\xd8payload",
+        headers=UPLOAD_HEADERS,
+    ).get_json()
+
+    response = client.get(f"/files/{upload['filename']}.json")
+
+    assert response.status_code == 404
+    assert response.get_json()["message"] == "File not found"
+
+
 def test_get_file_returns_404_for_missing_file(client):
     response = client.get("/files/missing.jpg")
 

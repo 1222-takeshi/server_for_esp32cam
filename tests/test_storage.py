@@ -147,3 +147,16 @@ def test_storage_ignores_invalid_metadata_sidecar(tmp_path):
     assert files[0].name == "legacy.jpg"
     assert files[0].device_id is None
     assert files[0].captured_at is None
+
+
+def test_storage_ignores_non_utf8_metadata_sidecar(tmp_path):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+    image_path = tmp_path / "uploads" / "legacy.jpg"
+    image_path.write_bytes(b"\xff\xd8legacy")
+    image_path.with_suffix(".jpg.json").write_bytes(b"\xff")
+
+    files = storage.list_images()
+
+    assert files[0].name == "legacy.jpg"
+    assert files[0].device_id is None
+    assert files[0].captured_at is None

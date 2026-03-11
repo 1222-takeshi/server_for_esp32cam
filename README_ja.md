@@ -15,8 +15,8 @@
     * `POST /upload` は raw JPEG bytes と `X-Device-Id` / `X-Captured-At` ヘッダを受け付けます。
     * 受信したファイルは設定されたストレージ backend に保存されます。
 * **ブラウザからの閲覧**
-    * `GET /` で最新画像と主要リンクを表示します。
-    * `GET /files` で保存済み画像を新しい順に一覧表示します。
+    * `GET /` で最新画像、device metadata、主要リンクを表示します。
+    * `GET /files` で保存済み画像を新しい順に一覧表示し、利用可能なら metadata も表示します。
     * `GET /files/<filename>` で個別画像を返します。
 * **運用しやすさ**
     * `GET /healthz` で軽量な liveness check を提供します。

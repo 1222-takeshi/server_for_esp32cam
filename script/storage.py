@@ -99,7 +99,7 @@ class LocalFilesystemStorage:
 
         try:
             payload = json.loads(metadata_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             return None, None
 
         if not isinstance(payload, dict):
@@ -171,6 +171,8 @@ class LocalFilesystemStorage:
 
     def read_image(self, name: str) -> bytes:
         if not name or Path(name).name != name:
+            raise FileNotFoundError(name)
+        if Path(name).suffix.lower() not in {".jpg", ".jpeg"}:
             raise FileNotFoundError(name)
 
         path = (self.upload_dir / name).resolve()
