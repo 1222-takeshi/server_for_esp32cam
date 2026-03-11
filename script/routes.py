@@ -69,7 +69,12 @@ def upload_file():
         return jsonify({"message": "Invalid captured_at metadata"}), 400
 
     try:
-        stored = _storage().save_image(request.data, request.mimetype)
+        stored = _storage().save_image(
+            request.data,
+            request.mimetype,
+            device_id=device_id,
+            captured_at=captured_at,
+        )
         current_app.logger.info("File uploaded successfully: %s", stored.name)
         return (
             jsonify(
@@ -77,8 +82,8 @@ def upload_file():
                     "message": "File uploaded successfully",
                     "filename": stored.name,
                     "size": stored.size,
-                    "device_id": device_id,
-                    "captured_at": captured_at.isoformat(),
+                    "device_id": stored.device_id,
+                    "captured_at": stored.captured_at.isoformat() if stored.captured_at else None,
                     "stored_at": stored.created_at.isoformat(),
                 }
             ),

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 import time
 
 UPLOAD_HEADERS = {
@@ -32,7 +33,7 @@ def test_upload_accepts_jpeg_and_returns_metadata(client):
     assert body["size"] == len(payload)
     assert body["device_id"] == "esp32cam-front-door"
     assert body["captured_at"] == "2026-03-11T12:34:56+00:00"
-    assert body["stored_at"]
+    assert datetime.fromisoformat(body["stored_at"]).tzinfo is not None
 
 
 def test_upload_rejects_empty_payload(client):
@@ -90,6 +91,36 @@ def test_upload_rejects_invalid_captured_at_metadata(client):
     assert response.get_json()["message"] == "Invalid captured_at metadata"
 
 
+def test_upload_rejects_timezone_naive_captured_at_metadata(client):
+    response = client.post(
+        "/upload",
+        data=b"\xff\xd8jpeg",
+        headers={
+            "Content-Type": "image/jpeg",
+            "X-Device-Id": "esp32cam-front-door",
+            "X-Captured-At": "2026-03-11T12:34:56",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["message"] == "Invalid captured_at metadata"
+
+
+def test_upload_normalizes_non_utc_captured_at_metadata_to_utc(client):
+    response = client.post(
+        "/upload",
+        data=b"\xff\xd8jpeg",
+        headers={
+            "Content-Type": "image/jpeg",
+            "X-Device-Id": "esp32cam-front-door",
+            "X-Captured-At": "2026-03-11T21:34:56+09:00",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["captured_at"] == "2026-03-11T12:34:56+00:00"
+
+
 def test_files_page_lists_latest_upload_first(client):
     first = client.post(
         "/upload",
@@ -117,7 +148,24 @@ def test_files_page_lists_latest_upload_first(client):
     assert response.status_code == 200
     assert second["filename"] in page
     assert first["filename"] in page
+    assert "esp32cam-garden" in page
+    assert "2026-03-11T12:35:56+00:00" in page
     assert page.index(second["filename"]) < page.index(first["filename"])
+
+
+def test_index_page_shows_latest_upload_metadata(client):
+    client.post(
+        "/upload",
+        data=b"\xff\xd8payload",
+        headers=UPLOAD_HEADERS,
+    )
+
+    response = client.get("/")
+    page = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "esp32cam-front-door" in page
+    assert "2026-03-11T12:34:56+00:00" in page
 
 
 def test_get_file_returns_uploaded_image_bytes(client):
@@ -142,7 +190,7 @@ def test_get_file_returns_404_for_missing_file(client):
 
 
 def test_upload_returns_500_when_storage_write_fails(app, client, monkeypatch):
-    def fail_save_image(_data, _content_type):
+    def fail_save_image(_data, _content_type, *, device_id, captured_at):
         raise OSError("disk full")
 
     monkeypatch.setattr(app.extensions["storage"], "save_image", fail_save_image)
