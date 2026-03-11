@@ -2,46 +2,34 @@
 
 ## Hardware Requirements
 
-This server application itself runs on a standard computer or server environment (Windows, Linux, macOS).
+This server application runs on a standard computer or server environment (Windows, Linux, macOS).
 
-To utilize the image upload functionality as intended (e.g., for a remote camera setup), you will typically need:
+To use the current milestone as intended, you will typically need:
 
 *   **An image capturing device:**
-    *   **ESP32-CAM:** This is a common choice, as suggested by the project's context. The device should be programmed to capture images and send them to this server's `/upload` endpoint via HTTP POST request.
-    *   **Other Microcontrollers with Camera and Wi-Fi:** Any microcontroller capable of capturing images and making HTTP requests (e.g., Raspberry Pi with a camera module, other ESP32 variants).
-    *   **Smartphones or Computers:** Can also be used to send images for testing purposes.
-*   **Network Connectivity:** The image capturing device and the server running this application must be on the same network or the server must be accessible from the device (e.g., via the internet with proper port forwarding).
-    *   **For multiple cameras:** Ensure your network has sufficient bandwidth to handle multiple simultaneous image streams. The server's processing power and storage capacity should also be considered for a multi-camera setup.
+    *   **ESP32-CAM:** The primary target. It should capture a JPEG image and send it to this server's `/upload` endpoint via HTTP POST.
+    *   **Other devices that can send JPEG over HTTP:** Useful for testing, but not the primary design target.
+*   **Network Connectivity:** The ESP32-CAM and the server must be able to communicate over the same network, or the server must be reachable from the device.
+*   **Storage Capacity:** Enough local disk space to store uploaded JPEG snapshots.
 
 ## Software Requirements
 
 ### Server-Side:
 
-*   **Python:** The server script (`server.py`) is written in Python. Python 3.x is recommended.
-*   **Flask:** A micro web framework for Python, used to build the web application. You can install it using pip:
-    ```bash
-    pip install Flask
-    ```
-*   **Operating System:** A standard operating system that can run Python (e.g., Linux, macOS, Windows).
+*   **Python:** Python 3.10 or later.
+*   **Flask:** The web framework used by the server.
+*   **pytest:** Used for automated tests.
+*   **Operating System:** Linux, macOS, or Windows.
 
 ### Client-Side (e.g., ESP32-CAM):
 
 *   **For ESP32-CAM:**
-    *   **Arduino IDE** or **PlatformIO IDE:** For programming the ESP32-CAM.
+    *   **Arduino IDE** or **PlatformIO IDE**
     *   **ESP32 Board Support Package:** To be installed in the Arduino IDE or PlatformIO.
-    *   **Relevant Libraries:** Depending on the specific code used on the ESP32-CAM, libraries for camera operation (e.g., `esp_camera.h`), Wi-Fi connectivity (e.g., `WiFi.h`), and HTTP client functionality (e.g., `HTTPClient.h` or a custom implementation) will be needed.
-*   **For Other Devices:**
-    *   Appropriate development environment and libraries for capturing images and making HTTP POST requests.
+    *   **Relevant Libraries:** Camera support, Wi-Fi, and HTTP client support for JPEG upload.
 
-### Optional (For Future Enhancements like ML and I/O Control):
+### Optional (Future Phases):
 
-*   **OpenCV:** If image processing and object detection features are to be implemented, OpenCV (Python version `opencv-python`) would be required on the server-side.
-    ```bash
-    pip install opencv-python
-    ```
-*   **TensorFlow/PyTorch (or other ML frameworks):** For more advanced object detection models.
-*   **MQTT Client Library (e.g., Paho-MQTT):** If using MQTT for bi-directional communication with ESP32 devices for I/O control or sensor data.
-    ```bash
-    pip install paho-mqtt
-    ```
-*   **Other relevant Python libraries:** Depending on the chosen methods for I/O control, sensor data handling, or specific ML tasks.
+*   **NAS access libraries or mount support:** For storing files on network storage.
+*   **Google Drive API libraries:** If cloud-backed storage is added later.
+*   **OpenCV / ML frameworks:** Only after snapshot upload and storage are stable.

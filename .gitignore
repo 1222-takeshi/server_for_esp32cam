@@ -78,7 +78,7 @@ celerybeat-schedule
 
 # Environments
 .env
-.venv
+.venv/
 venv/
 ENV/
 env/
@@ -92,3 +92,7 @@ memo.md
 
 # Gemini temporary files
 .gemini_temp/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+uploads/

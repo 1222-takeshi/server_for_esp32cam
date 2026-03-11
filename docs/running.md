@@ -1,6 +1,7 @@
 # Running the Project
 
-Currently, this project provides a server to receive and display images primarily from a single ESP32-CAM like device. The functionalities for multiple camera management, ML-based object recognition, and remote I/O control described in the "Future Development / Roadmap" section are planned enhancements.
+Currently, this project provides a server to receive and display JPEG snapshots from a single ESP32-CAM class device.
+The current milestone intentionally focuses on **single-camera snapshot upload**. Multi-camera management, ML-based recognition, and remote I/O control remain future work.
 
 ### 1. Run the Server:
 
@@ -16,7 +17,7 @@ Currently, this project provides a server to receive and display images primaril
     ```bash
     python script/server.py
     ```
-*   By default, the server will start on `http://0.0.0.0:8080/`. This means it will be accessible from any IP address on your network on port 8080.
+*   By default, the server will start on `http://0.0.0.0:8080/`.
 *   You will see output in your terminal indicating the server is running, similar to:
     ```
      * Serving Flask app 'server'
@@ -28,24 +29,31 @@ Currently, this project provides a server to receive and display images primaril
     ```
     Note down `<your_local_ip>` if you are accessing the server from another device on the same network (like an ESP32-CAM).
 
-### 2. Configure and Run the Client (e.g., ESP32-CAM):
+### 2. Configure and Run the Client (ESP32-CAM):
 
-*   Ensure your client device (e.g., ESP32-CAM) is programmed to:
+*   Ensure the ESP32-CAM is programmed to:
     *   Connect to the same Wi-Fi network as the server.
-    *   Capture images.
-    *   Send these images as HTTP POST requests to the server's `/upload` endpoint. The URL will be `http://<server_ip_address>:8080/upload`, where `<server_ip_address>` is the IP address of the machine running `server.py`.
-*   Power on and run your ESP32-CAM or other client device.
+    *   Capture JPEG snapshots.
+    *   Send each snapshot as an HTTP POST request to `http://<server_ip_address>:8080/upload`.
+    *   Optionally return to deep sleep between captures.
+*   Power on and run the ESP32-CAM.
 
 ### 3. Accessing Uploaded Images:
 
-*   Once images are uploaded from the client, you can view them by navigating to the following URL in your web browser:
+*   Once images are uploaded, you can view them by navigating to:
     `http://<server_ip_address>:8080/files`
 *   This page will list all successfully uploaded image files. Clicking on a filename will display the image.
-*   Uploaded images are stored in the `uploads` directory in the project's root folder on the server.
+*   Uploaded images are stored in the configured upload directory (`uploads/` by default).
 
-### Future Enhancements (Multi-camera, ML, I/O Control):
+### 4. Health Check:
 
-As features outlined in the "Future Development / Roadmap" (like multi-camera feeds, ML processing, I/O control) are implemented:
-*   The server (`server.py`) will be significantly enhanced, or new components/scripts might be introduced.
-*   Client-side (ESP32) firmware will require corresponding updates to support new functionalities (e.g., sending camera IDs, receiving control commands).
-*   Detailed instructions for setting up and running these advanced features will be added to this README in their respective sections or new dedicated guides.
+*   To confirm the server process is alive:
+    `http://<server_ip_address>:8080/healthz`
+
+### Future Enhancements:
+
+Later phases may add:
+*   multiple camera identification
+*   storage backend switching (NAS / Google Drive)
+*   short video clips
+*   ML processing

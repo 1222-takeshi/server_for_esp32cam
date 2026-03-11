@@ -7,8 +7,18 @@
 </head>
 <body>
     <h1>ESP32 Camera Server</h1>
+    <p>Snapshot-first image receiver for ESP32-CAM devices.</p>
+    <p>Stored images: {{ image_count }}</p>
+    {% if latest %}
+    <h2>Latest Upload</h2>
+    <p><a href="{{ url_for('server.get_file', filename=latest.name) }}">{{ latest.name }}</a></p>
+    <img src="{{ url_for('server.get_file', filename=latest.name) }}" alt="Latest uploaded image" style="max-width: 480px; height: auto;">
+    {% else %}
+    <p>No images uploaded yet.</p>
+    {% endif %}
     <ul>
-        <li><a href="{{ url_for('list_files') }}">View Uploaded Files</a></li>
+        <li><a href="{{ url_for('server.list_files') }}">View Uploaded Files</a></li>
+        <li><a href="{{ url_for('server.healthz') }}">Health Check</a></li>
     </ul>
 </body>
 </html>

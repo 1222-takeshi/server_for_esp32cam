@@ -1,16 +1,20 @@
+from __future__ import annotations
+
 import pytest
-from script.server import app as flask_app
 
-@pytest.fixture
-def app():
-    """Create and configure a new app instance for each test."""
-    # app.config.update({
-    #     "TESTING": True,
-    # })
+from script.app import create_app
 
-    yield flask_app
 
-@pytest.fixture
+@pytest.fixture()
+def app(tmp_path):
+    return create_app(
+        {
+            "TESTING": True,
+            "UPLOAD_DIR": tmp_path / "uploads",
+        }
+    )
+
+
+@pytest.fixture()
 def client(app):
-    """A test client for the app."""
     return app.test_client()

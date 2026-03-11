@@ -23,17 +23,22 @@
     ```
 
 4.  **依存関係のインストール:**
-    Flask (および後で追加される可能性のある他のPython依存関係) をインストールします:
+    `pyproject.toml` を使って、editable mode と development dependency をまとめてインストールします:
     ```bash
-    pip install Flask
-    ```
-    将来的に `requirements.txt` ファイルが提供される場合は、すべての依存関係を次のようにインストールできます:
-    ```bash
-    pip install -r requirements.txt
+    pip install -e ".[dev]"
     ```
 
 5.  **ディレクトリ構造:**
-    サーバースクリプト (`script/server.py`) は、アップロードされた画像を保存するために、プロジェクトのベースディレクトリ ( `script/` および `templates/` がある場所) に `uploads` という名前のディレクトリを期待します。サーバー起動時に存在しない場合は自動的に作成されます。
+    サーバーはデフォルトで `uploads/` に JPEG ファイルを保存します。このディレクトリは存在しない場合、起動時に自動作成されます。
+
+6.  **オプション設定:**
+    環境変数でランタイム挙動を変更できます:
+    ```bash
+    export PORT=8080
+    export ESP32CAM_UPLOAD_DIR=/absolute/path/to/uploads
+    export ESP32CAM_STORAGE_BACKEND=local
+    export ESP32CAM_MAX_CONTENT_LENGTH=1048576
+    ```
 
 ### クライアントサイドのセットアップ (例: Arduino IDEを使用したESP32-CAM):
 
@@ -74,7 +79,8 @@
         1.  カメラを初期化する。
         2.  Wi-Fiネットワークに接続する。
         3.  画像をキャプチャする。
-        4.  画像データ (例: JPEG) をHTTP POSTリクエストを介してサーバーの `/upload` エンドポイント (例: `http://<your_server_ip>:8080/upload`) に送信する。
+        4.  画像データを JPEG として中央サーバーの `/upload` エンドポイント (例: `http://<your_server_ip>:8080/upload`) に HTTP POST リクエストで送信する。
+        5.  低電力運用が必要な場合は、送信後に deep sleep へ戻る。
     *   ESP32-CAMからサーバーに画像を送信するための多くのサンプルスケッチがオンラインで入手可能です。サーバーのIPアドレスとポートを指すように適合させる必要があります。
 
     **サンプルスニペット (概念的 - 画像データ送信用):**
@@ -87,7 +93,7 @@
       HTTPClient http;
       // <your_server_ip> を server.py を実行しているマシンの実際のIPに置き換えてください
       http.begin("http://<your_server_ip>:8080/upload");
-      http.addHeader("Content-Type", "image/jpeg"); // または適切なコンテントタイプ
+      http.addHeader("Content-Type", "image/jpeg");
 
       int httpResponseCode = http.POST(imageData, imageLen);
 
@@ -112,3 +118,14 @@
 
 7.  **ESP32-CAMへのスケッチのアップロード:**
     ESP32-CAMをコンピューターに接続し (通常はUSB-シリアルアダプター経由で、フラッシュモードになっていることを確認)、スケッチをアップロードします。
+
+## ローカルでの動作確認
+
+実機接続前に、`curl` で upload 経路を確認できます:
+
+```bash
+curl -X POST \
+  -H "Content-Type: image/jpeg" \
+  --data-binary @sample.jpg \
+  http://127.0.0.1:8080/upload
+```
