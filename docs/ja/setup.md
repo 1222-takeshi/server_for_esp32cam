@@ -79,7 +79,7 @@
         1.  カメラを初期化する。
         2.  Wi-Fiネットワークに接続する。
         3.  画像をキャプチャする。
-        4.  画像データを JPEG として中央サーバーの `/upload` エンドポイント (例: `http://<your_server_ip>:8080/upload`) に HTTP POST リクエストで送信する。
+        4.  画像データを JPEG として中央サーバーの `/upload` エンドポイント (例: `http://<your_server_ip>:8080/upload`) に `X-Device-Id` と `X-Captured-At` を付けて HTTP POST リクエストで送信する。
         5.  低電力運用が必要な場合は、送信後に deep sleep へ戻る。
     *   ESP32-CAMからサーバーに画像を送信するための多くのサンプルスケッチがオンラインで入手可能です。サーバーのIPアドレスとポートを指すように適合させる必要があります。
 
@@ -94,6 +94,8 @@
       // <your_server_ip> を server.py を実行しているマシンの実際のIPに置き換えてください
       http.begin("http://<your_server_ip>:8080/upload");
       http.addHeader("Content-Type", "image/jpeg");
+      http.addHeader("X-Device-Id", "esp32cam-front-door");
+      http.addHeader("X-Captured-At", "2026-03-11T12:34:56Z");
 
       int httpResponseCode = http.POST(imageData, imageLen);
 
@@ -126,6 +128,8 @@
 ```bash
 curl -X POST \
   -H "Content-Type: image/jpeg" \
+  -H "X-Device-Id: esp32cam-local-test" \
+  -H "X-Captured-At: 2026-03-11T12:34:56Z" \
   --data-binary @sample.jpg \
   http://127.0.0.1:8080/upload
 ```

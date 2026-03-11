@@ -12,11 +12,11 @@
 ## 現在の機能
 
 * **スナップショットアップロード**
-    * `POST /upload` は raw JPEG bytes を受け付けます。
+    * `POST /upload` は raw JPEG bytes と `X-Device-Id` / `X-Captured-At` ヘッダを受け付けます。
     * 受信したファイルは設定されたストレージ backend に保存されます。
 * **ブラウザからの閲覧**
-    * `GET /` で最新画像と主要リンクを表示します。
-    * `GET /files` で保存済み画像を新しい順に一覧表示します。
+    * `GET /` で最新画像、device metadata、主要リンクを表示します。
+    * `GET /files` で保存済み画像を新しい順に一覧表示し、利用可能なら metadata も表示します。
     * `GET /files/<filename>` で個別画像を返します。
 * **運用しやすさ**
     * `GET /healthz` で軽量な liveness check を提供します。
@@ -27,7 +27,7 @@
 * 同じサーバー API の裏側で保存先 backend を追加する
     * NAS
     * Google Drive
-* 単一カメラ upload が安定した後に camera identification を追加する
+* 単一カメラ経路が安定した後に、camera-aware な一覧や保存整理を拡張する
 * 連続動画ではなく、必要なら短い clip upload を後続フェーズで評価する
 * snapshot と storage path が安定した後に ML パイプラインを再検討する
 

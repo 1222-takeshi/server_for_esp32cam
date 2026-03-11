@@ -23,10 +23,10 @@ Future work should extend this base without weakening the snapshot-first path.
     * NAS
     * Google Drive
 
-### 3. Introduce Multi-Camera Identification
+### 3. Expand Camera-Aware Handling
 
-*   Add camera IDs only after the single-camera path is stable.
-*   Organize saved assets per camera.
+*   Keep `device_id` and `captured_at` in the upload contract from the beginning.
+*   Organize saved assets per camera once storage backends expand.
 *   Expand the UI to distinguish image sources clearly.
 
 ### 4. Evaluate Short Video Clips

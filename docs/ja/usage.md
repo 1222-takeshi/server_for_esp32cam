@@ -15,22 +15,22 @@
         画像データをボディに入れてHTTP POSTリクエストを送信します。
         *   **メソッド:** `POST`
         *   **URL:** `http://<server_ip>:8080/upload`
-        *   **ヘッダー:** `Content-Type: image/jpeg`
+        *   **ヘッダー:** `Content-Type: image/jpeg`, `X-Device-Id: <camera_name>`, `X-Captured-At: <timezone付きISO-8601>`
         *   **ボディ:** JPEG のバイナリデータ。
     *   **レスポンス (成功時):**
         *   **ステータスコード:** `200 OK`
-        *   **ボディ (JSON):** `{"message": "File uploaded successfully", "filename": "<saved_name>", "size": <bytes>, "stored_at": "<timestamp>" }`
+        *   **ボディ (JSON):** `{"message": "File uploaded successfully", "filename": "<saved_name>", "size": <bytes>, "device_id": "<camera_name>", "captured_at": "<UTC timestamp>", "stored_at": "<UTC timestamp>" }`
     *   **レスポンス (失敗時):**
-        *   **ステータスコード:** `400 Bad Request` (データなし、または JPEG として不正な payload)
+        *   **ステータスコード:** `400 Bad Request` (データなし、device metadata 欠落、metadata 不正、または JPEG として不正な payload)
         *   **ステータスコード:** `413 Payload Too Large` (サイズ上限超過)
         *   **ステータスコード:** `415 Unsupported Media Type` (JPEG以外)
         *   **ステータスコード:** `500 Internal Server Error` (保存失敗)
-    *   **注意:** アップロードされたファイルはサーバー側で一意なファイル名に変換して保存されます。
+    *   **注意:** アップロードされたファイルはサーバー側で一意なファイル名に変換して保存されます。`X-Captured-At` は `2026-03-11T12:34:56Z` のような timezone 付き ISO 8601 を指定してください。JSON レスポンスの `captured_at` は UTC に正規化され、`stored_at` はサーバー側の保存時刻を UTC で表します。
 
 *   **`GET /files`**
-    *   **説明:** 保存済みファイルを新しい順に一覧表示するHTMLページ (`templates/files.html`) を表示します。
+    *   **説明:** 保存済みファイルを新しい順に一覧表示するHTMLページ (`templates/files.html`) を表示し、利用可能なら保存済み metadata も併記します。
     *   **使用方法:** Webブラウザで `http://<server_ip>:8080/files` を開きます。
-    *   **レスポンス:** クリック可能なファイル名のリストがあるHTMLページ。
+    *   **レスポンス:** クリック可能なファイル名に加えて `device_id`、`captured_at`、`stored_at` の詳細を含むHTMLページ。
 
 *   **`GET /files/<filename>`**
     *   **説明:** `uploads/` ディレクトリから特定のファイルを配信します。
@@ -48,18 +48,20 @@
 
 1.  **メインページ (`/`):**
     *   最新アップロード画像を表示します。
+    *   最新 upload の `device_id`、`captured_at`、`stored_at` を表示します。
     *   現在の保存画像数を表示します。
     *   files 一覧と health check へのリンクを提供します。
 
 2.  **アップロードされたファイルページ (`/files`):**
     *   サーバーに正常にアップロードされたすべての画像を一覧表示します。
+    *   利用可能な場合は各画像の `device_id`、`captured_at`、`stored_at` を表示します。
     *   各ファイル名はリンクになっており、クリックすると対応する画像が表示されます。
 
 ### サンプルワークフロー (ESP32-CAMからサーバーへ):
 
 1.  **ESP32-CAM:** 画像をキャプチャします。
 2.  **ESP32-CAM:** Wi-Fiに接続します。
-3.  **ESP32-CAM:** JPEG バイト列を `http://<server_ip>:8080/upload` へ HTTP POST リクエストとして送信します。
+3.  **ESP32-CAM:** JPEG バイト列を `http://<server_ip>:8080/upload` へ `X-Device-Id` と `X-Captured-At` 付きの HTTP POST リクエストとして送信します。
 4.  **サーバー:** データを受信し、設定された storage backend に保存して、成功メッセージとメタデータを返します。
 5.  **ユーザー:** ブラウザで `http://<server_ip>:8080/files` を開き、アップロードされた画像のリストを表示します。
 6.  **ユーザー:** 画像ファイル名をクリックして表示します。

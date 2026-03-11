@@ -79,7 +79,7 @@ This is a general guide. Specifics might vary based on your ESP32-CAM board vers
         1.  Initializes the camera.
         2.  Connects to your Wi-Fi network.
         3.  Captures an image.
-        4.  Sends the image data as a JPEG via an HTTP POST request to the server's central `/upload` endpoint (e.g., `http://<your_server_ip>:8080/upload`).
+        4.  Sends the image data as a JPEG via an HTTP POST request to the server's central `/upload` endpoint (e.g., `http://<your_server_ip>:8080/upload`) with `X-Device-Id` and `X-Captured-At` headers.
         5.  Returns to deep sleep if low-power operation is desired.
     *   There are many example sketches available online for sending images from ESP32-CAM to a server. You'll need to adapt one to point to your server's IP address and port.
 
@@ -94,6 +94,8 @@ This is a general guide. Specifics might vary based on your ESP32-CAM board vers
       // Replace <your_server_ip> with the actual IP of the machine running server.py
       http.begin("http://<your_server_ip>:8080/upload");
       http.addHeader("Content-Type", "image/jpeg");
+      http.addHeader("X-Device-Id", "esp32cam-front-door");
+      http.addHeader("X-Captured-At", "2026-03-11T12:34:56Z");
 
       int httpResponseCode = http.POST(imageData, imageLen);
 
@@ -126,6 +128,8 @@ Before connecting real hardware, you can test the upload path with `curl`:
 ```bash
 curl -X POST \
   -H "Content-Type: image/jpeg" \
+  -H "X-Device-Id: esp32cam-local-test" \
+  -H "X-Captured-At: 2026-03-11T12:34:56Z" \
   --data-binary @sample.jpg \
   http://127.0.0.1:8080/upload
 ```

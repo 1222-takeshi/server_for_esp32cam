@@ -14,11 +14,11 @@ Continuous video, multi-camera orchestration, ML processing, and remote I/O cont
 ## Current Functionality
 
 * **Snapshot Upload**
-    * `POST /upload` accepts raw JPEG bytes.
+    * `POST /upload` accepts raw JPEG bytes plus `X-Device-Id` and `X-Captured-At` headers.
     * Uploaded files are stored by the configured storage backend.
 * **Browser Access**
-    * `GET /` shows the latest uploaded image and quick links.
-    * `GET /files` lists stored images in reverse chronological order.
+    * `GET /` shows the latest uploaded image, its device metadata, and quick links.
+    * `GET /files` lists stored images in reverse chronological order together with stored metadata when available.
     * `GET /files/<filename>` serves an individual uploaded image.
 * **Operational Readiness**
     * `GET /healthz` provides a lightweight liveness endpoint.
@@ -29,7 +29,7 @@ Continuous video, multi-camera orchestration, ML processing, and remote I/O cont
 * Add alternative storage backends behind the same server API:
     * NAS
     * Google Drive
-* Support camera identification once single-camera upload is stable.
+* Expand camera-aware browsing and storage organization once the single-camera path is stable.
 * Evaluate short clip upload as a later phase.
 * Revisit ML pipelines only after the snapshot and storage path are stable.
 
