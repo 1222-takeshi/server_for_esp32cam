@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,10 +13,51 @@ class StoredImage:
     name: str
     size: int
     created_at: datetime
+    device_id: str | None = None
+    captured_at: datetime | None = None
+
+
+def _normalize_device_id(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _normalize_captured_at(value: datetime | str | None) -> datetime | None:
+    if value is None:
+        return None
+
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return None
+        return value.astimezone(timezone.utc)
+
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if normalized.endswith("Z"):
+        normalized = f"{normalized[:-1]}+00:00"
+
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 class Storage(Protocol):
-    def save_image(self, data: bytes, content_type: str) -> StoredImage:
+    def save_image(
+        self,
+        data: bytes,
+        content_type: str,
+        *,
+        device_id: str,
+        captured_at: datetime,
+    ) -> StoredImage:
         ...
 
     def list_images(self) -> list[StoredImage]:
@@ -30,35 +72,107 @@ class LocalFilesystemStorage:
         self.upload_dir = Path(upload_dir).resolve()
         self.upload_dir.mkdir(parents=True, exist_ok=True)
 
-    def save_image(self, data: bytes, content_type: str) -> StoredImage:
+    def _metadata_path(self, image_path: Path) -> Path:
+        return image_path.with_suffix(f"{image_path.suffix}.json")
+
+    def _write_metadata(
+        self,
+        image_path: Path,
+        device_id: str | None,
+        captured_at: datetime | None,
+    ) -> None:
+        if device_id is None and captured_at is None:
+            return
+
+        payload: dict[str, str] = {}
+        if device_id is not None:
+            payload["device_id"] = device_id
+        if captured_at is not None:
+            payload["captured_at"] = captured_at.isoformat()
+
+        self._metadata_path(image_path).write_text(json.dumps(payload), encoding="utf-8")
+
+    def _read_metadata(self, image_path: Path) -> tuple[str | None, datetime | None]:
+        metadata_path = self._metadata_path(image_path)
+        if not metadata_path.exists() or not metadata_path.is_file():
+            return None, None
+
+        try:
+            payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return None, None
+
+        if not isinstance(payload, dict):
+            return None, None
+
+        device_id = payload.get("device_id")
+        captured_at = payload.get("captured_at")
+        return (
+            _normalize_device_id(device_id) if isinstance(device_id, str) else None,
+            _normalize_captured_at(captured_at) if isinstance(captured_at, str) else None,
+        )
+
+    def save_image(
+        self,
+        data: bytes,
+        content_type: str,
+        *,
+        device_id: str,
+        captured_at: datetime,
+    ) -> StoredImage:
         if content_type != "image/jpeg":
             raise ValueError(f"Unsupported content type: {content_type}")
 
         timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S%f")
         filename = f"image_{timestamp}_{uuid4().hex}.jpg"
         path = self.upload_dir / filename
-        path.write_bytes(data)
-        stat = path.stat()
-        return StoredImage(
-            name=filename,
-            size=stat.st_size,
-            created_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
-        )
+        stored_device_id = _normalize_device_id(device_id)
+        stored_captured_at = _normalize_captured_at(captured_at)
+        if stored_device_id is None or stored_captured_at is None:
+            raise ValueError("device metadata is required")
+
+        try:
+            path.write_bytes(data)
+            self._write_metadata(path, stored_device_id, stored_captured_at)
+            stat = path.stat()
+            return StoredImage(
+                name=filename,
+                size=stat.st_size,
+                created_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+                device_id=stored_device_id,
+                captured_at=stored_captured_at,
+            )
+        except Exception:
+            path.unlink(missing_ok=True)
+            self._metadata_path(path).unlink(missing_ok=True)
+            raise
 
     def list_images(self) -> list[StoredImage]:
         images = [
-            StoredImage(
-                name=path.name,
-                size=path.stat().st_size,
-                created_at=datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc),
-            )
+            StoredImage(*self._stored_image_fields(path))
             for path in self.upload_dir.iterdir()
             if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg"}
         ]
         return sorted(images, key=lambda image: image.created_at, reverse=True)
 
+    def _stored_image_fields(
+        self,
+        path: Path,
+    ) -> tuple[str, int, datetime, str | None, datetime | None]:
+        stat = path.stat()
+        device_id, captured_at = self._read_metadata(path)
+        return (
+            path.name,
+            stat.st_size,
+            datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+            device_id,
+            captured_at,
+        )
+
     def read_image(self, name: str) -> bytes:
         if not name or Path(name).name != name:
+            raise FileNotFoundError(name)
+        if Path(name).suffix.lower() not in {".jpg", ".jpeg"}:
             raise FileNotFoundError(name)
 
         path = (self.upload_dir / name).resolve()

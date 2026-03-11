@@ -35,6 +35,7 @@ The current milestone intentionally focuses on **single-camera snapshot upload**
     *   Connect to the same Wi-Fi network as the server.
     *   Capture JPEG snapshots.
     *   Send each snapshot as an HTTP POST request to `http://<server_ip_address>:8080/upload`.
+    *   Include `X-Device-Id` and timezone-aware `X-Captured-At` headers on every upload.
     *   Optionally return to deep sleep between captures.
 *   Power on and run the ESP32-CAM.
 
@@ -53,7 +54,7 @@ The current milestone intentionally focuses on **single-camera snapshot upload**
 ### Future Enhancements:
 
 Later phases may add:
-*   multiple camera identification
+*   camera-aware browsing and storage organization
 *   storage backend switching (NAS / Google Drive)
 *   short video clips
 *   ML processing

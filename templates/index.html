@@ -12,6 +12,13 @@
     {% if latest %}
     <h2>Latest Upload</h2>
     <p><a href="{{ url_for('server.get_file', filename=latest.name) }}">{{ latest.name }}</a></p>
+    {% if latest.device_id %}
+    <p>Device: {{ latest.device_id }}</p>
+    {% endif %}
+    {% if latest.captured_at %}
+    <p>Captured At: {{ latest.captured_at.isoformat() }}</p>
+    {% endif %}
+    <p>Stored At: {{ latest.created_at.isoformat() }}</p>
     <img src="{{ url_for('server.get_file', filename=latest.name) }}" alt="Latest uploaded image" style="max-width: 480px; height: auto;">
     {% else %}
     <p>No images uploaded yet.</p>

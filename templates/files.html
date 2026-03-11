@@ -12,7 +12,13 @@
         {% for file in files %}
         <li>
             <a href="{{ url_for('server.get_file', filename=file.name) }}">{{ file.name }}</a>
-            ({{ file.size }} bytes, {{ file.created_at.isoformat() }})
+            ({{ file.size }} bytes, stored {{ file.created_at.isoformat() }})
+            {% if file.device_id %}
+            <div>Device: {{ file.device_id }}</div>
+            {% endif %}
+            {% if file.captured_at %}
+            <div>Captured At: {{ file.captured_at.isoformat() }}</div>
+            {% endif %}
         </li>
         {% endfor %}
     </ul>

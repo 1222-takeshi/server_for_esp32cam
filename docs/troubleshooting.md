@@ -22,8 +22,17 @@ Here are some common issues you might encounter and how to resolve them:
 *   **Problem:** Files are uploaded, but images are corrupted or not what was expected.
     *   **Check:**
         *   **Client-Side Code:** Ensure the client is sending the image data correctly (e.g., correct image format, complete data).
-        *   **Content-Type Header:** While `server.py` currently doesn't strictly enforce `Content-Type` for saving, ensure the client is sending an appropriate header (e.g., `image/jpeg`) as good practice. The server saves the raw body, so the client must send valid image data.
-        *   **File Naming/Saving:** The server saves files as `image_<timestamp>.jpg`. If the client sends non-JPEG data, the file extension will still be `.jpg`, but the content might be incorrect.
+        *   **Required Headers:** `POST /upload` requires `Content-Type: image/jpeg`, `X-Device-Id`, and `X-Captured-At` on every request. Missing metadata headers are rejected with `400 Missing device metadata`.
+        *   **Timestamp Format:** `X-Captured-At` must be an ISO 8601 timestamp with an explicit timezone, for example `2026-03-11T12:34:56Z` or `2026-03-11T21:34:56+09:00`. Timezone-naive values are rejected with `400 Invalid captured_at metadata`, and non-UTC offsets are normalized to UTC in the JSON response.
+        *   **JPEG Validation:** The server rejects non-`image/jpeg` uploads with `415 Unsupported content type` and rejects payloads that do not look like JPEG bytes with `400 Invalid JPEG payload`.
+        *   **File Naming/Saving:** The server stores accepted uploads with generated names such as `image_<timestamp>_<uuid>.jpg`, so use the returned `filename` instead of assuming a client-side name.
+
+*   **Problem:** Uploads fail with `Missing device metadata` or `Invalid captured_at metadata`.
+    *   **Check:**
+        *   **Header Names:** Verify the request includes the exact header names `X-Device-Id` and `X-Captured-At`.
+        *   **Device ID Value:** Ensure `X-Device-Id` is not blank after trimming whitespace.
+        *   **Timezone-Aware Timestamp:** Ensure `X-Captured-At` includes `Z` or an offset such as `+09:00`. A value like `2026-03-11T12:34:56` is invalid because it omits the timezone.
+        *   **Quick Reproduction:** Test the server with `curl` first so you can confirm the headers independently of the ESP32-CAM firmware.
 
 *   **Problem:** `uploads` directory not found or permission issues.
     *   **Solution:** The `server.py` script attempts to create the `uploads` directory if it doesn't exist. If it fails due to permissions, create the `uploads` directory manually in the project's root folder and ensure the user running the script has write permissions to it.
@@ -39,7 +48,7 @@ Here are some common issues you might encounter and how to resolve them:
 *   **Problem:** ESP32-CAM connects to Wi-Fi but fails to send image to server.
     *   **Check:**
         *   **Server IP and Port:** Verify the server IP address and port in the ESP32-CAM sketch are correct and match the running server.
-        *   **HTTP POST Request Format:** Ensure the sketch is forming the HTTP POST request correctly (correct endpoint `/upload`, correct headers, and the image data in the body).
+        *   **HTTP POST Request Format:** Ensure the sketch targets `/upload`, sends raw JPEG bytes in the body, and includes `Content-Type: image/jpeg`, `X-Device-Id`, and timezone-aware `X-Captured-At` headers.
         *   **Serial Monitor:** Use the Arduino IDE's Serial Monitor to check for error messages or debug output from your ESP32-CAM sketch. This is crucial for diagnosing client-side issues.
         *   **Server Logs:** Simultaneously check the `server.py` console output for any messages when the ESP32-CAM attempts to upload.
 
