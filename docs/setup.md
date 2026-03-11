@@ -23,17 +23,22 @@
     ```
 
 4.  **Install Dependencies:**
-    Install Flask (and any other Python dependencies if added later):
+    Install the project in editable mode with development dependencies:
     ```bash
-    pip install Flask
-    ```
-    If a `requirements.txt` file is provided in the future, you can install all dependencies with:
-    ```bash
-    pip install -r requirements.txt
+    pip install -e ".[dev]"
     ```
 
 5.  **Directory Structure:**
-    The server script (`script/server.py`) expects a directory named `uploads` in the project's base directory (where `script/` and `templates/` are located) to store uploaded images. It will be created automatically if it doesn't exist when the server starts.
+    The server stores uploaded JPEG files in `uploads/` by default. The directory is created automatically if it does not exist.
+
+6.  **Optional Configuration:**
+    You can change runtime behavior with environment variables:
+    ```bash
+    export PORT=8080
+    export ESP32CAM_UPLOAD_DIR=/absolute/path/to/uploads
+    export ESP32CAM_STORAGE_BACKEND=local
+    export ESP32CAM_MAX_CONTENT_LENGTH=1048576
+    ```
 
 ### Client-Side Setup (Example: ESP32-CAM with Arduino IDE):
 
@@ -74,7 +79,8 @@ This is a general guide. Specifics might vary based on your ESP32-CAM board vers
         1.  Initializes the camera.
         2.  Connects to your Wi-Fi network.
         3.  Captures an image.
-        4.  Sends the image data (e.g., as a JPEG) via an HTTP POST request to the server's `/upload` endpoint (e.g., `http://<your_server_ip>:8080/upload`).
+        4.  Sends the image data as a JPEG via an HTTP POST request to the server's central `/upload` endpoint (e.g., `http://<your_server_ip>:8080/upload`).
+        5.  Returns to deep sleep if low-power operation is desired.
     *   There are many example sketches available online for sending images from ESP32-CAM to a server. You'll need to adapt one to point to your server's IP address and port.
 
     **Example Snippet (Conceptual - for sending image data):**
@@ -87,7 +93,7 @@ This is a general guide. Specifics might vary based on your ESP32-CAM board vers
       HTTPClient http;
       // Replace <your_server_ip> with the actual IP of the machine running server.py
       http.begin("http://<your_server_ip>:8080/upload");
-      http.addHeader("Content-Type", "image/jpeg"); // Or appropriate content type
+      http.addHeader("Content-Type", "image/jpeg");
 
       int httpResponseCode = http.POST(imageData, imageLen);
 
@@ -112,3 +118,14 @@ This is a general guide. Specifics might vary based on your ESP32-CAM board vers
 
 7.  **Upload Sketch to ESP32-CAM:**
     Connect your ESP32-CAM to your computer (usually via a USB-to-serial adapter, ensuring it's in flashing mode) and upload the sketch.
+
+## Verify the Server Locally
+
+Before connecting real hardware, you can test the upload path with `curl`:
+
+```bash
+curl -X POST \
+  -H "Content-Type: image/jpeg" \
+  --data-binary @sample.jpg \
+  http://127.0.0.1:8080/upload
+```
