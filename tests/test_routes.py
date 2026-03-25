@@ -10,6 +10,19 @@ UPLOAD_HEADERS = {
 }
 
 
+class FakePersonDetector:
+    def __init__(self, detections):
+        self._detections = detections
+
+    def detect(self, _image_bytes: bytes):
+        return self._detections
+
+
+class BrokenDetector:
+    def detect(self, _image_bytes: bytes):
+        raise RuntimeError("model unavailable")
+
+
 def test_healthz_returns_ok(client):
     response = client.get("/healthz")
 
@@ -153,11 +166,20 @@ def test_files_page_lists_latest_upload_first(client):
     assert page.index(second["filename"]) < page.index(first["filename"])
 
 
-def test_index_page_shows_latest_upload_metadata(client):
+def test_index_page_shows_camera_dashboard_metadata(client):
     client.post(
         "/upload",
-        data=b"\xff\xd8payload",
+        data=b"\xff\xd8front-door",
         headers=UPLOAD_HEADERS,
+    )
+    client.post(
+        "/upload",
+        data=b"\xff\xd8garden",
+        headers={
+            "Content-Type": "image/jpeg",
+            "X-Device-Id": "esp32cam-garden",
+            "X-Captured-At": "2026-03-11T12:36:56Z",
+        },
     )
 
     response = client.get("/")
@@ -165,7 +187,72 @@ def test_index_page_shows_latest_upload_metadata(client):
 
     assert response.status_code == 200
     assert "esp32cam-front-door" in page
-    assert "2026-03-11T12:34:56+00:00" in page
+    assert "esp32cam-garden" in page
+    assert "Camera Dashboard" in page
+
+
+def test_camera_detail_page_filters_snapshots_by_camera(client):
+    front = client.post(
+        "/upload",
+        data=b"\xff\xd8front",
+        headers=UPLOAD_HEADERS,
+    ).get_json()
+    garden = client.post(
+        "/upload",
+        data=b"\xff\xd8garden",
+        headers={
+            "Content-Type": "image/jpeg",
+            "X-Device-Id": "esp32cam-garden",
+            "X-Captured-At": "2026-03-11T12:36:56Z",
+        },
+    ).get_json()
+
+    response = client.get("/cameras/esp32cam-front-door")
+    page = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert front["filename"] in page
+    assert garden["filename"] not in page
+
+
+def test_api_cameras_returns_camera_summaries(client):
+    client.post(
+        "/upload",
+        data=b"\xff\xd8payload",
+        headers=UPLOAD_HEADERS,
+    )
+
+    response = client.get("/api/cameras")
+    body = response.get_json()
+
+    assert response.status_code == 200
+    assert body["cameras"][0]["camera_id"] == "esp32cam-front-door"
+    assert body["cameras"][0]["status"] == "healthy"
+
+
+def test_api_camera_snapshots_returns_camera_scoped_snapshots(client):
+    client.post(
+        "/upload",
+        data=b"\xff\xd8front",
+        headers=UPLOAD_HEADERS,
+    )
+    client.post(
+        "/upload",
+        data=b"\xff\xd8garden",
+        headers={
+            "Content-Type": "image/jpeg",
+            "X-Device-Id": "esp32cam-garden",
+            "X-Captured-At": "2026-03-11T12:36:56Z",
+        },
+    )
+
+    response = client.get("/api/cameras/esp32cam-front-door/snapshots")
+    body = response.get_json()
+
+    assert response.status_code == 200
+    assert body["camera_id"] == "esp32cam-front-door"
+    assert len(body["snapshots"]) == 1
+    assert body["snapshots"][0]["camera_id"] == "esp32cam-front-door"
 
 
 def test_get_file_returns_uploaded_image_bytes(client):
@@ -225,3 +312,39 @@ def test_upload_returns_413_for_large_payload(app, client):
 
     assert response.status_code == 413
     assert response.get_json()["message"] == "Payload too large"
+
+
+def test_upload_records_person_detection_when_detector_finds_person(app, client):
+    from script.detector import Detection
+
+    app.extensions["inference_service"].detector = FakePersonDetector(
+        [Detection(label="person", score=0.9, x1=0.1, y1=0.2, x2=0.4, y2=0.8)]
+    )
+
+    client.post(
+        "/upload",
+        data=b"\xff\xd8payload",
+        headers=UPLOAD_HEADERS,
+    )
+
+    response = client.get("/api/detections")
+    body = response.get_json()
+
+    assert response.status_code == 200
+    assert len(body["detections"]) == 1
+    assert body["detections"][0]["label"] == "person"
+
+
+def test_upload_still_returns_200_when_detector_fails(app, client):
+    app.extensions["inference_service"].detector = BrokenDetector()
+
+    response = client.post(
+        "/upload",
+        data=b"\xff\xd8payload",
+        headers=UPLOAD_HEADERS,
+    )
+    snapshots = app.extensions["metadata_store"].list_camera_snapshots("esp32cam-front-door", limit=1)
+
+    assert response.status_code == 200
+    assert snapshots[0].inference_status == "failed"
+    assert snapshots[0].inference_error == "model unavailable"

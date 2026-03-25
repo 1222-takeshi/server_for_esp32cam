@@ -1,6 +1,6 @@
 # プロジェクトの実行
 
-現在、このプロジェクトは単一の ESP32-CAM 系デバイスから JPEG スナップショットを受信・表示するサーバーを提供します。現行マイルストーンは **単一カメラのスナップショット upload** に絞っており、複数カメラ管理、ML ベース認識、リモート I/O 制御は後続フェーズです。
+現在、このプロジェクトは複数の ESP32-CAM 系デバイスから JPEG スナップショットを受信・表示するサーバーを提供します。現行マイルストーンは **複数台 snapshot upload とサーバー側の人検知** です。リモート I/O 制御と動画系は後続フェーズです。
 この repo には `examples/` 配下に最小 ESP32-CAM 例も含まれているため、スケッチをゼロから書かずに upload 契約を確認できます。
 
 ### 1. サーバーの実行:
@@ -18,6 +18,8 @@
     python script/server.py
     ```
 *   デフォルトでは、サーバーは `http://0.0.0.0:8080/` で起動します。
+*   新しい upload は `uploads/<camera_id>/images/` に保存され、SQLite metadata にも登録されます。
+*   detector は既定では無効です。人検知を使う場合は `ml` extra と TFLite 関連の環境変数を設定してください。
 *   ターミナルにサーバーが実行中であることを示す出力が表示されます (類似の形式):
     ```
      * Serving Flask app 'server'
@@ -47,11 +49,15 @@
 
 ### 3. アップロードされた画像へのアクセス:
 
-*   画像がアップロードされたら、Webブラウザで次のURLに移動して表示できます:
+*   画像がアップロードされたら、まず multi-camera dashboard を開きます:
+    `http://<server_ip_address>:8080/`
+*   全画像一覧は次です:
     `http://<server_ip_address>:8080/files`
+*   特定カメラの詳細は次です:
+    `http://<server_ip_address>:8080/cameras/<camera_id>`
 *   このページには、正常にアップロードされたすべての画像ファイルが一覧表示されます。ファイル名をクリックすると画像が表示されます。
 *   アップロード画像は設定された upload ディレクトリ（デフォルトは `uploads/`）に保存されます。
-*   さらに `http://<server_ip_address>:8080/` を開き、最新の `device_id`、`captured_at`、`stored_at` も確認してください。
+*   dashboard では camera ごとの `healthy / stale / offline`、最新 snapshot、人検知状態を確認できます。
 
 ### 4. Health Check:
 
@@ -89,6 +95,14 @@ WSL を再起動すると IP が変わることがあるため、その場合は
 *   安定した mDNS 名が欲しければ `OTA_HOSTNAME` を設定する
 *   本番運用で即 sleep させたい場合は `ENABLE_OTA = false` のままにするか `OTA_WAIT_WINDOW_MS` を短くする
 
+### 7. JSON API:
+
+必要なら次の API も使えます:
+
+*   `GET /api/cameras`
+*   `GET /api/cameras/<camera_id>/snapshots`
+*   `GET /api/detections`
+
 ### 7. すばやい確認フロー:
 
 *   実機前に、まず `curl` で upload 契約をローカル確認します:
@@ -105,7 +119,6 @@ WSL を再起動すると IP が変わることがあるため、その場合は
 ### 将来の機能強化:
 
 後続フェーズで次を追加する可能性があります:
-*   camera-aware な一覧や保存整理
 *   保存先の切替（NAS / Google Drive）
 *   短い動画クリップ
-*   ML 処理
+*   通知 / アラート

@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ camera.display_name }}</title>
+    <style>
+        .image-frame {
+            position: relative;
+            display: inline-block;
+            max-width: 640px;
+        }
+        .image-frame img {
+            display: block;
+            max-width: 100%;
+            height: auto;
+        }
+        .bbox {
+            position: absolute;
+            border: 2px solid red;
+            box-sizing: border-box;
+        }
+        .bbox-label {
+            position: absolute;
+            top: -1.4rem;
+            left: 0;
+            background: red;
+            color: white;
+            font-size: 0.75rem;
+            padding: 0.1rem 0.3rem;
+        }
+    </style>
+</head>
+<body>
+    <h1>{{ camera.display_name }}</h1>
+    <p>Camera ID: {{ camera.camera_id }}</p>
+    <p>Last Seen: {{ camera.last_seen_at.isoformat() }}</p>
+    <p>Expected Interval: {{ camera.expected_interval_seconds }} seconds</p>
+    {% if latest %}
+    <h2>Latest Snapshot</h2>
+    <p>{{ latest.filename }}</p>
+    <p>Inference Status: {{ latest.inference_status }}</p>
+    {% if latest.inference_error %}
+    <p>Inference Error: {{ latest.inference_error }}</p>
+    {% endif %}
+    <div class="image-frame">
+        <img src="{{ url_for('server.get_file', filename=latest.filename) }}" alt="{{ latest.filename }}">
+        {% for detection in latest.detections %}
+        <div
+            class="bbox"
+            style="
+                left: {{ detection.x1 * 100 }}%;
+                top: {{ detection.y1 * 100 }}%;
+                width: {{ (detection.x2 - detection.x1) * 100 }}%;
+                height: {{ (detection.y2 - detection.y1) * 100 }}%;
+            "
+        >
+            <div class="bbox-label">{{ detection.label }} {{ '%.2f'|format(detection.score) }}</div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p>No snapshots for this camera yet.</p>
+    {% endif %}
+
+    <h2>Recent Snapshots</h2>
+    {% if snapshots %}
+    <ul>
+        {% for snapshot in snapshots %}
+        <li>
+            <a href="{{ url_for('server.get_file', filename=snapshot.filename) }}">{{ snapshot.filename }}</a>
+            <div>Stored: {{ snapshot.stored_at.isoformat() }}</div>
+            <div>Captured: {{ snapshot.captured_at.isoformat() if snapshot.captured_at else '-' }}</div>
+            <div>Inference: {{ snapshot.inference_status }}</div>
+            <div>Detections: {{ snapshot.detections|length }}</div>
+        </li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+
+    <a href="{{ url_for('server.list_cameras') }}">Back to Cameras</a>
+</body>
+</html>
