@@ -24,3 +24,19 @@ jobs:
         run: ruff check .
       - name: Pytest
         run: PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest
+
+  compile-esp32-example:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile ESP32-CAM example
+        uses: arduino/compile-sketches@v1
+        with:
+          fqbn: esp32:esp32:esp32cam
+          platforms: |
+            - name: esp32:esp32
+              source-url: https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+          libraries: "[]"
+          sketch-paths: |
+            - examples/esp32cam_snapshot_upload
+          verbose: true

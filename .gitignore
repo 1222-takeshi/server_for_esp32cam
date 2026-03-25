@@ -89,6 +89,7 @@ env/
 
 # Custom
 memo.md
+.tmp/
 
 # Gemini temporary files
 .gemini_temp/
