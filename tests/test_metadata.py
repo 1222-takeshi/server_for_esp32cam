@@ -96,3 +96,34 @@ def test_metadata_store_syncs_legacy_snapshot_without_camera(tmp_path):
     assert snapshots[0].filename == "legacy.jpg"
     assert snapshots[0].camera_id is None
     assert snapshots[0].inference_status == "succeeded"
+
+
+def test_metadata_store_sync_preserves_camera_first_and_last_seen_at(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    older = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    newer = datetime(2026, 3, 11, 12, 5, tzinfo=timezone.utc)
+
+    store.sync_storage_index(
+        [
+            _stored_image(
+                name="newer.jpg",
+                relative_path="cam-a/images/newer.jpg",
+                camera_id="cam-a",
+                captured_at=newer,
+                stored_at=newer,
+            ),
+            _stored_image(
+                name="older.jpg",
+                relative_path="cam-a/images/older.jpg",
+                camera_id="cam-a",
+                captured_at=older,
+                stored_at=older,
+            ),
+        ]
+    )
+
+    camera = store.get_camera("cam-a")
+
+    assert camera is not None
+    assert camera.first_seen_at == older
+    assert camera.last_seen_at == newer

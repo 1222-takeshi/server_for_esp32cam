@@ -88,7 +88,7 @@ class TFLiteCpuDetector:
         output_map: dict[str, object] = {}
         for detail in self._output_details:
             name = detail["name"].lower()
-            tensor = self._np.squeeze(self._interpreter.get_tensor(detail["index"]))
+            tensor = self._interpreter.get_tensor(detail["index"])
             if "box" in name:
                 output_map["boxes"] = tensor
             elif "class" in name:
@@ -102,13 +102,61 @@ class TFLiteCpuDetector:
             return output_map
 
         tensors = [self._interpreter.get_tensor(detail["index"]) for detail in self._output_details]
-        by_rank = sorted(tensors, key=lambda tensor: len(tensor.shape), reverse=True)
+        by_rank = sorted(tensors, key=lambda tensor: len(self._shape_of(tensor)), reverse=True)
         output_map["boxes"] = by_rank[0]
         output_map["classes"] = by_rank[1]
         output_map["scores"] = by_rank[2]
         if len(by_rank) > 3:
             output_map["count"] = by_rank[3]
         return output_map
+
+    @staticmethod
+    def _shape_of(tensor: object) -> tuple[int, ...]:
+        shape = getattr(tensor, "shape", None)
+        if shape is not None:
+            return tuple(int(dim) for dim in shape)
+        if isinstance(tensor, (list, tuple)):
+            if not tensor:
+                return (0,)
+            return (len(tensor),) + TFLiteCpuDetector._shape_of(tensor[0])
+        return ()
+
+    @classmethod
+    def _collapse_leading_singleton_dims(cls, tensor: object):
+        normalized = tensor
+        shape = cls._shape_of(normalized)
+        while shape and shape[0] == 1:
+            normalized = normalized[0]
+            shape = cls._shape_of(normalized)
+        return normalized
+
+    @classmethod
+    def _normalize_box_rows(cls, tensor: object):
+        normalized = cls._collapse_leading_singleton_dims(tensor)
+        shape = cls._shape_of(normalized)
+        if not shape:
+            return [[normalized]]
+        if len(shape) == 1:
+            return [normalized]
+        return normalized
+
+    @classmethod
+    def _normalize_values(cls, tensor: object):
+        normalized = cls._collapse_leading_singleton_dims(tensor)
+        if not cls._shape_of(normalized):
+            return [normalized]
+        return normalized
+
+    @classmethod
+    def _normalize_count(cls, tensor: object) -> int:
+        normalized = cls._collapse_leading_singleton_dims(tensor)
+        while isinstance(normalized, (list, tuple)):
+            if not normalized:
+                return 0
+            normalized = normalized[0]
+        if hasattr(normalized, "item"):
+            return int(normalized.item())
+        return int(normalized)
 
     def _label_for_class(self, class_id: int) -> str:
         if 0 <= class_id < len(self._labels):
@@ -125,11 +173,11 @@ class TFLiteCpuDetector:
             self._interpreter.invoke()
             output_map = self._output_map()
 
-        boxes = output_map["boxes"][0]
-        classes = output_map["classes"][0]
-        scores = output_map["scores"][0]
+        boxes = self._normalize_box_rows(output_map["boxes"])
+        classes = self._normalize_values(output_map["classes"])
+        scores = self._normalize_values(output_map["scores"])
         if "count" in output_map:
-            count = int(output_map["count"].flatten()[0])
+            count = self._normalize_count(output_map["count"])
         else:
             count = len(scores)
 
