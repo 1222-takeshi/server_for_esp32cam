@@ -82,7 +82,7 @@ def test_storage_lists_only_jpeg_files(tmp_path):
     assert len(files) == 1
 
 
-def test_storage_persists_request_metadata(tmp_path):
+def test_storage_persists_request_metadata_in_camera_directory(tmp_path):
     storage = LocalFilesystemStorage(tmp_path / "uploads")
     stored = storage.save_image(
         b"\xff\xd8jpeg",
@@ -91,11 +91,13 @@ def test_storage_persists_request_metadata(tmp_path):
         captured_at=datetime(2026, 3, 11, 12, 34, 56, tzinfo=timezone.utc),
     )
 
-    metadata_path = (tmp_path / "uploads" / stored.name).with_suffix(".jpg.json")
+    image_path = tmp_path / "uploads" / stored.relative_path
+    metadata_path = image_path.with_suffix(".jpg.json")
     files = storage.list_images()
     payload = json.loads(metadata_path.read_text(encoding="utf-8"))
 
-    assert metadata_path.exists()
+    assert image_path.exists()
+    assert stored.relative_path.startswith("esp32cam-front-door/images/")
     assert payload == {
         "device_id": "esp32cam-front-door",
         "captured_at": "2026-03-11T12:34:56+00:00",
@@ -120,7 +122,7 @@ def test_storage_cleans_up_partial_write_when_metadata_write_fails(tmp_path, mon
             captured_at=datetime(2026, 3, 11, 12, 34, 56, tzinfo=timezone.utc),
         )
 
-    assert list((tmp_path / "uploads").iterdir()) == []
+    assert list((tmp_path / "uploads").rglob("*")) == []
 
 
 def test_storage_lists_legacy_images_without_metadata(tmp_path):
@@ -132,6 +134,7 @@ def test_storage_lists_legacy_images_without_metadata(tmp_path):
     files = storage.list_images()
 
     assert files[0].name == legacy_path.name
+    assert files[0].relative_path == legacy_path.name
     assert files[0].device_id is None
     assert files[0].captured_at is None
 
@@ -160,3 +163,17 @@ def test_storage_ignores_non_utf8_metadata_sidecar(tmp_path):
     assert files[0].name == "legacy.jpg"
     assert files[0].device_id is None
     assert files[0].captured_at is None
+
+
+def test_storage_reads_image_by_relative_path(tmp_path):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+    stored = storage.save_image(
+        b"\xff\xd8jpeg",
+        "image/jpeg",
+        device_id="cam-a",
+        captured_at=datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc),
+    )
+
+    payload = storage.read_image_by_relative_path(stored.relative_path)
+
+    assert payload == b"\xff\xd8jpeg"

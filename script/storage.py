@@ -11,6 +11,7 @@ from uuid import uuid4
 @dataclass(frozen=True)
 class StoredImage:
     name: str
+    relative_path: str
     size: int
     created_at: datetime
     device_id: str | None = None
@@ -66,6 +67,9 @@ class Storage(Protocol):
     def read_image(self, name: str) -> bytes:
         ...
 
+    def read_image_by_relative_path(self, relative_path: str) -> bytes:
+        ...
+
 
 class LocalFilesystemStorage:
     def __init__(self, upload_dir: str | Path):
@@ -74,6 +78,18 @@ class LocalFilesystemStorage:
 
     def _metadata_path(self, image_path: Path) -> Path:
         return image_path.with_suffix(f"{image_path.suffix}.json")
+
+    def _camera_image_dir(self, device_id: str) -> Path:
+        return self.upload_dir / device_id / "images"
+
+    def _cleanup_empty_parents(self, path: Path) -> None:
+        current = path.parent
+        while current != self.upload_dir.parent and current != self.upload_dir:
+            try:
+                current.rmdir()
+            except OSError:
+                break
+            current = current.parent
 
     def _write_metadata(
         self,
@@ -112,6 +128,19 @@ class LocalFilesystemStorage:
             _normalize_captured_at(captured_at) if isinstance(captured_at, str) else None,
         )
 
+    def _resolve_relative_path(self, relative_path: str) -> Path:
+        normalized = Path(relative_path)
+        if normalized.is_absolute() or ".." in normalized.parts:
+            raise FileNotFoundError(relative_path)
+        path = (self.upload_dir / normalized).resolve()
+        if self.upload_dir != path and self.upload_dir not in path.parents:
+            raise FileNotFoundError(relative_path)
+        if not path.exists() or not path.is_file():
+            raise FileNotFoundError(relative_path)
+        if path.suffix.lower() not in {".jpg", ".jpeg"}:
+            raise FileNotFoundError(relative_path)
+        return path
+
     def save_image(
         self,
         data: bytes,
@@ -123,13 +152,16 @@ class LocalFilesystemStorage:
         if content_type != "image/jpeg":
             raise ValueError(f"Unsupported content type: {content_type}")
 
-        timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S%f")
-        filename = f"image_{timestamp}_{uuid4().hex}.jpg"
-        path = self.upload_dir / filename
         stored_device_id = _normalize_device_id(device_id)
         stored_captured_at = _normalize_captured_at(captured_at)
         if stored_device_id is None or stored_captured_at is None:
             raise ValueError("device metadata is required")
+
+        image_dir = self._camera_image_dir(stored_device_id)
+        image_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+        filename = f"image_{timestamp}_{uuid4().hex}.jpg"
+        path = image_dir / filename
 
         try:
             path.write_bytes(data)
@@ -137,6 +169,7 @@ class LocalFilesystemStorage:
             stat = path.stat()
             return StoredImage(
                 name=filename,
+                relative_path=str(path.relative_to(self.upload_dir).as_posix()),
                 size=stat.st_size,
                 created_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
                 device_id=stored_device_id,
@@ -145,12 +178,13 @@ class LocalFilesystemStorage:
         except Exception:
             path.unlink(missing_ok=True)
             self._metadata_path(path).unlink(missing_ok=True)
+            self._cleanup_empty_parents(path)
             raise
 
     def list_images(self) -> list[StoredImage]:
         images = [
             StoredImage(*self._stored_image_fields(path))
-            for path in self.upload_dir.iterdir()
+            for path in self.upload_dir.rglob("*")
             if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg"}
         ]
         return sorted(images, key=lambda image: image.created_at, reverse=True)
@@ -158,11 +192,12 @@ class LocalFilesystemStorage:
     def _stored_image_fields(
         self,
         path: Path,
-    ) -> tuple[str, int, datetime, str | None, datetime | None]:
+    ) -> tuple[str, str, int, datetime, str | None, datetime | None]:
         stat = path.stat()
         device_id, captured_at = self._read_metadata(path)
         return (
             path.name,
+            path.relative_to(self.upload_dir).as_posix(),
             stat.st_size,
             datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
             device_id,
@@ -175,9 +210,10 @@ class LocalFilesystemStorage:
         if Path(name).suffix.lower() not in {".jpg", ".jpeg"}:
             raise FileNotFoundError(name)
 
-        path = (self.upload_dir / name).resolve()
-        if self.upload_dir not in path.parents:
+        matches = [path for path in self.upload_dir.rglob(name) if path.is_file()]
+        if len(matches) != 1:
             raise FileNotFoundError(name)
-        if not path.exists() or not path.is_file():
-            raise FileNotFoundError(name)
-        return path.read_bytes()
+        return matches[0].read_bytes()
+
+    def read_image_by_relative_path(self, relative_path: str) -> bytes:
+        return self._resolve_relative_path(relative_path).read_bytes()

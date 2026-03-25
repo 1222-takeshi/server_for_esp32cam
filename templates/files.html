@@ -11,14 +11,15 @@
     <ul>
         {% for file in files %}
         <li>
-            <a href="{{ url_for('server.get_file', filename=file.name) }}">{{ file.name }}</a>
-            ({{ file.size }} bytes, stored {{ file.created_at.isoformat() }})
-            {% if file.device_id %}
-            <div>Device: {{ file.device_id }}</div>
+            <a href="{{ url_for('server.get_file', filename=file.filename) }}">{{ file.filename }}</a>
+            ({{ file.size }} bytes, stored {{ file.stored_at.isoformat() }})
+            {% if file.camera_id %}
+            <div>Device: {{ file.camera_id }}</div>
             {% endif %}
             {% if file.captured_at %}
             <div>Captured At: {{ file.captured_at.isoformat() }}</div>
             {% endif %}
+            <div>Inference: {{ file.inference_status }}</div>
         </li>
         {% endfor %}
     </ul>
