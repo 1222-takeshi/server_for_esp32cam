@@ -11,6 +11,8 @@ def app(tmp_path):
         {
             "TESTING": True,
             "UPLOAD_DIR": tmp_path / "uploads",
+            "DB_PATH": tmp_path / "esp32cam.sqlite3",
+            "INFERENCE_MODE": "sync",
         }
     )
 

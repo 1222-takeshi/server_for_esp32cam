@@ -1,7 +1,7 @@
 # Running the Project
 
-Currently, this project provides a server to receive and display JPEG snapshots from a single ESP32-CAM class device.
-The current milestone intentionally focuses on **single-camera snapshot upload**. Multi-camera management, ML-based recognition, and remote I/O control remain future work.
+Currently, this project provides a server to receive and display JPEG snapshots from multiple ESP32-CAM class devices.
+The current milestone focuses on **multi-camera snapshot upload plus server-side person detection**. Remote I/O control and video streaming remain future work.
 The repository also includes a minimal ESP32-CAM example under `examples/` so you can verify the upload contract without writing a sketch from scratch.
 
 ### 1. Run the Server:
@@ -19,6 +19,8 @@ The repository also includes a minimal ESP32-CAM example under `examples/` so yo
     python script/server.py
     ```
 *   By default, the server will start on `http://0.0.0.0:8080/`.
+*   New uploads are stored under `uploads/<camera_id>/images/`, and camera/snapshot metadata is indexed in SQLite.
+*   By default, the detector is disabled. Enable it later with the `ml` extra and TFLite environment variables if you want person detection.
 *   You will see output in your terminal indicating the server is running, similar to:
     ```
      * Serving Flask app 'server'
@@ -48,11 +50,15 @@ The repository also includes a minimal ESP32-CAM example under `examples/` so yo
 
 ### 3. Accessing Uploaded Images:
 
-*   Once images are uploaded, you can view them by navigating to:
+*   Once images are uploaded, you can view the multi-camera dashboard at:
+    `http://<server_ip_address>:8080/`
+*   You can view the full stored file list at:
     `http://<server_ip_address>:8080/files`
+*   You can view a single camera page at:
+    `http://<server_ip_address>:8080/cameras/<camera_id>`
 *   This page will list all successfully uploaded image files. Clicking on a filename will display the image.
 *   Uploaded images are stored in the configured upload directory (`uploads/` by default).
-*   The latest upload metadata should also appear on `/`.
+*   The dashboard shows camera health (`healthy`, `stale`, `offline`), latest snapshots, and person-detection status.
 
 ### 4. Health Check:
 
@@ -90,13 +96,22 @@ After the first serial flash, the in-repo example can accept OTA updates:
 *   If you want a stable mDNS name, set `OTA_HOSTNAME`.
 *   If the board should sleep immediately in production, disable OTA or shorten `OTA_WAIT_WINDOW_MS`.
 
+### JSON APIs
+
+The server also exposes:
+
+*   `GET /api/cameras`
+*   `GET /api/cameras/<camera_id>/snapshots`
+*   `GET /api/detections`
+
+Use these endpoints if you want to build your own monitoring UI or external tooling.
+
 ### Future Enhancements:
 
 Later phases may add:
-*   camera-aware browsing and storage organization
 *   storage backend switching (NAS / Google Drive)
 *   short video clips
-*   ML processing
+*   notifications and alerts
 
 ### Local Verification Checklist:
 
