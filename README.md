@@ -7,6 +7,7 @@ The current milestone is intentionally narrow:
 * Store uploaded images on a central server.
 * View stored images from a browser.
 * Keep the server structure small but ready for future storage backends such as NAS or Google Drive.
+* Include a minimal ESP32-CAM client example under `examples/` that demonstrates the upload contract end to end.
 
 The primary operating model is **low-power ESP32-CAM firmware** that wakes up, captures a snapshot, uploads it, and returns to deep sleep.
 Continuous video, multi-camera orchestration, ML processing, and remote I/O control are treated as later phases.
@@ -16,6 +17,9 @@ Continuous video, multi-camera orchestration, ML processing, and remote I/O cont
 * **Snapshot Upload**
     * `POST /upload` accepts raw JPEG bytes plus `X-Device-Id` and `X-Captured-At` headers.
     * Uploaded files are stored by the configured storage backend.
+* **Client Example**
+    * The `examples/` directory contains a minimal ESP32-CAM sketch that captures one JPEG, sends it to `/upload`, can return to deep sleep afterward, and can stay OTA-reachable during development.
+    * The example is the quickest way to verify the expected headers, payload shape, and server URL before wiring real hardware.
 * **Browser Access**
     * `GET /` shows the latest uploaded image, its device metadata, and quick links.
     * `GET /files` lists stored images in reverse chronological order together with stored metadata when available.
