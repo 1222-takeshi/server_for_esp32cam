@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from flask import Blueprint, current_app, jsonify, render_template, request, send_file
 
+from script.metadata import CameraSummary, SnapshotRecord
 from script.storage import Storage
 
 server = Blueprint("server", __name__)
@@ -12,6 +13,14 @@ server = Blueprint("server", __name__)
 
 def _storage() -> Storage:
     return current_app.extensions["storage"]
+
+
+def _metadata_store():
+    return current_app.extensions["metadata_store"]
+
+
+def _inference_service():
+    return current_app.extensions["inference_service"]
 
 
 def _looks_like_jpeg(data: bytes) -> bool:
@@ -29,11 +38,52 @@ def _parse_captured_at(value: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
+def _serialize_detection(detection) -> dict[str, object]:
+    return {
+        "label": detection.label,
+        "score": round(detection.score, 4),
+        "bbox": [detection.x1, detection.y1, detection.x2, detection.y2],
+    }
+
+
+def _serialize_snapshot(snapshot: SnapshotRecord) -> dict[str, object]:
+    return {
+        "id": snapshot.id,
+        "filename": snapshot.filename,
+        "relative_path": snapshot.relative_path,
+        "size": snapshot.size,
+        "camera_id": snapshot.camera_id,
+        "captured_at": snapshot.captured_at.isoformat() if snapshot.captured_at else None,
+        "stored_at": snapshot.stored_at.isoformat(),
+        "inference_status": snapshot.inference_status,
+        "inference_error": snapshot.inference_error,
+        "detections": [_serialize_detection(detection) for detection in snapshot.detections],
+    }
+
+
+def _serialize_camera_summary(summary: CameraSummary) -> dict[str, object]:
+    return {
+        "camera_id": summary.camera.camera_id,
+        "display_name": summary.camera.display_name,
+        "expected_interval_seconds": summary.camera.expected_interval_seconds,
+        "first_seen_at": summary.camera.first_seen_at.isoformat(),
+        "last_seen_at": summary.camera.last_seen_at.isoformat(),
+        "status": summary.status,
+        "latest_snapshot": _serialize_snapshot(summary.latest_snapshot) if summary.latest_snapshot else None,
+        "latest_detection_at": (
+            summary.latest_detection_at.isoformat() if summary.latest_detection_at else None
+        ),
+    }
+
+
 @server.route("/")
 def index():
-    images = _storage().list_images()
-    latest = images[0] if images else None
-    return render_template("index.html", latest=latest, image_count=len(images))
+    camera_summaries = _metadata_store().list_camera_summaries()
+    return render_template(
+        "index.html",
+        camera_summaries=camera_summaries,
+        image_count=_metadata_store().total_snapshot_count(),
+    )
 
 
 @server.route("/healthz")
@@ -75,6 +125,8 @@ def upload_file():
             device_id=device_id,
             captured_at=captured_at,
         )
+        snapshot = _metadata_store().record_snapshot(stored)
+        _inference_service().enqueue_snapshot(snapshot.id)
         current_app.logger.info("File uploaded successfully: %s", stored.name)
         return (
             jsonify(
@@ -97,7 +149,7 @@ def upload_file():
 @server.route("/files")
 def list_files():
     try:
-        files = _storage().list_images()
+        files = _metadata_store().list_recent_snapshots()
         return render_template("files.html", files=files)
     except Exception as exc:  # pragma: no cover
         current_app.logger.error("Error listing files: %s", exc)
@@ -117,3 +169,61 @@ def get_file(filename: str):
     except Exception as exc:  # pragma: no cover
         current_app.logger.error("Error retrieving file: %s", exc)
         return jsonify({"message": "Error retrieving file", "error": str(exc)}), 500
+
+
+@server.route("/cameras")
+def list_cameras():
+    camera_summaries = _metadata_store().list_camera_summaries()
+    return render_template("cameras.html", camera_summaries=camera_summaries)
+
+
+@server.route("/cameras/<camera_id>")
+def camera_detail(camera_id: str):
+    camera = _metadata_store().get_camera(camera_id)
+    if camera is None:
+        return jsonify({"message": "Camera not found"}), 404
+
+    snapshots = _metadata_store().list_camera_snapshots(camera_id, limit=20)
+    latest = snapshots[0] if snapshots else None
+    return render_template(
+        "camera_detail.html",
+        camera=camera,
+        snapshots=snapshots,
+        latest=latest,
+    )
+
+
+@server.route("/api/cameras")
+def api_cameras():
+    return jsonify({"cameras": [_serialize_camera_summary(item) for item in _metadata_store().list_camera_summaries()]})
+
+
+@server.route("/api/cameras/<camera_id>/snapshots")
+def api_camera_snapshots(camera_id: str):
+    camera = _metadata_store().get_camera(camera_id)
+    if camera is None:
+        return jsonify({"message": "Camera not found"}), 404
+    return jsonify(
+        {
+            "camera_id": camera_id,
+            "snapshots": [
+                _serialize_snapshot(snapshot)
+                for snapshot in _metadata_store().list_camera_snapshots(camera_id, limit=50)
+            ],
+        }
+    )
+
+
+@server.route("/api/detections")
+def api_detections():
+    camera_id = request.args.get("camera_id")
+    since_raw = request.args.get("since")
+    since = None
+    if since_raw:
+        try:
+            since = _parse_captured_at(since_raw)
+        except ValueError:
+            return jsonify({"message": "Invalid since parameter"}), 400
+
+    detections = _metadata_store().list_detections(camera_id=camera_id, since=since)
+    return jsonify({"detections": detections})

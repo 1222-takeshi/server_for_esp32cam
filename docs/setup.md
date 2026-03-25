@@ -27,6 +27,10 @@
     ```bash
     pip install -e ".[dev]"
     ```
+    If you want to run server-side person detection on your local PC or Raspberry Pi later, install the optional ML dependencies too:
+    ```bash
+    pip install -e ".[dev,ml]"
+    ```
 
 5.  **Directory Structure:**
     The server stores uploaded JPEG files in `uploads/` by default. The directory is created automatically if it does not exist.
@@ -36,9 +40,15 @@
     ```bash
     export PORT=8080
     export ESP32CAM_UPLOAD_DIR=/absolute/path/to/uploads
+    export ESP32CAM_DB_PATH=/absolute/path/to/esp32cam.sqlite3
     export ESP32CAM_STORAGE_BACKEND=local
     export ESP32CAM_MAX_CONTENT_LENGTH=1048576
+    export ESP32CAM_DETECTOR=disabled
+    export ESP32CAM_MODEL_PATH=/absolute/path/to/detect.tflite
+    export ESP32CAM_LABELS_PATH=/absolute/path/to/labels.txt
+    export ESP32CAM_DETECTION_THRESHOLD=0.5
     ```
+    The intended deployment path is local PC first, then Raspberry Pi 4 / CPU-only with the same server-side detector.
 
 ### Client-Side Setup (Example: ESP32-CAM with Arduino IDE):
 
@@ -134,6 +144,28 @@ Use it as the starting point instead of an arbitrary online example so the reque
     Find `<wsl_ip>` with `hostname -I` or `ip addr show` inside WSL.
     If WSL is restarted later, re-check the IP and update the rule.
     Then verify from Windows that `http://<windows_lan_ip>:8080/healthz` returns `{"status":"ok"}` before blaming the ESP32-CAM sketch.
+
+## Server-Side Person Detection
+
+This project keeps inference on the server, not on the ESP32-CAM.
+The first implementation targets `person` detection only and is designed so that the same code path can run on a local PC now and on Raspberry Pi 4 / CPU-only later.
+
+1.  Install the optional ML extra:
+    ```bash
+    pip install -e ".[dev,ml]"
+    ```
+2.  Download or place a TFLite object detection model and labels file on disk.
+3.  Enable the detector:
+    ```bash
+    export ESP32CAM_DETECTOR=tflite_cpu
+    export ESP32CAM_MODEL_PATH=/absolute/path/to/detect.tflite
+    export ESP32CAM_LABELS_PATH=/absolute/path/to/labels.txt
+    export ESP32CAM_PERSON_LABEL=person
+    export ESP32CAM_PERSON_CLASS_ID=0
+    ```
+4.  Start the server and verify that new uploads transition from `pending` to `succeeded` on the dashboard or camera detail page.
+
+If the detector is disabled or the model is missing, uploads still succeed, but inference is recorded as failed.
 
 ## Verify the Server Locally
 

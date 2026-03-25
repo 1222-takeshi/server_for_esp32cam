@@ -27,6 +27,10 @@
     ```bash
     pip install -e ".[dev]"
     ```
+    サーバー側の人検知も使う場合は、ML 依存も追加します:
+    ```bash
+    pip install -e ".[dev,ml]"
+    ```
 
 5.  **ディレクトリ構造:**
     サーバーはデフォルトで `uploads/` に JPEG ファイルを保存します。このディレクトリは存在しない場合、起動時に自動作成されます。
@@ -36,9 +40,15 @@
     ```bash
     export PORT=8080
     export ESP32CAM_UPLOAD_DIR=/absolute/path/to/uploads
+    export ESP32CAM_DB_PATH=/absolute/path/to/esp32cam.sqlite3
     export ESP32CAM_STORAGE_BACKEND=local
     export ESP32CAM_MAX_CONTENT_LENGTH=1048576
+    export ESP32CAM_DETECTOR=disabled
+    export ESP32CAM_MODEL_PATH=/absolute/path/to/detect.tflite
+    export ESP32CAM_LABELS_PATH=/absolute/path/to/labels.txt
+    export ESP32CAM_DETECTION_THRESHOLD=0.5
     ```
+    運用想定は「まず local PC で開発し、将来は Raspberry Pi 4 / CPU-only へ同じコードを移す」形です。
 
 ### クライアントサイドのセットアップ (例: Arduino IDEを使用したESP32-CAM):
 
@@ -134,6 +144,28 @@
     `<wsl_ip>` は WSL 内で `hostname -I` か `ip addr show` で確認できます。
     WSL を再起動すると IP が変わることがあるため、その場合は rule を更新してください。
     その後、Windows から `http://<windows_lan_ip>:8080/healthz` が `{"status":"ok"}` を返すことを確認してから実機を疑ってください。
+
+## サーバー側の人検知
+
+このプロジェクトでは推論を ESP32-CAM 側ではなくサーバー側で行います。
+最初の実装は `person` のみを対象とし、local PC でも Raspberry Pi 4 / CPU-only でも同じ経路で動かせるようにしています。
+
+1.  ML extra を入れます:
+    ```bash
+    pip install -e ".[dev,ml]"
+    ```
+2.  TFLite モデルと labels ファイルを用意します。
+3.  detector を有効にします:
+    ```bash
+    export ESP32CAM_DETECTOR=tflite_cpu
+    export ESP32CAM_MODEL_PATH=/absolute/path/to/detect.tflite
+    export ESP32CAM_LABELS_PATH=/absolute/path/to/labels.txt
+    export ESP32CAM_PERSON_LABEL=person
+    export ESP32CAM_PERSON_CLASS_ID=0
+    ```
+4.  サーバー起動後、dashboard や camera detail で `pending -> succeeded` へ遷移することを確認します。
+
+detector が無効、または model が見つからない場合でも upload 自体は成功しますが、推論状態は failed として記録されます。
 
 ## ローカルでの動作確認
 
