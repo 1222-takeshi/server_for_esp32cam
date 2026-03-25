@@ -166,7 +166,14 @@ class SQLiteMetadataStore:
                     camera_id, display_name, expected_interval_seconds, first_seen_at, last_seen_at, is_active
                 ) VALUES (?, ?, ?, ?, ?, 1)
                 ON CONFLICT(camera_id) DO UPDATE SET
-                    last_seen_at=excluded.last_seen_at,
+                    first_seen_at=CASE
+                        WHEN excluded.first_seen_at < cameras.first_seen_at THEN excluded.first_seen_at
+                        ELSE cameras.first_seen_at
+                    END,
+                    last_seen_at=CASE
+                        WHEN excluded.last_seen_at > cameras.last_seen_at THEN excluded.last_seen_at
+                        ELSE cameras.last_seen_at
+                    END,
                     is_active=1
                 """,
                 (
