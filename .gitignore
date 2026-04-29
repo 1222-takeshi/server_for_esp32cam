@@ -91,6 +91,9 @@ env/
 memo.md
 .tmp/
 
+# Arduino user config (credentials / device-specific settings)
+config.h
+
 # Gemini temporary files
 .gemini_temp/
 .pytest_cache/
