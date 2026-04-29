@@ -5,6 +5,7 @@
 #include <ArduinoOTA.h>
 #include "esp_camera.h"
 #include <time.h>
+// Copy config.h.example to config.h and fill in your values before compiling.
 #include "config.h"
 
 static const char *NTP_SERVER_1 = "pool.ntp.org";

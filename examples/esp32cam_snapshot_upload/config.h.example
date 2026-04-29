@@ -19,7 +19,7 @@
 // ---------------------------------------------------------------------------
 // OTA (Over-The-Air update)
 // ---------------------------------------------------------------------------
-#define ENABLE_OTA          true
+#define ENABLE_OTA          false
 // Hostname used for mDNS / Arduino IDE OTA discovery.
 // Leave empty ("") to reuse DEVICE_ID.
 #define OTA_HOSTNAME        ""

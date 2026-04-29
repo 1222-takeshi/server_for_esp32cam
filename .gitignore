@@ -92,7 +92,7 @@ memo.md
 .tmp/
 
 # Arduino user config (credentials / device-specific settings)
-config.h
+examples/esp32cam_snapshot_upload/config.h
 
 # Gemini temporary files
 .gemini_temp/
