@@ -2,32 +2,18 @@
 #include <HTTPClient.h>
 #include <WiFi.h>
 #include <ESPmDNS.h>
-#include <NetworkUdp.h>
 #include <ArduinoOTA.h>
 #include "esp_camera.h"
 #include <time.h>
-
-// ----------------------------
-// User configuration
-// ----------------------------
-static const char *WIFI_SSID = "your-ssid";
-static const char *WIFI_PASSWORD = "your-password";
-static const char *SERVER_URL = "http://192.168.1.100:8080/upload";
-static const char *DEVICE_ID = "esp32cam-snapshot-01";
-static const bool ENABLE_OTA = false;
-static const char *OTA_HOSTNAME = "";
-static const char *OTA_PASSWORD = "";
-static const uint16_t OTA_PORT = 3232;
-static const uint32_t OTA_WAIT_WINDOW_MS = 15000;
-static const bool ENABLE_DEEP_SLEEP = false;
-static const uint64_t DEEP_SLEEP_SECONDS = 300;
-static const size_t SERVER_MAX_UPLOAD_BYTES = 1024 * 1024;
+// Copy config.h.example to config.h and fill in your values before compiling.
+#include "config.h"
 
 static const char *NTP_SERVER_1 = "pool.ntp.org";
 static const char *NTP_SERVER_2 = "time.google.com";
 static const uint32_t WIFI_CONNECT_TIMEOUT_MS = 15000;
 static const uint32_t TIME_SYNC_TIMEOUT_MS = 10000;
 static uint32_t lastOtaProgressLogMs = 0;
+
 
 // AI Thinker ESP32-CAM pin map.
 // Update this block if you are using a different board variant.
