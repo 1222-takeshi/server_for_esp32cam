@@ -100,6 +100,7 @@ uploads/
 examples/esp32cam_snapshot_upload/config.h
 firmware/**/.pio/
 firmware/**/config.h
+firmware/**/esp32cam_config.h
 
 # macOS
 .DS_Store
