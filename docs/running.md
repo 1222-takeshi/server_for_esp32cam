@@ -1,6 +1,8 @@
 # Running the Project
 
-Currently, this project provides a server to receive and display images primarily from a single ESP32-CAM like device. The functionalities for multiple camera management, ML-based object recognition, and remote I/O control described in the "Future Development / Roadmap" section are planned enhancements.
+Currently, this project provides a server to receive and display JPEG snapshots from multiple ESP32-CAM class devices.
+The current milestone focuses on **multi-camera snapshot upload plus server-side person detection**. Remote I/O control and video streaming remain future work.
+The repository also includes a minimal ESP32-CAM example under `examples/` so you can verify the upload contract without writing a sketch from scratch.
 
 ### 1. Run the Server:
 
@@ -16,7 +18,9 @@ Currently, this project provides a server to receive and display images primaril
     ```bash
     python script/server.py
     ```
-*   By default, the server will start on `http://0.0.0.0:8080/`. This means it will be accessible from any IP address on your network on port 8080.
+*   By default, the server will start on `http://0.0.0.0:8080/`.
+*   New uploads are stored under `uploads/<camera_id>/images/`, and camera/snapshot metadata is indexed in SQLite.
+*   By default, the detector is disabled. Enable it later with the `ml` extra and TFLite environment variables if you want person detection.
 *   You will see output in your terminal indicating the server is running, similar to:
     ```
      * Serving Flask app 'server'
@@ -28,24 +32,98 @@ Currently, this project provides a server to receive and display images primaril
     ```
     Note down `<your_local_ip>` if you are accessing the server from another device on the same network (like an ESP32-CAM).
 
-### 2. Configure and Run the Client (e.g., ESP32-CAM):
+### 2. Configure and Run the Client (ESP32-CAM):
 
-*   Ensure your client device (e.g., ESP32-CAM) is programmed to:
+*   Start from `examples/esp32cam_snapshot_upload/esp32cam_snapshot_upload.ino`.
+*   Ensure the ESP32-CAM is programmed to:
     *   Connect to the same Wi-Fi network as the server.
-    *   Capture images.
-    *   Send these images as HTTP POST requests to the server's `/upload` endpoint. The URL will be `http://<server_ip_address>:8080/upload`, where `<server_ip_address>` is the IP address of the machine running `server.py`.
-*   Power on and run your ESP32-CAM or other client device.
+    *   Optionally expose an OTA window before capturing when you are iterating on the sketch.
+    *   Synchronize time before taking the snapshot.
+    *   Capture JPEG snapshots.
+    *   Send each snapshot as an HTTP POST request to `http://<server_ip_address>:8080/upload`.
+    *   Include `Content-Type: image/jpeg`, `X-Device-Id`, and timezone-aware `X-Captured-At` headers on every upload.
+    *   Optionally return to deep sleep after the upload cycle.
+*   If you use the in-repo example, change only the Wi-Fi credentials, server IP, and device identifier first. Keep the header names and raw JPEG POST body unchanged.
+*   The in-repo example keeps deep sleep disabled by default so you can inspect the serial logs first. OTA is also disabled by default and should be turned on only when you want network uploads after the first serial flash.
+*   The example initializes Wi-Fi and NTP before the camera, and keeps camera defaults conservative (`VGA` with PSRAM, `QVGA` without PSRAM, `fb_count = 1`) because that proved more stable on real hardware.
+*   Power on and run the ESP32-CAM.
 
 ### 3. Accessing Uploaded Images:
 
-*   Once images are uploaded from the client, you can view them by navigating to the following URL in your web browser:
+*   Once images are uploaded, you can view the multi-camera dashboard at:
+    `http://<server_ip_address>:8080/`
+*   You can view the full stored file list at:
     `http://<server_ip_address>:8080/files`
+*   You can view a single camera page at:
+    `http://<server_ip_address>:8080/cameras/<camera_id>`
 *   This page will list all successfully uploaded image files. Clicking on a filename will display the image.
-*   Uploaded images are stored in the `uploads` directory in the project's root folder on the server.
+*   Uploaded images are stored in the configured upload directory (`uploads/` by default).
+*   The dashboard shows camera health (`healthy`, `stale`, `offline`), latest snapshots, and person-detection status.
 
-### Future Enhancements (Multi-camera, ML, I/O Control):
+### 4. Health Check:
 
-As features outlined in the "Future Development / Roadmap" (like multi-camera feeds, ML processing, I/O control) are implemented:
-*   The server (`server.py`) will be significantly enhanced, or new components/scripts might be introduced.
-*   Client-side (ESP32) firmware will require corresponding updates to support new functionalities (e.g., sending camera IDs, receiving control commands).
-*   Detailed instructions for setting up and running these advanced features will be added to this README in their respective sections or new dedicated guides.
+*   To confirm the server process is alive:
+    `http://<server_ip_address>:8080/healthz`
+
+### WSL2 NAT Note
+
+If the server runs inside WSL2 in NAT mode, the ESP32-CAM usually cannot reach the WSL IP directly from your LAN.
+Expose the server through the Windows host IP instead, and forward the port to the current WSL IP:
+
+```powershell
+netsh interface portproxy add v4tov4 listenaddress=0.0.0.0 listenport=8080 connectaddress=<wsl_ip> connectport=8080
+netsh advfirewall firewall add rule name="ESP32 WSL 8080" dir=in action=allow protocol=TCP localport=8080
+```
+
+Find `<wsl_ip>` with `hostname -I` or `ip addr show` inside WSL.
+Then point the ESP32-CAM at `http://<windows_host_ip>:8080/upload` and verify `http://<windows_host_ip>:8080/healthz` from Windows before testing the board again.
+If WSL is restarted, re-check the IP and update the rule.
+
+### OTA Update Flow
+
+After the first serial flash, the in-repo example can accept OTA updates:
+
+*   Watch for `OTA ready on ...` in the serial monitor.
+*   Set `ENABLE_OTA = true` and choose an `OTA_PASSWORD` before relying on OTA.
+*   Upload from Arduino IDE using the network port, or use `espota.py`:
+    ```bash
+    python3 ~/.arduino15/packages/esp32/hardware/esp32/3.3.7/tools/espota.py \
+      -i <device_ip> \
+      -p 3232 \
+      -f /path/to/esp32cam_snapshot_upload.ino.bin \
+      -a <ota_password_if_set>
+    ```
+*   If you want a stable mDNS name, set `OTA_HOSTNAME`.
+*   If the board should sleep immediately in production, disable OTA or shorten `OTA_WAIT_WINDOW_MS`.
+
+### JSON APIs
+
+The server also exposes:
+
+*   `GET /api/cameras`
+*   `GET /api/cameras/<camera_id>/snapshots`
+*   `GET /api/detections`
+
+Use these endpoints if you want to build your own monitoring UI or external tooling.
+
+### Future Enhancements:
+
+Later phases may add:
+*   storage backend switching (NAS / Google Drive)
+*   short video clips
+*   notifications and alerts
+
+### Local Verification Checklist:
+
+Before testing on hardware, confirm the upload contract with:
+
+```bash
+curl -X POST \
+  -H "Content-Type: image/jpeg" \
+  -H "X-Device-Id: esp32cam-local-test" \
+  -H "X-Captured-At: 2026-03-11T12:34:56Z" \
+  --data-binary @sample.jpg \
+  http://127.0.0.1:8080/upload
+```
+
+Then check `GET /` and `GET /files` to confirm that the new image and metadata are visible.

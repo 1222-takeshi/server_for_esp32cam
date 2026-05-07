@@ -7,11 +7,25 @@
 </head>
 <body>
     <h1>Uploaded Files</h1>
+    {% if files %}
     <ul>
         {% for file in files %}
-        <li><a href="{{ url_for('get_file', filename=file) }}">{{ file }}</a></li>
+        <li>
+            <a href="{{ url_for('server.get_file', filename=file.filename) }}">{{ file.filename }}</a>
+            ({{ file.size }} bytes, stored {{ file.stored_at.isoformat() }})
+            {% if file.camera_id %}
+            <div>Device: {{ file.camera_id }}</div>
+            {% endif %}
+            {% if file.captured_at %}
+            <div>Captured At: {{ file.captured_at.isoformat() }}</div>
+            {% endif %}
+            <div>Inference: {{ file.inference_status }}</div>
+        </li>
         {% endfor %}
     </ul>
-    <a href="{{ url_for('index') }}">Back to Home</a>
+    {% else %}
+    <p>No uploaded files found.</p>
+    {% endif %}
+    <a href="{{ url_for('server.index') }}">Back to Home</a>
 </body>
 </html>

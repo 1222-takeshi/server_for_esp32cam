@@ -1,46 +1,45 @@
 # Future Development / Roadmap
 
-This project is currently in its initial phase, focusing on basic image upload from a single client. The long-term vision includes evolving this into a comprehensive multi-camera management system with advanced capabilities. Key areas planned for future development include:
+This project is currently in its first practical milestone:
 
-### 1. Enhanced Multi-Camera Support:
+* single ESP32-CAM
+* JPEG snapshot upload
+* central server storage
+* browser-based browsing
 
-*   **Camera Identification & Management:**
-    *   Implement a system for uniquely identifying each ESP32-CAM client (e.g., by MAC address, configurable ID).
-    *   Server-side logic to handle and differentiate streams/images from multiple identified cameras.
-*   **Dynamic Web Interface:**
-    *   Develop a web UI that can display feeds from multiple cameras simultaneously (e.g., grid view, selectable feeds).
-    *   Allow users to label or name individual camera feeds.
-*   **Scalable Storage:**
-    *   Organize stored images in a way that's easily attributable to specific cameras (e.g., subdirectories per camera ID).
+Future work should extend this base without weakening the snapshot-first path.
 
-### 2. Machine Learning Integration:
+### 1. Stabilize the Single-Camera Snapshot Path
 
-*   **Server-Side Object Detection/Recognition:**
-    *   Integrate OpenCV for basic image processing tasks (e.g., motion detection, face detection).
-    *   Explore using more advanced ML frameworks (TensorFlow, PyTorch) with pre-trained or custom models for object recognition (e.g., identifying common objects, people, specific items).
-    *   Develop a pipeline for processing incoming images/streams and storing/displaying results.
-*   **Real-time Alerts & Notifications:**
-    *   Based on ML detection results, implement a system for sending alerts (e.g., email, web notifications) for specific events.
-*   **Data Annotation & Training (Long-term):**
-    *   Consider features for collecting and annotating images to train custom ML models.
+*   Strengthen upload validation and storage behavior.
+*   Keep the browser UI simple and reliable.
+*   Improve low-power snapshot workflows for deep sleep ESP32-CAM firmware.
 
-### 3. Remote I/O Control and Sensor Integration:
+### 2. Add Storage Backend Flexibility
 
-*   **Bi-directional Communication:**
-    *   Establish a robust communication channel (e.g., MQTT, WebSockets, or dedicated HTTP endpoints) for sending commands from the server to ESP32 clients.
-*   **Motor Control Interface:**
-    *   Develop server-side UI elements and API endpoints to trigger motor movements on connected ESP32 devices (e.g., for pan-tilt camera mounts, robotic components).
-    *   ESP32 firmware to interpret commands and actuate motors (e.g., via PWM, motor drivers).
-*   **Sensor Data Acquisition:**
-    *   Allow ESP32 clients to send sensor data (e.g., temperature, humidity, motion sensors) back to the server.
-    *   Display sensor data alongside camera feeds or on a dashboard.
+*   Keep ESP32-CAM uploads going to one central server API.
+*   Add server-side backend choices such as:
+    * local disk
+    * NAS
+    * Google Drive
 
-### 4. System Improvements:
+### 3. Expand Camera-Aware Handling
 
-*   **Security:** Implement user authentication, secure communication (HTTPS), and authorization for accessing feeds and control functions.
-*   **Configuration:** Allow more settings to be configured via UI or configuration files (e.g., camera settings, storage paths, ML model selection).
-*   **Performance & Scalability:** Optimize server performance for handling multiple concurrent streams and large volumes of data.
-*   **User Interface/User Experience:** Continuously improve the web interface for better usability and presentation of information.
-*   **Comprehensive API:** Develop a well-documented API for programmatic interaction with the server.
+*   Keep `device_id` and `captured_at` in the upload contract from the beginning.
+*   Organize saved assets per camera once storage backends expand.
+*   Expand the UI to distinguish image sources clearly.
 
-Contributions in these areas are highly welcome. Please refer to the "Contributing" section for guidelines.
+### 4. Evaluate Short Video Clips
+
+*   Avoid continuous video as the initial default.
+*   Consider short clip upload only if snapshot workflows are insufficient.
+*   Keep low-power operation as a design constraint.
+
+### 5. Revisit Advanced Features Later
+
+*   ML processing
+*   alerts and notifications
+*   remote I/O control
+*   richer automation pipelines
+
+These features should be added only after the snapshot and storage path is dependable.

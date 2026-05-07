@@ -1,46 +1,49 @@
-from io import BytesIO
-
-from script import server
+from __future__ import annotations
 
 
-def test_index_returns_success(client):
+UPLOAD_HEADERS = {
+    "Content-Type": "image/jpeg",
+    "X-Device-Id": "esp32cam-smoke-test",
+    "X-Captured-At": "2026-03-11T12:34:56Z",
+}
+
+
+def test_server_entrypoint_app_serves_index(client):
     response = client.get("/")
 
     assert response.status_code == 200
 
 
-def test_upload_requires_image_part(client):
-    response = client.post("/upload", data={})
+def test_upload_requires_request_body(client):
+    response = client.post("/upload", data=b"", headers=UPLOAD_HEADERS)
 
     assert response.status_code == 400
-    assert response.get_json()["message"] == "No image file part"
+    assert response.get_json()["message"] == "No data received"
 
 
-def test_upload_rejects_invalid_extension(client):
+def test_upload_rejects_non_jpeg_content_type(client):
     response = client.post(
         "/upload",
-        data={"image": (BytesIO(b"not an image"), "sample.txt")},
-        content_type="multipart/form-data",
+        data=b"not an image",
+        headers={
+            "Content-Type": "text/plain",
+            "X-Device-Id": "esp32cam-smoke-test",
+            "X-Captured-At": "2026-03-11T12:34:56Z",
+        },
     )
 
-    assert response.status_code == 400
-    assert response.get_json()["message"] == "Invalid file type"
+    assert response.status_code == 415
+    assert response.get_json()["message"] == "Unsupported content type"
 
 
-def test_upload_saves_timestamped_and_latest_files(client, monkeypatch, tmp_path):
-    monkeypatch.setattr(server, "UPLOAD_FOLDER", str(tmp_path))
-    server.app.config["UPLOAD_FOLDER"] = str(tmp_path)
+def test_upload_accepts_raw_jpeg_payload(client):
+    payload = b"\xff\xd8\xff\xe0fake-jpeg-data"
 
-    response = client.post(
-        "/upload",
-        data={"image": (BytesIO(b"fake-jpeg-data"), "sample.jpg")},
-        content_type="multipart/form-data",
-    )
+    response = client.post("/upload", data=payload, headers=UPLOAD_HEADERS)
 
     assert response.status_code == 200
-    assert response.get_json()["message"] == "File uploaded successfully"
-    assert (tmp_path / "latest.jpg").read_bytes() == b"fake-jpeg-data"
-    timestamped_files = [path for path in tmp_path.iterdir() if path.name != "latest.jpg"]
-    assert len(timestamped_files) == 1
-    assert timestamped_files[0].name.startswith("image_")
-    assert timestamped_files[0].suffix == ".jpg"
+    body = response.get_json()
+    assert body["message"] == "File uploaded successfully"
+    assert body["device_id"] == "esp32cam-smoke-test"
+    assert body["size"] == len(payload)
+    assert body["filename"].endswith(".jpg")

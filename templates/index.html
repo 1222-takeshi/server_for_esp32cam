@@ -7,8 +7,35 @@
 </head>
 <body>
     <h1>ESP32 Camera Server</h1>
+    <p>Snapshot-first image receiver with multi-camera monitoring and person detection.</p>
+    <p>Stored snapshots: {{ image_count }}</p>
+    {% if camera_summaries %}
+    <h2>Camera Dashboard</h2>
     <ul>
-        <li><a href="{{ url_for('list_files') }}">View Uploaded Files</a></li>
+        {% for summary in camera_summaries %}
+        <li>
+            <h3><a href="{{ url_for('server.camera_detail', camera_id=summary.camera.camera_id) }}">{{ summary.camera.display_name }}</a></h3>
+            <div>Status: {{ summary.status }}</div>
+            <div>Last Seen: {{ summary.camera.last_seen_at.isoformat() }}</div>
+            {% if summary.latest_snapshot %}
+            <div>Latest Snapshot: <a href="{{ url_for('server.get_file', filename=summary.latest_snapshot.filename) }}">{{ summary.latest_snapshot.filename }}</a></div>
+            <div>Captured At: {{ summary.latest_snapshot.captured_at.isoformat() if summary.latest_snapshot.captured_at else '-' }}</div>
+            <div>Inference: {{ summary.latest_snapshot.inference_status }}</div>
+            <div>Person Detections: {{ summary.latest_snapshot.detections|length }}</div>
+            <img src="{{ url_for('server.get_file', filename=summary.latest_snapshot.filename) }}" alt="{{ summary.latest_snapshot.filename }}" style="max-width: 320px; height: auto;">
+            {% else %}
+            <div>No snapshots for this camera yet.</div>
+            {% endif %}
+        </li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <p>No cameras registered yet.</p>
+    {% endif %}
+    <ul>
+        <li><a href="{{ url_for('server.list_cameras') }}">View Cameras</a></li>
+        <li><a href="{{ url_for('server.list_files') }}">View Uploaded Files</a></li>
+        <li><a href="{{ url_for('server.healthz') }}">Health Check</a></li>
     </ul>
 </body>
 </html>

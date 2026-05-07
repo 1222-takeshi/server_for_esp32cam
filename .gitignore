@@ -41,6 +41,7 @@ wheels/
 htmlcov/
 bienv/
 .nox/
+.ruff_cache/
 
 # Translations
 *.mo
@@ -78,7 +79,7 @@ celerybeat-schedule
 
 # Environments
 .env
-.venv
+.venv/
 venv/
 ENV/
 env/
@@ -86,15 +87,16 @@ env/
 # IDEs
 .idea/
 .vscode/
+*.code-workspace
 
 # Custom
 memo.md
-
-# Local runtime artifacts
-uploads/
 .tmp/
 .hermes/
-*.code-workspace
+uploads/
+
+# Arduino user config (credentials / device-specific settings)
+examples/esp32cam_snapshot_upload/config.h
 
 # macOS
 .DS_Store

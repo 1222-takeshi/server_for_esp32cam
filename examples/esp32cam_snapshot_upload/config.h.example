@@ -1,0 +1,39 @@
+// Copy this file to config.h and fill in your values.
+// config.h is git-ignored so your credentials stay local.
+
+#pragma once
+
+// ---------------------------------------------------------------------------
+// Wi-Fi
+// ---------------------------------------------------------------------------
+#define WIFI_SSID     "YOUR_SSID"
+#define WIFI_PASSWORD "YOUR_PASSWORD"
+
+// ---------------------------------------------------------------------------
+// Upload server
+// ---------------------------------------------------------------------------
+#define SERVER_URL             "http://192.168.1.150:8080/upload"
+#define DEVICE_ID              "esp32cam-01"
+#define SERVER_MAX_UPLOAD_BYTES (1024 * 1024)
+
+// ---------------------------------------------------------------------------
+// OTA (Over-The-Air update)
+// ---------------------------------------------------------------------------
+#define ENABLE_OTA          false
+// Hostname used for mDNS / Arduino IDE OTA discovery.
+// Leave empty ("") to reuse DEVICE_ID.
+#define OTA_HOSTNAME        ""
+// Set a non-empty password to protect OTA writes.
+// Leave empty ("") to disable password authentication (not recommended on
+// shared networks).
+#define OTA_PASSWORD        ""
+#define OTA_PORT            3232
+// How long (ms) to listen for an OTA request right after boot when
+// ENABLE_DEEP_SLEEP is true.  Set to 0 to skip the window.
+#define OTA_WAIT_WINDOW_MS  15000
+
+// ---------------------------------------------------------------------------
+// Deep sleep
+// ---------------------------------------------------------------------------
+#define ENABLE_DEEP_SLEEP   false
+#define DEEP_SLEEP_SECONDS  300ULL
