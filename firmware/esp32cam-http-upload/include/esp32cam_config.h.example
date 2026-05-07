@@ -10,3 +10,13 @@
 // this window, the firmware prints a clear failure message and keeps running so
 // the serial monitor remains useful.
 #define WIFI_CONNECT_TIMEOUT_MS 20000
+
+// HTTP upload smoke test settings. Use the Mac LAN IP, not localhost/127.0.0.1.
+// Example: http://192.168.1.23:8080/upload
+#define UPLOAD_URL "http://YOUR_MAC_LAN_IP:8080/upload"
+#define DEVICE_ID "esp32cam-01"
+#define HTTP_UPLOAD_TIMEOUT_MS 10000
+
+// NTP is used to generate the X-Captured-At header required by the Flask server.
+#define NTP_SERVER "pool.ntp.org"
+#define NTP_SYNC_TIMEOUT_MS 10000
