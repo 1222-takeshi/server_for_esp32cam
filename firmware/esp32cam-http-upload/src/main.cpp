@@ -1,11 +1,16 @@
 #include <Arduino.h>
 #include <cstring>
 
-#ifdef WIFI_SMOKE_TEST
+#if defined(WIFI_SMOKE_TEST) || defined(HTTP_UPLOAD_SMOKE_TEST)
 #include <WiFi.h>
 #endif
 
-#if defined(CAMERA_INIT_SMOKE_TEST) || defined(JPEG_CAPTURE_SMOKE_TEST)
+#ifdef HTTP_UPLOAD_SMOKE_TEST
+#include <HTTPClient.h>
+#include <time.h>
+#endif
+
+#if defined(CAMERA_INIT_SMOKE_TEST) || defined(JPEG_CAPTURE_SMOKE_TEST) || defined(HTTP_UPLOAD_SMOKE_TEST)
 #include "esp_camera.h"
 #endif
 
@@ -17,6 +22,27 @@
 #define WIFI_SSID ""
 #define WIFI_PASSWORD ""
 #define WIFI_CONNECT_TIMEOUT_MS 20000
+#define UPLOAD_URL ""
+#define DEVICE_ID "esp32cam-01"
+#define HTTP_UPLOAD_TIMEOUT_MS 10000
+#define NTP_SERVER "pool.ntp.org"
+#define NTP_SYNC_TIMEOUT_MS 10000
+#endif
+
+#ifndef UPLOAD_URL
+#define UPLOAD_URL ""
+#endif
+#ifndef DEVICE_ID
+#define DEVICE_ID "esp32cam-01"
+#endif
+#ifndef HTTP_UPLOAD_TIMEOUT_MS
+#define HTTP_UPLOAD_TIMEOUT_MS 10000
+#endif
+#ifndef NTP_SERVER
+#define NTP_SERVER "pool.ntp.org"
+#endif
+#ifndef NTP_SYNC_TIMEOUT_MS
+#define NTP_SYNC_TIMEOUT_MS 10000
 #endif
 
 namespace {
@@ -25,7 +51,7 @@ constexpr uint32_t kLogIntervalMs = 5000;
 uint32_t lastLogMs = 0;
 uint32_t bootCount = 0;
 
-#if defined(CAMERA_INIT_SMOKE_TEST) || defined(JPEG_CAPTURE_SMOKE_TEST)
+#if defined(CAMERA_INIT_SMOKE_TEST) || defined(JPEG_CAPTURE_SMOKE_TEST) || defined(HTTP_UPLOAD_SMOKE_TEST)
 bool cameraInitSucceeded = false;
 
 // AI Thinker ESP32-CAM pin map for OV2640.
@@ -47,8 +73,14 @@ constexpr int kCameraPinHref = 23;
 constexpr int kCameraPinPclk = 22;
 #endif
 
-#ifdef JPEG_CAPTURE_SMOKE_TEST
+#if defined(JPEG_CAPTURE_SMOKE_TEST) || defined(HTTP_UPLOAD_SMOKE_TEST)
 bool jpegCaptureSucceeded = false;
+#endif
+
+#ifdef HTTP_UPLOAD_SMOKE_TEST
+bool wifiConnected = false;
+bool httpUploadSucceeded = false;
+int lastHttpStatusCode = 0;
 #endif
 
 void printHardwareInfo() {
@@ -75,7 +107,7 @@ void printSerialSmokeBootInfo() {
   Serial.println("========================================");
 }
 
-#ifdef WIFI_SMOKE_TEST
+#if defined(WIFI_SMOKE_TEST) || defined(HTTP_UPLOAD_SMOKE_TEST)
 void printMacAddress() {
   uint8_t mac[6] = {0};
   WiFi.macAddress(mac);
@@ -147,7 +179,7 @@ void connectWiFi() {
 }
 #endif
 
-#if defined(CAMERA_INIT_SMOKE_TEST) || defined(JPEG_CAPTURE_SMOKE_TEST)
+#if defined(CAMERA_INIT_SMOKE_TEST) || defined(JPEG_CAPTURE_SMOKE_TEST) || defined(HTTP_UPLOAD_SMOKE_TEST)
 camera_config_t buildAiThinkerCameraConfig() {
   camera_config_t config = {};
   config.ledc_channel = LEDC_CHANNEL_0;
@@ -235,7 +267,7 @@ void initCameraSmokeTest() {
 }
 #endif
 
-#ifdef JPEG_CAPTURE_SMOKE_TEST
+#if defined(JPEG_CAPTURE_SMOKE_TEST) || defined(HTTP_UPLOAD_SMOKE_TEST)
 const char *pixelFormatName(const pixformat_t format) {
   switch (format) {
     case PIXFORMAT_JPEG:
@@ -298,13 +330,191 @@ void captureJpegSmokeTest() {
   Serial.println("Next step after this passes: HTTP POST upload test.");
   Serial.println("========================================");
 }
+
+#ifdef HTTP_UPLOAD_SMOKE_TEST
+bool connectWiFiForHttpUpload() {
+  printMacAddress();
+
+#if ESP32CAM_HAS_LOCAL_CONFIG
+  Serial.println("Local config: include/esp32cam_config.h found");
+#else
+  Serial.println("Local config: include/esp32cam_config.h not found");
+  Serial.println("Copy include/esp32cam_config.h.example to include/esp32cam_config.h and set WIFI_SSID/WIFI_PASSWORD/UPLOAD_URL.");
+#endif
+
+  if (strlen(WIFI_SSID) == 0 || strcmp(WIFI_SSID, "YOUR_WIFI_SSID") == 0) {
+    Serial.println("HTTP upload smoke test skipped: WIFI_SSID is not configured.");
+    return false;
+  }
+  if (strlen(UPLOAD_URL) == 0 || strcmp(UPLOAD_URL, "http://YOUR_MAC_LAN_IP:8080/upload") == 0) {
+    Serial.println("HTTP upload smoke test skipped: UPLOAD_URL is not configured.");
+    return false;
+  }
+
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  WiFi.disconnect(true, true);
+  delay(500);
+
+  Serial.printf("Connecting to Wi-Fi SSID: %s\n", WIFI_SSID);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  const uint32_t startedAt = millis();
+  uint32_t lastDotAt = 0;
+  while (WiFi.status() != WL_CONNECTED && millis() - startedAt < WIFI_CONNECT_TIMEOUT_MS) {
+    const uint32_t now = millis();
+    if (now - lastDotAt >= 1000) {
+      lastDotAt = now;
+      Serial.print('.');
+    }
+    delay(50);
+  }
+  Serial.println();
+
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.printf("WiFi connection failed: status=%d timeout_ms=%lu\n",
+                  static_cast<int>(WiFi.status()),
+                  static_cast<unsigned long>(WIFI_CONNECT_TIMEOUT_MS));
+    return false;
+  }
+
+  Serial.println("WiFi connected");
+  Serial.printf("IP address: %s\n", WiFi.localIP().toString().c_str());
+  Serial.printf("Gateway: %s\n", WiFi.gatewayIP().toString().c_str());
+  Serial.printf("Subnet: %s\n", WiFi.subnetMask().toString().c_str());
+  Serial.printf("DNS: %s\n", WiFi.dnsIP().toString().c_str());
+  Serial.printf("RSSI: %d dBm\n", WiFi.RSSI());
+  return true;
+}
+
+String capturedAtIso8601Utc() {
+  configTime(0, 0, NTP_SERVER);
+  const uint32_t startedAt = millis();
+  uint32_t lastDotAt = 0;
+  Serial.printf("Syncing time with NTP server: %s\n", NTP_SERVER);
+  time_t now = time(nullptr);
+  while (now < 1700000000 && millis() - startedAt < NTP_SYNC_TIMEOUT_MS) {
+    const uint32_t currentMs = millis();
+    if (currentMs - lastDotAt >= 1000) {
+      lastDotAt = currentMs;
+      Serial.print('.');
+    }
+    delay(50);
+    now = time(nullptr);
+  }
+  Serial.println();
+
+  if (now < 1700000000) {
+    Serial.println("NTP sync timed out; using Unix epoch fallback captured_at.");
+    return "1970-01-01T00:00:00Z";
+  }
+
+  struct tm timeinfo = {};
+  gmtime_r(&now, &timeinfo);
+  char buffer[25] = {0};
+  strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%SZ", &timeinfo);
+  return String(buffer);
+}
+
+void runHttpUploadSmokeTest() {
+  Serial.println();
+  Serial.println("========================================");
+  Serial.println("ESP32-CAM PlatformIO HTTP upload smoke test");
+  printHardwareInfo();
+  Serial.printf("Upload URL: %s\n", strlen(UPLOAD_URL) > 0 ? UPLOAD_URL : "not configured");
+  Serial.printf("Device ID: %s\n", DEVICE_ID);
+
+  wifiConnected = connectWiFiForHttpUpload();
+  if (!wifiConnected) {
+    httpUploadSucceeded = false;
+    Serial.println("HTTP upload skipped because Wi-Fi/configuration is not ready.");
+    Serial.println("========================================");
+    return;
+  }
+
+  const String capturedAt = capturedAtIso8601Utc();
+  Serial.printf("Captured-At header: %s\n", capturedAt.c_str());
+
+  const bool initOk = initCamera("ESP32-CAM PlatformIO HTTP upload camera step",
+                                 psramFound() ? "QVGA" : "QQVGA",
+                                 "Capturing one frame for HTTP upload...");
+  if (!initOk) {
+    httpUploadSucceeded = false;
+    return;
+  }
+
+  camera_fb_t *fb = esp_camera_fb_get();
+  if (fb == nullptr) {
+    jpegCaptureSucceeded = false;
+    httpUploadSucceeded = false;
+    Serial.println("Frame capture failed: esp_camera_fb_get returned null");
+    Serial.println("========================================");
+    return;
+  }
+
+  Serial.println("Frame captured");
+  Serial.printf("Format: %s\n", pixelFormatName(fb->format));
+  Serial.printf("Width: %u px\n", fb->width);
+  Serial.printf("Height: %u px\n", fb->height);
+  Serial.printf("Size: %u bytes\n", fb->len);
+  jpegCaptureSucceeded = (fb->format == PIXFORMAT_JPEG && fb->len > 0);
+  if (!jpegCaptureSucceeded) {
+    httpUploadSucceeded = false;
+    Serial.println("HTTP upload skipped: captured frame is not a non-empty JPEG");
+    esp_camera_fb_return(fb);
+    Serial.println("Framebuffer returned");
+    Serial.println("========================================");
+    return;
+  }
+
+  Serial.println("HTTP POST upload starting...");
+  HTTPClient http;
+  http.setTimeout(HTTP_UPLOAD_TIMEOUT_MS);
+  if (!http.begin(UPLOAD_URL)) {
+    httpUploadSucceeded = false;
+    Serial.println("HTTP client begin failed; check UPLOAD_URL.");
+    esp_camera_fb_return(fb);
+    Serial.println("Framebuffer returned");
+    Serial.println("========================================");
+    return;
+  }
+
+  http.addHeader("Content-Type", "image/jpeg");
+  http.addHeader("X-Device-Id", DEVICE_ID);
+  http.addHeader("X-Captured-At", capturedAt);
+  lastHttpStatusCode = http.POST(fb->buf, fb->len);
+  Serial.printf("HTTP status code: %d\n", lastHttpStatusCode);
+
+  const String response = http.getString();
+  Serial.printf("HTTP response length: %u bytes\n", response.length());
+  if (response.length() > 0) {
+    Serial.printf("HTTP response body: %.240s\n", response.c_str());
+  }
+  http.end();
+
+  httpUploadSucceeded = (lastHttpStatusCode >= 200 && lastHttpStatusCode < 300);
+  Serial.printf("HTTP upload result: %s\n", httpUploadSucceeded ? "ok" : "failed");
+
+  esp_camera_fb_return(fb);
+  Serial.println("Framebuffer returned");
+  Serial.printf("Free heap after upload: %u bytes\n", ESP.getFreeHeap());
+  if (psramFound()) {
+    Serial.printf("Free PSRAM after upload: %u bytes\n", ESP.getFreePsram());
+  }
+  Serial.println("Next step after this passes: continuous upload / WebSocket / OTA planning.");
+  Serial.println("========================================");
+}
+#endif
 #endif
 }  // namespace
 
 void setup() {
   Serial.begin(kBaudRate);
   delay(1000);
-#if defined(JPEG_CAPTURE_SMOKE_TEST)
+#if defined(HTTP_UPLOAD_SMOKE_TEST)
+  runHttpUploadSmokeTest();
+#elif defined(JPEG_CAPTURE_SMOKE_TEST)
   captureJpegSmokeTest();
 #elif defined(CAMERA_INIT_SMOKE_TEST)
   initCameraSmokeTest();
@@ -319,7 +529,17 @@ void loop() {
   const uint32_t now = millis();
   if (now - lastLogMs >= kLogIntervalMs) {
     lastLogMs = now;
-#if defined(JPEG_CAPTURE_SMOKE_TEST)
+#if defined(HTTP_UPLOAD_SMOKE_TEST)
+    Serial.printf("alive: millis=%lu wifi=%s camera_init=%s jpeg_capture=%s http_upload=%s http_status=%d free_heap=%u free_psram=%u\n",
+                  static_cast<unsigned long>(now),
+                  wifiConnected ? "ok" : "failed",
+                  cameraInitSucceeded ? "ok" : "failed",
+                  jpegCaptureSucceeded ? "ok" : "failed",
+                  httpUploadSucceeded ? "ok" : "failed",
+                  lastHttpStatusCode,
+                  ESP.getFreeHeap(),
+                  psramFound() ? ESP.getFreePsram() : 0);
+#elif defined(JPEG_CAPTURE_SMOKE_TEST)
     Serial.printf("alive: millis=%lu camera_init=%s jpeg_capture=%s free_heap=%u free_psram=%u\n",
                   static_cast<unsigned long>(now),
                   cameraInitSucceeded ? "ok" : "failed",
