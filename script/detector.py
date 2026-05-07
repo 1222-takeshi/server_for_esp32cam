@@ -16,11 +16,18 @@ class Detection:
     y2: float
 
 
+class DetectionSkipped(RuntimeError):
+    """Raised when inference is intentionally skipped, not failed."""
+
+
 class DisabledDetector:
-    def __init__(self, reason: str = "Detector is disabled") -> None:
+    def __init__(self, reason: str = "Detector is disabled", *, skip: bool = True) -> None:
         self.reason = reason
+        self.skip = skip
 
     def detect(self, _image_bytes: bytes) -> list[Detection]:
+        if self.skip:
+            raise DetectionSkipped(self.reason)
         raise RuntimeError(self.reason)
 
 

@@ -4,6 +4,7 @@ from queue import Empty, Queue
 import threading
 from typing import Protocol
 
+from script.detector import DetectionSkipped
 from script.metadata import SQLiteMetadataStore
 from script.storage import Storage
 
@@ -76,6 +77,9 @@ class InferenceService:
         try:
             image_bytes = self.storage.read_image_by_relative_path(snapshot.relative_path)
             detections = self.detector.detect(image_bytes)
+        except DetectionSkipped as exc:
+            self.metadata_store.mark_snapshot_skipped(snapshot_id, reason=str(exc))
+            return
         except Exception as exc:  # pragma: no cover - exercised via route behavior
             self.metadata_store.mark_snapshot_result(snapshot_id, detections=[], error=str(exc))
             return

@@ -16,11 +16,11 @@ def _create_detector(app: Flask):
     if detector_kind == "disabled":
         return DisabledDetector("Detector is disabled")
     if detector_kind != "tflite_cpu":
-        return DisabledDetector(f"Unsupported detector: {detector_kind}")
+        return DisabledDetector(f"Unsupported detector: {detector_kind}", skip=False)
 
     model_path = app.config.get("MODEL_PATH", "")
     if not model_path:
-        return DisabledDetector("TFLite model path is not configured")
+        return DisabledDetector("TFLite model path is not configured", skip=False)
 
     labels_path = app.config.get("LABELS_PATH", "")
     try:
@@ -32,7 +32,7 @@ def _create_detector(app: Flask):
             person_class_id=app.config["PERSON_CLASS_ID"],
         )
     except Exception as exc:  # pragma: no cover - depends on optional deps and model file
-        return DisabledDetector(str(exc))
+        return DisabledDetector(str(exc), skip=False)
 
 
 def create_app(test_config: dict | None = None) -> Flask:

@@ -384,6 +384,21 @@ class SQLiteMetadataStore:
                 (snapshot_id,),
             )
 
+    def mark_snapshot_skipped(self, snapshot_id: int, *, reason: str | None = None) -> None:
+        with self._lock, self._connection:
+            self._connection.execute(
+                """
+                UPDATE snapshots
+                SET inference_status = 'skipped', inference_error = ?
+                WHERE id = ?
+                """,
+                (reason, snapshot_id),
+            )
+            self._connection.execute(
+                "DELETE FROM detections WHERE snapshot_id = ?",
+                (snapshot_id,),
+            )
+
     def mark_snapshot_result(
         self,
         snapshot_id: int,

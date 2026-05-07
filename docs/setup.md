@@ -165,7 +165,7 @@ The first implementation targets `person` detection only and is designed so that
     ```
 4.  Start the server and verify that new uploads transition from `pending` to `succeeded` on the dashboard or camera detail page.
 
-If the detector is disabled or the model is missing, uploads still succeed, but inference is recorded as failed.
+If `ESP32CAM_DETECTOR=disabled`, uploads still succeed and inference is recorded as `skipped`. If a detector is requested but misconfigured, such as a missing TFLite model path, inference is recorded as `failed` so configuration errors remain visible.
 
 ## Verify the Server Locally
 
