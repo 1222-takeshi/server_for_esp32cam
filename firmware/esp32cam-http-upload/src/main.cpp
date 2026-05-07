@@ -5,7 +5,7 @@
 #include <WiFi.h>
 #endif
 
-#ifdef CAMERA_INIT_SMOKE_TEST
+#if defined(CAMERA_INIT_SMOKE_TEST) || defined(JPEG_CAPTURE_SMOKE_TEST)
 #include "esp_camera.h"
 #endif
 
@@ -25,7 +25,7 @@ constexpr uint32_t kLogIntervalMs = 5000;
 uint32_t lastLogMs = 0;
 uint32_t bootCount = 0;
 
-#ifdef CAMERA_INIT_SMOKE_TEST
+#if defined(CAMERA_INIT_SMOKE_TEST) || defined(JPEG_CAPTURE_SMOKE_TEST)
 bool cameraInitSucceeded = false;
 
 // AI Thinker ESP32-CAM pin map for OV2640.
@@ -45,6 +45,10 @@ constexpr int kCameraPinY2 = 5;
 constexpr int kCameraPinVsync = 25;
 constexpr int kCameraPinHref = 23;
 constexpr int kCameraPinPclk = 22;
+#endif
+
+#ifdef JPEG_CAPTURE_SMOKE_TEST
+bool jpegCaptureSucceeded = false;
 #endif
 
 void printHardwareInfo() {
@@ -143,7 +147,7 @@ void connectWiFi() {
 }
 #endif
 
-#ifdef CAMERA_INIT_SMOKE_TEST
+#if defined(CAMERA_INIT_SMOKE_TEST) || defined(JPEG_CAPTURE_SMOKE_TEST)
 camera_config_t buildAiThinkerCameraConfig() {
   camera_config_t config = {};
   config.ledc_channel = LEDC_CHANNEL_0;
@@ -192,14 +196,14 @@ void printCameraSensorInfo() {
   }
 }
 
-void initCameraSmokeTest() {
+bool initCamera(const char *testName, const char *frameSizeLabel, const char *nextStepMessage) {
   Serial.println();
   Serial.println("========================================");
-  Serial.println("ESP32-CAM PlatformIO camera init smoke test");
+  Serial.println(testName);
   printHardwareInfo();
   Serial.println("Camera model: AI Thinker ESP32-CAM pin map");
   Serial.println("Expected sensor: OV2640");
-  Serial.printf("Frame size for init smoke: %s\n", psramFound() ? "QVGA" : "QQVGA");
+  Serial.printf("Frame size: %s\n", frameSizeLabel);
   Serial.printf("Framebuffer location: %s\n", psramFound() ? "PSRAM" : "DRAM");
 
   const camera_config_t config = buildAiThinkerCameraConfig();
@@ -209,7 +213,7 @@ void initCameraSmokeTest() {
     Serial.printf("Camera init failed: esp_camera_init error=0x%x\n", err);
     Serial.println("Check 5V power stability, camera ribbon seating, board model/pin map, and PSRAM health.");
     Serial.println("========================================");
-    return;
+    return false;
   }
 
   cameraInitSucceeded = true;
@@ -219,7 +223,79 @@ void initCameraSmokeTest() {
   if (psramFound()) {
     Serial.printf("Free PSRAM after camera init: %u bytes\n", ESP.getFreePsram());
   }
-  Serial.println("Next step after this passes: JPEG capture test.");
+  Serial.println(nextStepMessage);
+  Serial.println("========================================");
+  return true;
+}
+
+void initCameraSmokeTest() {
+  initCamera("ESP32-CAM PlatformIO camera init smoke test",
+             psramFound() ? "QVGA" : "QQVGA",
+             "Next step after this passes: JPEG capture test.");
+}
+#endif
+
+#ifdef JPEG_CAPTURE_SMOKE_TEST
+const char *pixelFormatName(const pixformat_t format) {
+  switch (format) {
+    case PIXFORMAT_JPEG:
+      return "JPEG";
+    case PIXFORMAT_RGB565:
+      return "RGB565";
+    case PIXFORMAT_GRAYSCALE:
+      return "GRAYSCALE";
+    default:
+      return "other";
+  }
+}
+
+void captureJpegSmokeTest() {
+  const bool initOk = initCamera("ESP32-CAM PlatformIO JPEG capture smoke test",
+                                 psramFound() ? "QVGA" : "QQVGA",
+                                 "Capturing one frame...");
+  if (!initOk) {
+    jpegCaptureSucceeded = false;
+    return;
+  }
+
+  Serial.printf("Free heap before capture: %u bytes\n", ESP.getFreeHeap());
+  if (psramFound()) {
+    Serial.printf("Free PSRAM before capture: %u bytes\n", ESP.getFreePsram());
+  }
+
+  camera_fb_t *fb = esp_camera_fb_get();
+  if (fb == nullptr) {
+    jpegCaptureSucceeded = false;
+    Serial.println("Frame capture failed: esp_camera_fb_get returned null");
+    Serial.println("Check power stability, camera ribbon seating, and PSRAM availability.");
+    Serial.println("========================================");
+    return;
+  }
+
+  Serial.println("Frame captured");
+  Serial.printf("Format: %s\n", pixelFormatName(fb->format));
+  Serial.printf("Width: %u px\n", fb->width);
+  Serial.printf("Height: %u px\n", fb->height);
+  Serial.printf("Size: %u bytes\n", fb->len);
+  Serial.printf("Free heap after capture: %u bytes\n", ESP.getFreeHeap());
+  if (psramFound()) {
+    Serial.printf("Free PSRAM after capture: %u bytes\n", ESP.getFreePsram());
+  }
+
+  jpegCaptureSucceeded = (fb->format == PIXFORMAT_JPEG && fb->len > 0);
+  if (jpegCaptureSucceeded) {
+    Serial.println("JPEG capture succeeded");
+  } else {
+    Serial.println("JPEG capture failed: captured frame is not a non-empty JPEG");
+  }
+
+  esp_camera_fb_return(fb);
+  Serial.println("Framebuffer returned");
+  Serial.printf("Free heap after framebuffer return: %u bytes\n", ESP.getFreeHeap());
+  if (psramFound()) {
+    Serial.printf("Free PSRAM after framebuffer return: %u bytes\n", ESP.getFreePsram());
+  }
+  Serial.println("Next step after this passes: HTTP POST upload test.");
   Serial.println("========================================");
 }
 #endif
@@ -228,7 +304,9 @@ void initCameraSmokeTest() {
 void setup() {
   Serial.begin(kBaudRate);
   delay(1000);
-#if defined(CAMERA_INIT_SMOKE_TEST)
+#if defined(JPEG_CAPTURE_SMOKE_TEST)
+  captureJpegSmokeTest();
+#elif defined(CAMERA_INIT_SMOKE_TEST)
   initCameraSmokeTest();
 #elif defined(WIFI_SMOKE_TEST)
   connectWiFi();
@@ -241,7 +319,14 @@ void loop() {
   const uint32_t now = millis();
   if (now - lastLogMs >= kLogIntervalMs) {
     lastLogMs = now;
-#if defined(CAMERA_INIT_SMOKE_TEST)
+#if defined(JPEG_CAPTURE_SMOKE_TEST)
+    Serial.printf("alive: millis=%lu camera_init=%s jpeg_capture=%s free_heap=%u free_psram=%u\n",
+                  static_cast<unsigned long>(now),
+                  cameraInitSucceeded ? "ok" : "failed",
+                  jpegCaptureSucceeded ? "ok" : "failed",
+                  ESP.getFreeHeap(),
+                  psramFound() ? ESP.getFreePsram() : 0);
+#elif defined(CAMERA_INIT_SMOKE_TEST)
     Serial.printf("alive: millis=%lu camera_init=%s free_heap=%u free_psram=%u\n",
                   static_cast<unsigned long>(now),
                   cameraInitSucceeded ? "ok" : "failed",
