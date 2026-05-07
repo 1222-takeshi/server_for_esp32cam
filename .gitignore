@@ -41,6 +41,7 @@ wheels/
 htmlcov/
 bienv/
 .nox/
+.ruff_cache/
 
 # Translations
 *.mo
@@ -86,17 +87,21 @@ env/
 # IDEs
 .idea/
 .vscode/
+*.code-workspace
 
 # Custom
 memo.md
 .tmp/
+.hermes/
+uploads/
+*.sqlite3
 
 # Arduino user config (credentials / device-specific settings)
 examples/esp32cam_snapshot_upload/config.h
 
-# Gemini temporary files
+# macOS
+.DS_Store
+
+# Gemini temporary/local memory files
 .gemini_temp/
-.pytest_cache/
-.ruff_cache/
-*.egg-info/
-uploads/
+.gemini_memory_*.md

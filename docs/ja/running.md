@@ -5,19 +5,26 @@
 
 ### 1. サーバーの実行:
 
-*   ターミナルで `script` フォルダを含むディレクトリに移動します。
-*   仮想環境を作成した場合は、それがアクティブになっていることを確認してください。
+*   ターミナルでプロジェクトルート (`script` フォルダを含むディレクトリ) に移動します。
+*   仮想環境を作成した場合は、それをアクティブにします。
     ```bash
+    # bash / zsh / WSL2の場合
+    source .venv/bin/activate
+    # fish の場合
+    # source .venv/bin/activate.fish
     # Windowsの場合
-    # venv\Scripts\activate
-    # macOS/Linuxの場合
-    # source venv/bin/activate
+    # .venv\Scripts\activate
     ```
 *   Flaskサーバーを実行します:
     ```bash
     python script/server.py
     ```
-*   デフォルトでは、サーバーは `http://0.0.0.0:8080/` で起動します。
+*   デフォルトでは、サーバーは `http://0.0.0.0:8080/` で起動します。Mac自身のブラウザからは `http://127.0.0.1:8080/`、同じLAN上のESP32-CAMや別端末からは `http://<macのLAN IP>:8080/` でアクセスします。
+*   macOSでLAN内のESP32-CAMから接続する場合は、MacのIPアドレスを確認してESP32-CAM側に設定します。通常のWi-Fiでは以下で確認できます:
+    ```bash
+    ipconfig getifaddr en0
+    ```
+    有線LANや別のネットワークインターフェースを使っている場合は、`ifconfig` で対象インターフェースのIPアドレスを確認してください。
 *   新しい upload は `uploads/<camera_id>/images/` に保存され、SQLite metadata にも登録されます。
 *   detector は既定では無効です。人検知を使う場合は `ml` extra と TFLite 関連の環境変数を設定してください。
 *   ターミナルにサーバーが実行中であることを示す出力が表示されます (類似の形式):
@@ -29,7 +36,7 @@
      * Running on http://<your_local_ip>:8080
     Press CTRL+C to quit
     ```
-    同じネットワーク上の別のデバイス (ESP32-CAMなど) からサーバーにアクセスする場合は、`<your_local_ip>` をメモしておきます。
+*   macOSのファイアウォールが有効な場合、Pythonまたはターミナルからの着信接続許可を求められることがあります。ESP32-CAMから接続できない場合は、システム設定のファイアウォールでブロックされていないか確認してください。
 
 ### 2. クライアントの設定と実行 (ESP32-CAM):
 

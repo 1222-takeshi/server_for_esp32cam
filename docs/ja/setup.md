@@ -2,24 +2,29 @@
 
 ### サーバーサイドのセットアップ:
 
-1.  **リポジトリのクローン (任意):**
-    まだの場合は、このリポジトリをローカルマシンにクローンします:
+#### macOSで開発する場合
+
+1.  **リポジトリのクローン:**
     ```bash
-    git clone <repository_url>
-    cd <repository_directory>
+    git clone https://github.com/1222-takeshi/server_for_esp32cam.git
+    cd server_for_esp32cam
     ```
 
-2.  **Pythonのインストール:**
-    Python 3.xがインストールされていることを確認してください。[python.org](https://www.python.org/) からダウンロードできます。
-
-3.  **仮想環境の作成 (推奨):**
-    Pythonプロジェクトには仮想環境を作成することをお勧めします。
+2.  **Pythonの確認:**
+    macOS標準のPythonではなく、Homebrew、pyenv、またはpython.org配布版などで管理しているPython 3系の利用を推奨します。まずバージョンを確認してください。
     ```bash
-    python -m venv venv
-    # Windowsの場合
-    venv\Scripts\activate
-    # macOS/Linuxの場合
-    source venv/bin/activate
+    python3 --version
+    ```
+
+3.  **仮想環境の作成:**
+    このプロジェクトでは、ローカル開発用の仮想環境名を `.venv` に統一します。
+    ```bash
+    python3 -m venv .venv
+    # bash / zsh の場合
+    source .venv/bin/activate
+    # fish の場合
+    # source .venv/bin/activate.fish
+    python -m pip install --upgrade pip
     ```
 
 4.  **依存関係のインストール:**
@@ -32,10 +37,17 @@
     pip install -e ".[dev,ml]"
     ```
 
-5.  **ディレクトリ構造:**
-    サーバーはデフォルトで `uploads/` に JPEG ファイルを保存します。このディレクトリは存在しない場合、起動時に自動作成されます。
+5.  **セットアップ確認:**
+    ```bash
+    python -m py_compile script/server.py
+    pytest
+    ```
+    これらが失敗する場合は、コードまたはテスト環境側の問題を先に解消してください。
 
-6.  **オプション設定:**
+6.  **ディレクトリ構造:**
+    サーバーはデフォルトで `uploads/` に JPEG ファイルを保存します。このディレクトリは存在しない場合、起動時に自動作成されます。`uploads/` は実行時生成物のためGit管理対象外です。
+
+7.  **オプション設定:**
     環境変数でランタイム挙動を変更できます:
     ```bash
     export PORT=8080
@@ -49,6 +61,29 @@
     export ESP32CAM_DETECTION_THRESHOLD=0.5
     ```
     運用想定は「まず local PC で開発し、将来は Raspberry Pi 4 / CPU-only へ同じコードを移す」形です。
+
+#### Windows / WSL2 / Linuxで開発する場合
+
+1.  **リポジトリのクローン:**
+    ```bash
+    git clone https://github.com/1222-takeshi/server_for_esp32cam.git
+    cd server_for_esp32cam
+    ```
+
+2.  **仮想環境の作成:**
+    ```bash
+    python -m venv .venv
+    # Windowsの場合
+    .venv\Scripts\activate
+    # WSL2/Linuxの場合
+    source .venv/bin/activate
+    ```
+
+3.  **依存関係のインストール:**
+    ```bash
+    python -m pip install --upgrade pip
+    pip install -e ".[dev]"
+    ```
 
 ### クライアントサイドのセットアップ (例: Arduino IDEを使用したESP32-CAM):
 
