@@ -7,8 +7,10 @@
 *   ターミナルでプロジェクトルート (`script` フォルダを含むディレクトリ) に移動します。
 *   仮想環境を作成した場合は、それをアクティブにします。
     ```bash
-    # macOS / Linux / WSL2の場合
+    # bash / zsh / WSL2の場合
     source .venv/bin/activate
+    # fish の場合
+    # source .venv/bin/activate.fish
     # Windowsの場合
     # .venv\Scripts\activate
     ```

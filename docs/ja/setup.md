@@ -20,7 +20,10 @@
     このプロジェクトでは、ローカル開発用の仮想環境名を `.venv` に統一します。
     ```bash
     python3 -m venv .venv
+    # bash / zsh の場合
     source .venv/bin/activate
+    # fish の場合
+    # source .venv/bin/activate.fish
     python -m pip install --upgrade pip
     ```
 
