@@ -200,7 +200,7 @@
     ```
 4.  サーバー起動後、dashboard や camera detail で `pending -> succeeded` へ遷移することを確認します。
 
-detector が無効、または model が見つからない場合でも upload 自体は成功しますが、推論状態は failed として記録されます。
+`ESP32CAM_DETECTOR=disabled` の場合、upload 自体は成功し、推論状態は `skipped` として記録されます。TFLite model path の欠落など、detector を要求したうえで設定に問題がある場合は、設定エラーを見逃さないように `failed` として記録されます。
 
 ## ローカルでの動作確認
 
