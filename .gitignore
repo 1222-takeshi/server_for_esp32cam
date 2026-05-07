@@ -96,8 +96,10 @@ memo.md
 uploads/
 *.sqlite3
 
-# Arduino user config (credentials / device-specific settings)
+# Arduino / PlatformIO local build artifacts and user config
 examples/esp32cam_snapshot_upload/config.h
+firmware/**/.pio/
+firmware/**/config.h
 
 # macOS
 .DS_Store
