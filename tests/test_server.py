@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from script.app import create_app
+
 
 UPLOAD_HEADERS = {
     "Content-Type": "image/jpeg",
@@ -47,3 +49,44 @@ def test_upload_accepts_raw_jpeg_payload(client):
     assert body["device_id"] == "esp32cam-smoke-test"
     assert body["size"] == len(payload)
     assert body["filename"].endswith(".jpg")
+
+
+def test_upload_marks_inference_skipped_when_detector_is_disabled(client):
+    payload = b"\xff\xd8\xff\xe0fake-jpeg-data"
+
+    response = client.post("/upload", data=payload, headers=UPLOAD_HEADERS)
+
+    assert response.status_code == 200
+
+    snapshots_response = client.get("/api/cameras/esp32cam-smoke-test/snapshots")
+    assert snapshots_response.status_code == 200
+    snapshots = snapshots_response.get_json()["snapshots"]
+    assert snapshots[0]["inference_status"] == "skipped"
+    assert snapshots[0]["inference_error"] == "Detector is disabled"
+
+    files_response = client.get("/files")
+    assert files_response.status_code == 200
+    assert b"Inference: skipped" in files_response.data
+
+
+def test_upload_marks_inference_failed_when_detector_configuration_is_invalid(tmp_path):
+    app = create_app(
+        {
+            "TESTING": True,
+            "UPLOAD_DIR": tmp_path / "uploads",
+            "DB_PATH": tmp_path / "esp32cam.sqlite3",
+            "INFERENCE_MODE": "sync",
+            "DETECTOR": "unsupported_detector",
+        }
+    )
+    client = app.test_client()
+    payload = b"\xff\xd8\xff\xe0fake-jpeg-data"
+
+    response = client.post("/upload", data=payload, headers=UPLOAD_HEADERS)
+
+    assert response.status_code == 200
+    snapshots_response = client.get("/api/cameras/esp32cam-smoke-test/snapshots")
+    assert snapshots_response.status_code == 200
+    snapshots = snapshots_response.get_json()["snapshots"]
+    assert snapshots[0]["inference_status"] == "failed"
+    assert snapshots[0]["inference_error"] == "Unsupported detector: unsupported_detector"
