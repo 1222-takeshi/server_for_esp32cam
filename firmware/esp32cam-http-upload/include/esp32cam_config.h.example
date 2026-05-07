@@ -1,0 +1,12 @@
+#pragma once
+
+// Copy this file to `include/config.h` and edit it locally.
+// `include/config.h` is ignored by Git because it contains Wi-Fi credentials.
+
+#define WIFI_SSID "YOUR_WIFI_SSID"
+#define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
+
+// Keep the first Wi-Fi test conservative. If the device cannot connect within
+// this window, the firmware prints a clear failure message and keeps running so
+// the serial monitor remains useful.
+#define WIFI_CONNECT_TIMEOUT_MS 20000

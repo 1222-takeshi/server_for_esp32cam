@@ -1,13 +1,13 @@
 # ESP32-CAM PlatformIO Firmware
 
-AI Thinker ESP32-CAM（OV2640想定）をPlatformIOで扱うための最小ファームウェア構成です。
+AI Thinker ESP32-CAM（OV2640想定）をPlatformIOで扱うための段階的な最小ファームウェア構成です。
 
-この最初のステップでは、Wi-Fi・カメラ・OTAはまだ使わず、USBシリアル経由で以下を確認します。
+現在含まれる確認ステップ:
 
-- PlatformIOでビルドできる
-- USBシリアル変換アダプタ経由で書き込める
-- 起動後にSerialログが読める
-- PSRAMの有無など、ESP32-CAMの基本情報が見える
+1. `esp32cam_serial_smoke`: USBシリアル書き込み・通常起動・Serialログ・PSRAM確認
+2. `esp32cam_wifi_smoke`: Wi-Fi接続・IPアドレス・RSSI確認
+
+カメラ、HTTP upload、OTAはまだこのステップでは扱いません。
 
 ## 前提
 
@@ -32,12 +32,21 @@ pio device list
 
 ## ビルド
 
+全envをビルドします。
+
 ```fish
-cd /Users/takeshimiura/workspace/server_for_esp32cam/firmware/esp32cam-http-upload
+cd /Users/takeshimiura/workspace/server_for_esp32cam/.hermes/worktrees/issue52-wifi-smoke/firmware/esp32cam-http-upload
 pio run
 ```
 
-## USBシリアル書き込み手順
+個別にビルドする場合:
+
+```fish
+pio run -e esp32cam_serial_smoke
+pio run -e esp32cam_wifi_smoke
+```
+
+## Step 1: Serial smoke test
 
 USBシリアル変換アダプタの場合、書き込み時はESP32-CAMをダウンロードモードに入れる必要があります。
 
@@ -46,7 +55,7 @@ USBシリアル変換アダプタの場合、書き込み時はESP32-CAMをダ�
 3. 以下を実行する
 
 ```fish
-pio run -t upload
+pio run -e esp32cam_serial_smoke -t upload
 ```
 
 書き込みが完了したら通常起動に戻します。
@@ -54,16 +63,10 @@ pio run -t upload
 1. `GPIO0` と `GND` の接続を外す
 2. `RST` を押す
 
-## シリアルモニタ
+シリアルモニタ:
 
 ```fish
-pio device monitor
-```
-
-または明示的にポートを指定します。
-
-```fish
-pio device monitor --port /dev/cu.usbserial-1120 --baud 115200
+pio device monitor -e esp32cam_serial_smoke
 ```
 
 期待ログ例:
@@ -79,7 +82,71 @@ Serial smoke test is running.
 alive: millis=... free_heap=...
 ```
 
-終了は `Ctrl+]` です。
+## Step 2: Wi-Fi smoke test
+
+Wi-Fi認証情報はコミットしません。ローカルに `include/esp32cam_config.h` を作って設定します。
+
+```fish
+cd /Users/takeshimiura/workspace/server_for_esp32cam/.hermes/worktrees/issue52-wifi-smoke/firmware/esp32cam-http-upload
+cp include/esp32cam_esp32cam_config.h.example include/esp32cam_config.h
+```
+
+`include/esp32cam_config.h` を編集します。
+
+```cpp
+#define WIFI_SSID "YOUR_WIFI_SSID"
+#define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
+#define WIFI_CONNECT_TIMEOUT_MS 20000
+```
+
+注意:
+
+- ESP32-CAMは通常 2.4GHz Wi-Fi に接続します。5GHz専用SSIDには接続できません。
+- `include/esp32cam_config.h` は `.gitignore` 対象です。SSID/パスワードはコミットしないでください。
+
+ビルド:
+
+```fish
+pio run -e esp32cam_wifi_smoke
+```
+
+書き込み:
+
+1. `GPIO0` を `GND` に接続
+2. `RST` を押す
+3. 以下を実行
+
+```fish
+pio run -e esp32cam_wifi_smoke -t upload
+```
+
+通常起動:
+
+1. `GPIO0` と `GND` の接続を外す
+2. `RST` を押す
+3. シリアルモニタを開く
+
+```fish
+pio device monitor -e esp32cam_wifi_smoke
+```
+
+期待ログ例:
+
+```text
+ESP32-CAM PlatformIO Wi-Fi smoke test
+Local config: include/esp32cam_config.h found
+Connecting to Wi-Fi SSID: ...
+WiFi connected
+IP address: 192.168.1.xxx
+Gateway: 192.168.1.1
+Subnet: 255.255.255.0
+DNS: ...
+RSSI: -50 dBm
+Next step after this passes: camera init test.
+alive: millis=... wifi_status=3 ip=192.168.1.xxx rssi=-50 free_heap=...
+```
+
+`wifi_status=3` は `WL_CONNECTED` です。
 
 ## よくある問題
 
@@ -108,9 +175,9 @@ lsof /dev/cu.usbserial-1120
 
 1. `GPIO0` を `GND` に接続する
 2. USBシリアルの `GND` とESP32-CAMの `GND` が確実に共通になっていることを確認する
-3. `pio run -t upload` を実行する
+3. `pio run -e esp32cam_wifi_smoke -t upload` を実行する
 4. `Connecting...` の `.` が出始めたら、`GPIO0-GND` は接続したまま `RST` を1回押す
-5. それでも失敗する場合は、`GPIO0-GND` 接続後に先に `RST` を押してから `pio run -t upload` を実行する
+5. それでも失敗する場合は、`GPIO0-GND` 接続後に先に `RST` を押してから upload を実行する
 
 配線も確認してください。
 
@@ -129,20 +196,32 @@ lsof /dev/cu.usbserial-1120
 - USBシリアル変換アダプタ側の電圧設定が合っていない
 - カメラやLEDの突入で電源が落ちている
 
-### 書き込み後に何もログが出ない
+### シリアルモニタに `DOWNLOAD_BOOT` / `waiting for download` が出る
 
-- `GPIO0` と `GND` の接続を外してから `RST` を押す
-- `pio device monitor --port /dev/cu.usbserial-1120 --baud 115200` を使う
-- TX/RX配線を確認する
+`GPIO0` と `GND` がまだ接続されています。
+
+1. モニタを終了する
+2. `GPIO0-GND` を外す
+3. `RST` を押す
+4. 再度 `pio device monitor -e esp32cam_wifi_smoke`
+
+### Wi-Fi接続がタイムアウトする
+
+- SSID/PASSWORDが正しいか確認
+- 2.4GHz対応SSIDか確認
+- MACアドレスフィルタリングがないか確認
+- ゲストWi-FiやAP isolationで端末間通信が制限されていないか確認
+- RSSIが弱すぎないか確認
+- ルーター側のDHCP払い出し上限に達していないか確認
 
 ## 次のステップ
 
-このSerial smoke testが通ったら、次はWi-Fi接続のみを追加します。
+Wi-Fi smoke testが通ったら、次はカメラ初期化のみを追加します。
 
 順番:
 
-1. Serial smoke test（このプロジェクト）
-2. Wi-Fi接続確認
+1. Serial smoke test: 完了
+2. Wi-Fi接続確認: このプロジェクト
 3. カメラ初期化確認
 4. JPEG撮影確認
 5. Flaskサーバー `/upload` へのHTTP POST
