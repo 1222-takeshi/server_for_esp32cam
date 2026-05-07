@@ -8,8 +8,9 @@ AI Thinker ESP32-CAM（OV2640想定）をPlatformIOで扱うための段階的�
 2. `esp32cam_wifi_smoke`: Wi-Fi接続・IPアドレス・RSSI確認
 3. `esp32cam_camera_init_smoke`: カメラ初期化・OV2640センサーID確認
 4. `esp32cam_jpeg_capture_smoke`: JPEG framebufferを1枚撮影し、形式・サイズ・解像度を確認
+5. `esp32cam_http_upload_smoke`: JPEGを1枚撮影し、Mac上のFlaskサーバー `/upload` へHTTP POST送信
 
-HTTP upload、OTAはまだこのステップでは扱いません。
+OTAや常時ストリーミング/WebSocket化はまだこのステップでは扱いません。
 
 ## 前提
 
@@ -48,6 +49,7 @@ pio run -e esp32cam_serial_smoke
 pio run -e esp32cam_wifi_smoke
 pio run -e esp32cam_camera_init_smoke
 pio run -e esp32cam_jpeg_capture_smoke
+pio run -e esp32cam_http_upload_smoke
 ```
 
 ## Step 1: Serial smoke test
@@ -101,6 +103,11 @@ cp include/esp32cam_config.h.example include/esp32cam_config.h
 #define WIFI_SSID "YOUR_WIFI_SSID"
 #define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
 #define WIFI_CONNECT_TIMEOUT_MS 20000
+#define UPLOAD_URL "http://YOUR_MAC_LAN_IP:8080/upload"
+#define DEVICE_ID "esp32cam-01"
+#define HTTP_UPLOAD_TIMEOUT_MS 10000
+#define NTP_SERVER "pool.ntp.org"
+#define NTP_SYNC_TIMEOUT_MS 10000
 ```
 
 注意:
@@ -255,6 +262,97 @@ alive: millis=... camera_init=ok jpeg_capture=ok free_heap=... free_psram=...
 
 もし `Frame capture failed: esp_camera_fb_get returned null` が出る場合は、5V給電の安定性、カメラフレキの挿し込み、PSRAM検出状態、ボードのピン配置を確認してください。
 
+## Step 5: HTTP upload smoke test
+
+このステップではJPEGを1枚撮影し、既存Flaskサーバーの `POST /upload` に送信します。サーバー側の `/upload` は以下を要求します。
+
+- `Content-Type: image/jpeg`
+- `X-Device-Id: <device id>`
+- `X-Captured-At: <timezone付きISO 8601>`
+- JPEG SOI (`0xff 0xd8`) で始まるnon-empty body
+
+### Mac上でFlaskサーバーを起動
+
+ESP32-CAMから到達できるように `0.0.0.0:8080` で起動します。
+
+```fish
+cd /Users/takeshimiura/workspace/server_for_esp32cam
+python -m script.server
+```
+
+MacのLAN IPを確認します。
+
+```fish
+ipconfig getifaddr en0
+```
+
+有線LANなど `en0` 以外を使っている場合は、利用中インターフェースのIPv4アドレスを使ってください。`localhost` / `127.0.0.1` はESP32-CAM自身を指すため使えません。
+
+### ローカル設定
+
+`include/esp32cam_config.h` の `UPLOAD_URL` をMacのLAN IPに合わせます。
+
+```cpp
+#define WIFI_SSID "YOUR_WIFI_SSID"
+#define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
+#define WIFI_CONNECT_TIMEOUT_MS 20000
+#define UPLOAD_URL "http://192.168.1.23:8080/upload"
+#define DEVICE_ID "esp32cam-01"
+#define HTTP_UPLOAD_TIMEOUT_MS 10000
+#define NTP_SERVER "pool.ntp.org"
+#define NTP_SYNC_TIMEOUT_MS 10000
+```
+
+### ビルド・書き込み・確認
+
+ビルド:
+
+```fish
+pio run -e esp32cam_http_upload_smoke
+```
+
+書き込み:
+
+1. `GPIO0` を `GND` に接続
+2. `RST` を押す
+3. 以下を実行
+
+```fish
+pio run -e esp32cam_http_upload_smoke -t upload
+```
+
+通常起動:
+
+1. `GPIO0` と `GND` の接続を外す
+2. `RST` を押す
+3. シリアルモニタを開く
+
+```fish
+pio device monitor -e esp32cam_http_upload_smoke
+```
+
+期待ログ例:
+
+```text
+ESP32-CAM PlatformIO HTTP upload smoke test
+Upload URL: http://192.168.1.23:8080/upload
+Device ID: esp32cam-01
+WiFi connected
+Syncing time with NTP server: pool.ntp.org
+Captured-At header: 2026-...
+Camera init succeeded
+Frame captured
+Format: JPEG
+HTTP POST upload starting...
+HTTP status code: 200
+HTTP response body: {"captured_at":...,"device_id":"esp32cam-01",...}
+HTTP upload result: ok
+Framebuffer returned
+alive: millis=... wifi=ok camera_init=ok jpeg_capture=ok http_upload=ok http_status=200 free_heap=... free_psram=...
+```
+
+サーバー側では `uploads/<DEVICE_ID>/images/` にJPEGが保存され、`/files` や `/cameras/<DEVICE_ID>` から確認できます。
+
 ## よくある問題
 
 ### `pio: command not found`
@@ -328,13 +426,13 @@ lsof /dev/cu.usbserial-1120
 
 ## 次のステップ
 
-JPEG capture smoke testが通ったら、次はFlaskサーバー `/upload` へのHTTP POST送信確認を追加します。
+HTTP upload smoke testが通ったら、次は連続アップロード、OTA対応、またはWebSocket方式への移行検討に進みます。
 
 順番:
 
 1. Serial smoke test: 完了
 2. Wi-Fi接続確認: 完了
 3. カメラ初期化確認: 完了
-4. JPEG撮影確認: このプロジェクト
-5. Flaskサーバー `/upload` へのHTTP POST
-6. OTA対応
+4. JPEG撮影確認: 完了
+5. Flaskサーバー `/upload` へのHTTP POST: このプロジェクト
+6. 連続アップロード / OTA対応 / WebSocket方式への移行検討
