@@ -5,6 +5,10 @@
 #include <WiFi.h>
 #endif
 
+#ifdef CAMERA_INIT_SMOKE_TEST
+#include "esp_camera.h"
+#endif
+
 #if __has_include("esp32cam_config.h")
 #include "esp32cam_config.h"
 #define ESP32CAM_HAS_LOCAL_CONFIG 1
@@ -20,6 +24,28 @@ constexpr uint32_t kBaudRate = 115200;
 constexpr uint32_t kLogIntervalMs = 5000;
 uint32_t lastLogMs = 0;
 uint32_t bootCount = 0;
+
+#ifdef CAMERA_INIT_SMOKE_TEST
+bool cameraInitSucceeded = false;
+
+// AI Thinker ESP32-CAM pin map for OV2640.
+constexpr int kCameraPinPwdn = 32;
+constexpr int kCameraPinReset = -1;
+constexpr int kCameraPinXclk = 0;
+constexpr int kCameraPinSiod = 26;
+constexpr int kCameraPinSioc = 27;
+constexpr int kCameraPinY9 = 35;
+constexpr int kCameraPinY8 = 34;
+constexpr int kCameraPinY7 = 39;
+constexpr int kCameraPinY6 = 36;
+constexpr int kCameraPinY5 = 21;
+constexpr int kCameraPinY4 = 19;
+constexpr int kCameraPinY3 = 18;
+constexpr int kCameraPinY2 = 5;
+constexpr int kCameraPinVsync = 25;
+constexpr int kCameraPinHref = 23;
+constexpr int kCameraPinPclk = 22;
+#endif
 
 void printHardwareInfo() {
   ++bootCount;
@@ -116,12 +142,95 @@ void connectWiFi() {
   Serial.println("========================================");
 }
 #endif
+
+#ifdef CAMERA_INIT_SMOKE_TEST
+camera_config_t buildAiThinkerCameraConfig() {
+  camera_config_t config = {};
+  config.ledc_channel = LEDC_CHANNEL_0;
+  config.ledc_timer = LEDC_TIMER_0;
+  config.pin_d0 = kCameraPinY2;
+  config.pin_d1 = kCameraPinY3;
+  config.pin_d2 = kCameraPinY4;
+  config.pin_d3 = kCameraPinY5;
+  config.pin_d4 = kCameraPinY6;
+  config.pin_d5 = kCameraPinY7;
+  config.pin_d6 = kCameraPinY8;
+  config.pin_d7 = kCameraPinY9;
+  config.pin_xclk = kCameraPinXclk;
+  config.pin_pclk = kCameraPinPclk;
+  config.pin_vsync = kCameraPinVsync;
+  config.pin_href = kCameraPinHref;
+  config.pin_sccb_sda = kCameraPinSiod;
+  config.pin_sccb_scl = kCameraPinSioc;
+  config.pin_pwdn = kCameraPinPwdn;
+  config.pin_reset = kCameraPinReset;
+  config.xclk_freq_hz = 20000000;
+  config.pixel_format = PIXFORMAT_JPEG;
+  config.frame_size = psramFound() ? FRAMESIZE_QVGA : FRAMESIZE_QQVGA;
+  config.jpeg_quality = 12;
+  config.fb_count = 1;
+  config.fb_location = psramFound() ? CAMERA_FB_IN_PSRAM : CAMERA_FB_IN_DRAM;
+  config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+  return config;
+}
+
+void printCameraSensorInfo() {
+  sensor_t *sensor = esp_camera_sensor_get();
+  if (sensor == nullptr) {
+    Serial.println("Camera sensor: unavailable after init");
+    return;
+  }
+
+  Serial.printf("Camera sensor PID: 0x%02X\n", sensor->id.PID);
+  Serial.printf("Camera sensor VER: 0x%02X\n", sensor->id.VER);
+  Serial.printf("Camera sensor MIDH: 0x%02X\n", sensor->id.MIDH);
+  Serial.printf("Camera sensor MIDL: 0x%02X\n", sensor->id.MIDL);
+  if (sensor->id.PID == OV2640_PID) {
+    Serial.println("Camera sensor detected: OV2640");
+  } else {
+    Serial.println("Camera sensor detected: unexpected PID; check module type if capture fails later.");
+  }
+}
+
+void initCameraSmokeTest() {
+  Serial.println();
+  Serial.println("========================================");
+  Serial.println("ESP32-CAM PlatformIO camera init smoke test");
+  printHardwareInfo();
+  Serial.println("Camera model: AI Thinker ESP32-CAM pin map");
+  Serial.println("Expected sensor: OV2640");
+  Serial.printf("Frame size for init smoke: %s\n", psramFound() ? "QVGA" : "QQVGA");
+  Serial.printf("Framebuffer location: %s\n", psramFound() ? "PSRAM" : "DRAM");
+
+  const camera_config_t config = buildAiThinkerCameraConfig();
+  const esp_err_t err = esp_camera_init(&config);
+  if (err != ESP_OK) {
+    cameraInitSucceeded = false;
+    Serial.printf("Camera init failed: esp_camera_init error=0x%x\n", err);
+    Serial.println("Check 5V power stability, camera ribbon seating, board model/pin map, and PSRAM health.");
+    Serial.println("========================================");
+    return;
+  }
+
+  cameraInitSucceeded = true;
+  Serial.println("Camera init succeeded");
+  printCameraSensorInfo();
+  Serial.printf("Free heap after camera init: %u bytes\n", ESP.getFreeHeap());
+  if (psramFound()) {
+    Serial.printf("Free PSRAM after camera init: %u bytes\n", ESP.getFreePsram());
+  }
+  Serial.println("Next step after this passes: JPEG capture test.");
+  Serial.println("========================================");
+}
+#endif
 }  // namespace
 
 void setup() {
   Serial.begin(kBaudRate);
   delay(1000);
-#ifdef WIFI_SMOKE_TEST
+#if defined(CAMERA_INIT_SMOKE_TEST)
+  initCameraSmokeTest();
+#elif defined(WIFI_SMOKE_TEST)
   connectWiFi();
 #else
   printSerialSmokeBootInfo();
@@ -132,7 +241,13 @@ void loop() {
   const uint32_t now = millis();
   if (now - lastLogMs >= kLogIntervalMs) {
     lastLogMs = now;
-#ifdef WIFI_SMOKE_TEST
+#if defined(CAMERA_INIT_SMOKE_TEST)
+    Serial.printf("alive: millis=%lu camera_init=%s free_heap=%u free_psram=%u\n",
+                  static_cast<unsigned long>(now),
+                  cameraInitSucceeded ? "ok" : "failed",
+                  ESP.getFreeHeap(),
+                  psramFound() ? ESP.getFreePsram() : 0);
+#elif defined(WIFI_SMOKE_TEST)
     Serial.printf("alive: millis=%lu wifi_status=%d ip=%s rssi=%d free_heap=%u\n",
                   static_cast<unsigned long>(now),
                   static_cast<int>(WiFi.status()),
