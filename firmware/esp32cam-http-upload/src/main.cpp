@@ -66,10 +66,10 @@ void connectWiFi() {
   printMacAddress();
 
 #if ESP32CAM_HAS_LOCAL_CONFIG
-  Serial.println("Local config: include/config.h found");
+  Serial.println("Local config: include/esp32cam_config.h found");
 #else
-  Serial.println("Local config: include/config.h not found");
-  Serial.println("Copy include/config.h.example to include/config.h and set WIFI_SSID/WIFI_PASSWORD.");
+  Serial.println("Local config: include/esp32cam_config.h not found");
+  Serial.println("Copy include/esp32cam_config.h.example to include/esp32cam_config.h and set WIFI_SSID/WIFI_PASSWORD.");
 #endif
 
   if (strlen(WIFI_SSID) == 0 || strcmp(WIFI_SSID, "YOUR_WIFI_SSID") == 0) {
