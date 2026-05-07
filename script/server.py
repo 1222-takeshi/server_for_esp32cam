@@ -38,7 +38,7 @@ def upload_file():
 
         if file:
             allowed_extensions = {'jpg', 'jpeg', 'png', 'gif'}
-             if '.' not in file.filename or \
+            if '.' not in file.filename or \
                file.filename.rsplit('.', 1)[1].lower() not in allowed_extensions:
                 app.logger.error(f'Invalid file type uploaded: {file.filename}')
                 return jsonify({'message': 'Invalid file type'}), 400

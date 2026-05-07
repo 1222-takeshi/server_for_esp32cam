@@ -2,38 +2,66 @@
 
 ### サーバーサイドのセットアップ:
 
-1.  **リポジトリのクローン (任意):**
-    まだの場合は、このリポジトリをローカルマシンにクローンします:
+#### macOSで開発する場合
+
+1.  **リポジトリのクローン:**
     ```bash
-    git clone <repository_url>
-    cd <repository_directory>
+    git clone https://github.com/1222-takeshi/server_for_esp32cam.git
+    cd server_for_esp32cam
     ```
 
-2.  **Pythonのインストール:**
-    Python 3.xがインストールされていることを確認してください。[python.org](https://www.python.org/) からダウンロードできます。
-
-3.  **仮想環境の作成 (推奨):**
-    Pythonプロジェクトには仮想環境を作成することをお勧めします。
+2.  **Pythonの確認:**
+    macOS標準のPythonではなく、Homebrew、pyenv、またはpython.org配布版などで管理しているPython 3系の利用を推奨します。まずバージョンを確認してください。
     ```bash
-    python -m venv venv
-    # Windowsの場合
-    venv\Scripts\activate
-    # macOS/Linuxの場合
-    source venv/bin/activate
+    python3 --version
+    ```
+
+3.  **仮想環境の作成:**
+    このプロジェクトでは、ローカル開発用の仮想環境名を `.venv` に統一します。
+    ```bash
+    python3 -m venv .venv
+    source .venv/bin/activate
+    python -m pip install --upgrade pip
     ```
 
 4.  **依存関係のインストール:**
-    Flask (および後で追加される可能性のある他のPython依存関係) をインストールします:
-    ```bash
-    pip install Flask
-    ```
-    将来的に `requirements.txt` ファイルが提供される場合は、すべての依存関係を次のようにインストールできます:
+    Flaskやpytestなどの依存関係は `requirements.txt` からインストールします。
     ```bash
     pip install -r requirements.txt
     ```
 
-5.  **ディレクトリ構造:**
-    サーバースクリプト (`script/server.py`) は、アップロードされた画像を保存するために、プロジェクトのベースディレクトリ ( `script/` および `templates/` がある場所) に `uploads` という名前のディレクトリを期待します。サーバー起動時に存在しない場合は自動的に作成されます。
+5.  **セットアップ確認:**
+    ```bash
+    python -m py_compile script/server.py
+    pytest
+    ```
+    これらが失敗する場合は、コードまたはテスト環境側の問題を先に解消してください。
+
+6.  **ディレクトリ構造:**
+    サーバースクリプト (`script/server.py`) は、アップロードされた画像を保存するために、プロジェクトのベースディレクトリに `uploads` という名前のディレクトリを使用します。サーバー起動時に存在しない場合は自動的に作成されます。`uploads/` は実行時生成物のためGit管理対象外です。
+
+#### Windows / WSL2 / Linuxで開発する場合
+
+1.  **リポジトリのクローン:**
+    ```bash
+    git clone https://github.com/1222-takeshi/server_for_esp32cam.git
+    cd server_for_esp32cam
+    ```
+
+2.  **仮想環境の作成:**
+    ```bash
+    python -m venv .venv
+    # Windowsの場合
+    .venv\Scripts\activate
+    # WSL2/Linuxの場合
+    source .venv/bin/activate
+    ```
+
+3.  **依存関係のインストール:**
+    ```bash
+    python -m pip install --upgrade pip
+    pip install -r requirements.txt
+    ```
 
 ### クライアントサイドのセットアップ (例: Arduino IDEを使用したESP32-CAM):
 

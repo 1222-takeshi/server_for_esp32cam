@@ -90,5 +90,15 @@ env/
 # Custom
 memo.md
 
-# Gemini temporary files
+# Local runtime artifacts
+uploads/
+.tmp/
+.hermes/
+*.code-workspace
+
+# macOS
+.DS_Store
+
+# Gemini temporary/local memory files
 .gemini_temp/
+.gemini_memory_*.md
