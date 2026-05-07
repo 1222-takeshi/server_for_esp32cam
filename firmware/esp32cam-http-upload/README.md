@@ -88,7 +88,7 @@ Wi-Fi認証情報はコミットしません。ローカルに `include/esp32cam
 
 ```fish
 cd /Users/takeshimiura/workspace/server_for_esp32cam/.hermes/worktrees/issue52-wifi-smoke/firmware/esp32cam-http-upload
-cp include/esp32cam_esp32cam_config.h.example include/esp32cam_config.h
+cp include/esp32cam_config.h.example include/esp32cam_config.h
 ```
 
 `include/esp32cam_config.h` を編集します。
