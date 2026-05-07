@@ -1,7 +1,7 @@
 #pragma once
 
-// Copy this file to `include/config.h` and edit it locally.
-// `include/config.h` is ignored by Git because it contains Wi-Fi credentials.
+// Copy this file to `include/esp32cam_config.h` and edit it locally.
+// `include/esp32cam_config.h` is ignored by Git because it contains Wi-Fi credentials.
 
 #define WIFI_SSID "YOUR_WIFI_SSID"
 #define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
