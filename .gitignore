@@ -94,6 +94,7 @@ memo.md
 .tmp/
 .hermes/
 uploads/
+*.sqlite3
 
 # Arduino user config (credentials / device-specific settings)
 examples/esp32cam_snapshot_upload/config.h
