@@ -91,8 +91,10 @@ env/
 memo.md
 .tmp/
 
-# Arduino user config (credentials / device-specific settings)
+# Arduino / PlatformIO local build artifacts and user config
 examples/esp32cam_snapshot_upload/config.h
+firmware/**/.pio/
+firmware/**/config.h
 
 # Gemini temporary files
 .gemini_temp/
