@@ -10,6 +10,7 @@ from script.inference import InferenceService
 from script.metadata import SQLiteMetadataStore
 from script.routes import server
 from script.storage import LocalFilesystemStorage
+from script.websocket_routes import register_websocket_routes
 
 
 def _create_detector(app: Flask):
@@ -69,6 +70,7 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.extensions["inference_service"] = inference_service
     app.extensions["snapshot_event_publisher"] = snapshot_event_publisher
     app.register_blueprint(server)
+    register_websocket_routes(app, snapshot_event_publisher)
 
     @app.errorhandler(RequestEntityTooLarge)
     def handle_request_entity_too_large(_error):
