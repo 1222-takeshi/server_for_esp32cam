@@ -1,41 +1,137 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ESP32 Camera Server</title>
-</head>
-<body>
-    <h1>ESP32 Camera Server</h1>
-    <p>Snapshot-first image receiver with multi-camera monitoring and person detection.</p>
-    <p>Stored snapshots: {{ image_count }}</p>
-    {% if camera_summaries %}
-    <h2>Camera Dashboard</h2>
-    <ul>
-        {% for summary in camera_summaries %}
-        <li>
-            <h3><a href="{{ url_for('server.camera_detail', camera_id=summary.camera.camera_id) }}">{{ summary.camera.display_name }}</a></h3>
-            <div>Status: {{ summary.status }}</div>
-            <div>Last Seen: {{ summary.camera.last_seen_at.isoformat() }}</div>
-            {% if summary.latest_snapshot %}
-            <div>Latest Snapshot: <a href="{{ url_for('server.get_file', filename=summary.latest_snapshot.filename) }}">{{ summary.latest_snapshot.filename }}</a></div>
-            <div>Captured At: {{ summary.latest_snapshot.captured_at.isoformat() if summary.latest_snapshot.captured_at else '-' }}</div>
-            <div>Inference: {{ summary.latest_snapshot.inference_status }}</div>
-            <div>Person Detections: {{ summary.latest_snapshot.detections|length }}</div>
-            <img src="{{ url_for('server.get_file', filename=summary.latest_snapshot.filename) }}" alt="{{ summary.latest_snapshot.filename }}" style="max-width: 320px; height: auto;">
-            {% else %}
-            <div>No snapshots for this camera yet.</div>
-            {% endif %}
-        </li>
-        {% endfor %}
-    </ul>
-    {% else %}
-    <p>No cameras registered yet.</p>
-    {% endif %}
-    <ul>
-        <li><a href="{{ url_for('server.list_cameras') }}">View Cameras</a></li>
-        <li><a href="{{ url_for('server.list_files') }}">View Uploaded Files</a></li>
-        <li><a href="{{ url_for('server.healthz') }}">Health Check</a></li>
-    </ul>
-</body>
-</html>
+{% extends "_base.html" %}
+{% block title %}Dashboard{% endblock %}
+
+{% block body %}
+<div class="page">
+  <div class="page-header">
+    <h1 class="page-title">Camera Dashboard</h1>
+    <p class="page-sub">Real-time monitoring — snapshots stream via WebSocket</p>
+  </div>
+
+  <div class="stat-grid">
+    <div class="stat-card">
+      <div class="stat-label">Cameras</div>
+      <div class="stat-value">{{ camera_summaries | length }}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Snapshots</div>
+      <div class="stat-value">{{ image_count }}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Online</div>
+      <div class="stat-value" id="stat-online">{{ camera_summaries | selectattr('status','eq','healthy') | list | length }}</div>
+    </div>
+    <div class="stat-card" style="display:flex;align-items:center;gap:8px;padding:12px 20px;">
+      <div class="live-pill" id="live-pill">
+        <div class="live-dot"></div>
+        Connecting…
+      </div>
+    </div>
+  </div>
+
+  {% if camera_summaries %}
+  <div class="cam-grid" id="cam-grid">
+    {% for summary in camera_summaries %}
+    <a class="cam-card" href="{{ url_for('server.camera_detail', camera_id=summary.camera.camera_id) }}"
+       id="cam-card-{{ summary.camera.camera_id | replace(' ','_') | replace('-','_') }}">
+      <div class="cam-card-img">
+        {% if summary.latest_snapshot %}
+        <img id="cam-img-{{ summary.camera.camera_id | replace(' ','_') | replace('-','_') }}"
+             src="{{ url_for('server.get_file', filename=summary.latest_snapshot.filename) }}"
+             alt="{{ summary.camera.display_name }}"
+             loading="lazy">
+        {% else %}
+        <div class="no-image">no snapshot</div>
+        {% endif %}
+        <div class="cam-card-flash" id="cam-flash-{{ summary.camera.camera_id | replace(' ','_') | replace('-','_') }}"></div>
+      </div>
+      <div class="cam-card-body">
+        <div class="cam-card-name">
+          <span>{{ summary.camera.display_name }}</span>
+          <span class="badge {{ summary.status }}">
+            <span class="badge-dot"></span>{{ summary.status }}
+          </span>
+        </div>
+        {% if summary.latest_snapshot %}
+        <div class="cam-card-meta" id="cam-meta-{{ summary.camera.camera_id | replace(' ','_') | replace('-','_') }}">
+          {{ summary.latest_snapshot.captured_at.strftime('%Y-%m-%d %H:%M:%S') if summary.latest_snapshot.captured_at else summary.latest_snapshot.stored_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC
+        </div>
+        {% else %}
+        <div class="cam-card-meta text-4">No snapshots yet</div>
+        {% endif %}
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="card">
+    <div class="empty">
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <path d="M15 10l4.553-2.069A1 1 0 0121 8.868v6.264a1 1 0 01-1.447.902L15 14M3 8a2 2 0 012-2h10a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/>
+      </svg>
+      <span>No cameras registered yet.</span>
+      <span class="text-4">Upload a snapshot from an ESP32-CAM to get started.</span>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const RECONNECT_MS = 3000;
+  const pill = document.getElementById('live-pill');
+  let ws = null, timer = null;
+
+  function camId(raw) { return raw.replace(/[\s-]/g, '_'); }
+
+  function setLive(state) {
+    window._setWsStatus(state);
+    if (state === 'connected') {
+      pill.innerHTML = '<div class="live-dot"></div>Live';
+    } else if (state === 'reconnecting') {
+      pill.innerHTML = '<div class="live-dot" style="background:var(--amber)"></div>Reconnecting…';
+    } else {
+      pill.innerHTML = '<div class="live-dot" style="background:var(--red);animation:none"></div>Offline';
+    }
+  }
+
+  function onEvent(event) {
+    let data;
+    try { data = JSON.parse(event.data); } catch { return; }
+    if (data.type !== 'snapshot.created') return;
+
+    const cid = camId(data.camera_id || '');
+    const snap = data.snapshot || {};
+    const img   = document.getElementById('cam-img-'   + cid);
+    const meta  = document.getElementById('cam-meta-'  + cid);
+    const flash = document.getElementById('cam-flash-' + cid);
+
+    if (img && snap.url) {
+      img.src = snap.url + '?t=' + Date.now();
+    }
+    if (meta && snap.captured_at) {
+      const d = new Date(snap.captured_at);
+      meta.textContent = d.toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+    }
+    if (flash) {
+      flash.classList.add('flash');
+      setTimeout(() => flash.classList.remove('flash'), 300);
+    }
+  }
+
+  function connect() {
+    setLive('reconnecting');
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(proto + '://' + location.host + '/ws/snapshots');
+    ws.addEventListener('open',    () => setLive('connected'));
+    ws.addEventListener('message', onEvent);
+    ws.addEventListener('close',   () => { setLive('disconnected'); timer = setTimeout(connect, RECONNECT_MS); });
+    ws.addEventListener('error',   () => ws.close());
+  }
+
+  connect();
+})();
+</script>
+{% endblock %}
