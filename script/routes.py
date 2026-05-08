@@ -23,6 +23,10 @@ def _inference_service():
     return current_app.extensions["inference_service"]
 
 
+def _snapshot_event_publisher():
+    return current_app.extensions["snapshot_event_publisher"]
+
+
 def _looks_like_jpeg(data: bytes) -> bool:
     return len(data) >= 4 and data.startswith(b"\xff\xd8")
 
@@ -127,6 +131,7 @@ def upload_file():
         )
         snapshot = _metadata_store().record_snapshot(stored)
         _inference_service().enqueue_snapshot(snapshot.id)
+        _snapshot_event_publisher().publish_snapshot_created(snapshot)
         current_app.logger.info("File uploaded successfully: %s", stored.name)
         return (
             jsonify(

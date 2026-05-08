@@ -348,3 +348,23 @@ def test_upload_still_returns_200_when_detector_fails(app, client):
     assert response.status_code == 200
     assert snapshots[0].inference_status == "failed"
     assert snapshots[0].inference_error == "model unavailable"
+
+
+def test_upload_publishes_snapshot_created_event(app, client):
+    received: list[dict[str, object]] = []
+    app.extensions["snapshot_event_publisher"].subscribe(received.append)
+
+    response = client.post(
+        "/upload",
+        data=b"\xff\xd8event-payload",
+        headers=UPLOAD_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert len(received) == 1
+    event = received[0]
+    body = response.get_json()
+    assert event["type"] == "snapshot.created"
+    assert event["camera_id"] == "esp32cam-front-door"
+    assert event["snapshot"]["filename"] == body["filename"]
+    assert event["snapshot"]["url"] == f"/files/{body['filename']}"
