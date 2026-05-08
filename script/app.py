@@ -5,6 +5,7 @@ from werkzeug.exceptions import RequestEntityTooLarge
 
 from script.config import Config
 from script.detector import DisabledDetector, TFLiteCpuDetector
+from script.events import SnapshotEventPublisher
 from script.inference import InferenceService
 from script.metadata import SQLiteMetadataStore
 from script.routes import server
@@ -60,11 +61,13 @@ def create_app(test_config: dict | None = None) -> Flask:
         mode=app.config["INFERENCE_MODE"],
     )
     inference_service.start()
+    snapshot_event_publisher = SnapshotEventPublisher()
 
     app.extensions["storage"] = storage
     app.extensions["metadata_store"] = metadata_store
     app.extensions["detector"] = detector
     app.extensions["inference_service"] = inference_service
+    app.extensions["snapshot_event_publisher"] = snapshot_event_publisher
     app.register_blueprint(server)
 
     @app.errorhandler(RequestEntityTooLarge)
