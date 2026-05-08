@@ -1,25 +1,66 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cameras</title>
-</head>
-<body>
-    <h1>Cameras</h1>
-    {% if camera_summaries %}
-    <ul>
-        {% for summary in camera_summaries %}
-        <li>
-            <a href="{{ url_for('server.camera_detail', camera_id=summary.camera.camera_id) }}">{{ summary.camera.display_name }}</a>
-            <div>Status: {{ summary.status }}</div>
-            <div>Last Seen: {{ summary.camera.last_seen_at.isoformat() }}</div>
-        </li>
-        {% endfor %}
-    </ul>
-    {% else %}
-    <p>No cameras registered yet.</p>
-    {% endif %}
-    <a href="{{ url_for('server.index') }}">Back to Home</a>
-</body>
-</html>
+{% extends "_base.html" %}
+{% block title %}Cameras{% endblock %}
+
+{% block body %}
+<div class="page">
+  <div class="page-header">
+    <h1 class="page-title">Cameras</h1>
+    <p class="page-sub">All registered cameras and their current health status.</p>
+  </div>
+
+  {% if camera_summaries %}
+  <div class="card">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Camera</th>
+            <th>Status</th>
+            <th>Last Seen</th>
+            <th>Interval</th>
+            <th>Latest</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for summary in camera_summaries %}
+          <tr style="cursor:pointer;" onclick="location.href='{{ url_for('server.camera_detail', camera_id=summary.camera.camera_id) }}'">
+            <td>
+              <div style="font-weight:500;color:var(--text-1);font-size:13px;">{{ summary.camera.display_name }}</div>
+              <div class="mono" style="font-size:11px;color:var(--text-4);margin-top:2px;">{{ summary.camera.camera_id }}</div>
+            </td>
+            <td>
+              <span class="badge {{ summary.status }}">
+                <span class="badge-dot"></span>{{ summary.status }}
+              </span>
+            </td>
+            <td class="mono" style="font-size:12px;">{{ summary.camera.last_seen_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+            <td class="mono" style="font-size:12px;">{{ summary.camera.expected_interval_seconds }}s</td>
+            <td style="font-size:12px;color:var(--text-3);">
+              {% if summary.latest_snapshot %}
+                {{ summary.latest_snapshot.captured_at.strftime('%H:%M:%S') if summary.latest_snapshot.captured_at else '—' }}
+                {% if summary.latest_snapshot.detections %}
+                <span style="color:var(--green);margin-left:6px;">{{ summary.latest_snapshot.detections|length }} det</span>
+                {% endif %}
+              {% else %}
+                —
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% else %}
+  <div class="card">
+    <div class="empty">
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <path d="M15 10l4.553-2.069A1 1 0 0121 8.868v6.264a1 1 0 01-1.447.902L15 14M3 8a2 2 0 012-2h10a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/>
+      </svg>
+      <span>No cameras yet.</span>
+      <span class="text-4">Upload a snapshot from an ESP32-CAM to register a camera.</span>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
