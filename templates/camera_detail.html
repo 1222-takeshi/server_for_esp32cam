@@ -1,83 +1,195 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ camera.display_name }}</title>
-    <style>
-        .image-frame {
-            position: relative;
-            display: inline-block;
-            max-width: 640px;
-        }
-        .image-frame img {
-            display: block;
-            max-width: 100%;
-            height: auto;
-        }
-        .bbox {
-            position: absolute;
-            border: 2px solid red;
-            box-sizing: border-box;
-        }
-        .bbox-label {
-            position: absolute;
-            top: -1.4rem;
-            left: 0;
-            background: red;
-            color: white;
-            font-size: 0.75rem;
-            padding: 0.1rem 0.3rem;
-        }
-    </style>
-</head>
-<body>
-    <h1>{{ camera.display_name }}</h1>
-    <p>Camera ID: {{ camera.camera_id }}</p>
-    <p>Last Seen: {{ camera.last_seen_at.isoformat() }}</p>
-    <p>Expected Interval: {{ camera.expected_interval_seconds }} seconds</p>
-    {% if latest %}
-    <h2>Latest Snapshot</h2>
-    <p>{{ latest.filename }}</p>
-    <p>Inference Status: {{ latest.inference_status }}</p>
-    {% if latest.inference_error %}
-    <p>Inference Error: {{ latest.inference_error }}</p>
-    {% endif %}
-    <div class="image-frame">
-        <img src="{{ url_for('server.get_file', filename=latest.filename) }}" alt="{{ latest.filename }}">
-        {% for detection in latest.detections %}
-        <div
-            class="bbox"
-            style="
-                left: {{ detection.x1 * 100 }}%;
-                top: {{ detection.y1 * 100 }}%;
-                width: {{ (detection.x2 - detection.x1) * 100 }}%;
-                height: {{ (detection.y2 - detection.y1) * 100 }}%;
-            "
-        >
-            <div class="bbox-label">{{ detection.label }} {{ '%.2f'|format(detection.score) }}</div>
-        </div>
-        {% endfor %}
+{% extends "_base.html" %}
+{% block title %}{{ camera.display_name }}{% endblock %}
+
+{% block body %}
+<div class="page">
+  <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;">
+    <div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+        <a href="{{ url_for('server.list_cameras') }}" class="btn" style="padding:4px 10px;font-size:12px;">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M7.5 9L4.5 6l3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Cameras
+        </a>
+      </div>
+      <h1 class="page-title">{{ camera.display_name }}</h1>
+      <p class="page-sub mono">{{ camera.camera_id }}</p>
     </div>
-    {% else %}
-    <p>No snapshots for this camera yet.</p>
-    {% endif %}
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:4px;">
+      <span id="cam-status-badge" class="badge
+        {% if camera_summaries_map is defined and camera.camera_id in camera_summaries_map %}
+          {{ camera_summaries_map[camera.camera_id] }}
+        {% endif %}
+      ">
+        <span class="badge-dot"></span>
+        <span id="cam-status-text">—</span>
+      </span>
+      <div id="live-pill-detail" class="live-pill" style="display:none;">
+        <div class="live-dot"></div>Live
+      </div>
+    </div>
+  </div>
 
-    <h2>Recent Snapshots</h2>
-    {% if snapshots %}
-    <ul>
-        {% for snapshot in snapshots %}
-        <li>
-            <a href="{{ url_for('server.get_file', filename=snapshot.filename) }}">{{ snapshot.filename }}</a>
-            <div>Stored: {{ snapshot.stored_at.isoformat() }}</div>
-            <div>Captured: {{ snapshot.captured_at.isoformat() if snapshot.captured_at else '-' }}</div>
-            <div>Inference: {{ snapshot.inference_status }}</div>
-            <div>Detections: {{ snapshot.detections|length }}</div>
-        </li>
+  <!-- ── Meta strip ── -->
+  <div style="display:flex;gap:24px;flex-wrap:wrap;margin-bottom:28px;font-size:13px;color:var(--text-4);">
+    <span>Last seen <span class="text-2">{{ camera.last_seen_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC</span></span>
+    <span>Expected interval <span class="text-2 mono">{{ camera.expected_interval_seconds }}s</span></span>
+    <span>Snapshots <span class="text-2 mono">{{ snapshots | length }}</span></span>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 340px;gap:20px;align-items:start;" class="detail-grid">
+
+    <!-- ── Latest snapshot ── -->
+    <div class="card" style="overflow:visible;">
+      <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;">
+        <span style="font-size:13px;font-weight:600;color:var(--text-1);">Latest Snapshot</span>
+        {% if latest %}
+        <span id="latest-badge" class="badge {{ latest.inference_status }}">
+          <span class="badge-dot"></span>{{ latest.inference_status }}
+        </span>
+        {% endif %}
+      </div>
+      <div style="padding:20px;">
+        {% if latest %}
+        <div class="img-wrap" id="latest-img-wrap" style="max-width:100%;">
+          <img id="latest-img" src="{{ url_for('server.get_file', filename=latest.filename) }}" alt="{{ latest.filename }}">
+          {% for d in latest.detections %}
+          <div class="bbox" style="left:{{ d.x1*100 }}%;top:{{ d.y1*100 }}%;width:{{ (d.x2-d.x1)*100 }}%;height:{{ (d.y2-d.y1)*100 }}%;">
+            <div class="bbox-label">{{ d.label }} {{ '%.0f'|format(d.score*100) }}%</div>
+          </div>
+          {% endfor %}
+        </div>
+        <div style="margin-top:12px;display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--text-4);">
+          <span class="mono" id="latest-filename">{{ latest.filename }}</span>
+          {% if latest.captured_at %}
+          <span id="latest-ts">{{ latest.captured_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC</span>
+          {% endif %}
+          {% if latest.inference_error %}
+          <span style="color:var(--red);">{{ latest.inference_error }}</span>
+          {% endif %}
+        </div>
+        {% else %}
+        <div class="empty" style="padding:40px 0;">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <rect x="3" y="3" width="18" height="18" rx="3"/>
+            <path d="M3 9l4-4 4 4 4-6 4 6"/>
+          </svg>
+          No snapshots yet
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- ── Recent snapshots ── -->
+    <div class="card">
+      <div style="padding:14px 16px;border-bottom:1px solid var(--border);">
+        <span style="font-size:13px;font-weight:600;color:var(--text-1);">Recent</span>
+      </div>
+      <div style="padding:12px;max-height:520px;overflow-y:auto;" id="snap-list">
+        {% if snapshots %}
+        {% for snap in snapshots %}
+        <a href="{{ url_for('server.get_file', filename=snap.filename) }}" target="_blank"
+           style="display:flex;gap:10px;align-items:center;padding:8px;border-radius:var(--radius-sm);text-decoration:none;transition:background .15s;"
+           onmouseover="this.style.background='var(--bg-hover)'" onmouseout="this.style.background=''">
+          <div style="width:56px;height:42px;border-radius:4px;overflow:hidden;background:#12131a;flex-shrink:0;">
+            <img src="{{ url_for('server.get_file', filename=snap.filename) }}" alt="" style="width:100%;height:100%;object-fit:cover;">
+          </div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:11px;color:var(--text-1);font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+              {{ snap.filename }}
+            </div>
+            <div style="font-size:11px;color:var(--text-4);margin-top:2px;">
+              {{ snap.stored_at.strftime('%H:%M:%S') }}
+              {% if snap.detections %}
+              · <span style="color:var(--green);">{{ snap.detections|length }} det</span>
+              {% endif %}
+            </div>
+          </div>
+        </a>
         {% endfor %}
-    </ul>
-    {% endif %}
+        {% else %}
+        <div class="empty" style="padding:32px 0;">No snapshots</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
 
-    <a href="{{ url_for('server.list_cameras') }}">Back to Cameras</a>
-</body>
-</html>
+<style>
+@media (max-width: 768px) {
+  .detail-grid { grid-template-columns: 1fr !important; }
+}
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const CAMERA_ID   = {{ camera.camera_id | tojson }};
+  const RECONNECT_MS = 3000;
+  const pill     = document.getElementById('live-pill-detail');
+  const latImg   = document.getElementById('latest-img');
+  const latTs    = document.getElementById('latest-ts');
+  const latName  = document.getElementById('latest-filename');
+  const snapList = document.getElementById('snap-list');
+
+  function onEvent(ev) {
+    let data;
+    try { data = JSON.parse(ev.data); } catch { return; }
+    if (data.type !== 'snapshot.created') return;
+    if (data.camera_id !== CAMERA_ID) return;
+
+    const snap = data.snapshot || {};
+
+    if (latImg && snap.url) {
+      latImg.src = snap.url + '?t=' + Date.now();
+    }
+    if (latTs && snap.captured_at) {
+      const d = new Date(snap.captured_at);
+      latTs.textContent = d.toISOString().replace('T',' ').slice(0,19) + ' UTC';
+    }
+    if (latName && snap.filename) {
+      latName.textContent = snap.filename;
+    }
+
+    // Prepend thumbnail to recent list
+    if (snapList && snap.url && snap.filename) {
+      const a = document.createElement('a');
+      a.href = snap.url; a.target = '_blank';
+      a.style.cssText = 'display:flex;gap:10px;align-items:center;padding:8px;border-radius:6px;text-decoration:none;transition:background .15s;';
+      a.onmouseover = () => a.style.background = 'var(--bg-hover)';
+      a.onmouseout  = () => a.style.background = '';
+      a.innerHTML = `
+        <div style="width:56px;height:42px;border-radius:4px;overflow:hidden;background:#12131a;flex-shrink:0;">
+          <img src="${snap.url}?t=${Date.now()}" alt="" style="width:100%;height:100%;object-fit:cover;">
+        </div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:11px;color:var(--text-1);font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${snap.filename}</div>
+          <div style="font-size:11px;color:var(--text-4);margin-top:2px;">just now</div>
+        </div>
+      `;
+      snapList.insertBefore(a, snapList.firstChild);
+    }
+  }
+
+  function connect() {
+    window._setWsStatus && window._setWsStatus('reconnecting');
+    if (pill) { pill.style.display = 'none'; }
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const ws = new WebSocket(`${proto}://${location.host}/ws/cameras/${encodeURIComponent(CAMERA_ID)}/snapshots`);
+    ws.addEventListener('open', () => {
+      window._setWsStatus && window._setWsStatus('connected');
+      if (pill) { pill.style.display = 'inline-flex'; }
+    });
+    ws.addEventListener('message', onEvent);
+    ws.addEventListener('close',   () => {
+      window._setWsStatus && window._setWsStatus('disconnected');
+      if (pill) { pill.style.display = 'none'; }
+      setTimeout(connect, RECONNECT_MS);
+    });
+    ws.addEventListener('error', () => ws.close());
+  }
+
+  connect();
+})();
+</script>
+{% endblock %}
