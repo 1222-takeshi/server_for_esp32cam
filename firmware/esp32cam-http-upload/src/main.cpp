@@ -1,8 +1,12 @@
 #include <Arduino.h>
 #include <cstring>
 
-#if defined(WIFI_SMOKE_TEST) || defined(HTTP_UPLOAD_SMOKE_TEST)
+#if defined(WIFI_SMOKE_TEST) || defined(HTTP_UPLOAD_SMOKE_TEST) || defined(ENABLE_ARDUINO_OTA)
 #include <WiFi.h>
+#endif
+
+#ifdef ENABLE_ARDUINO_OTA
+#include <ArduinoOTA.h>
 #endif
 
 #ifdef HTTP_UPLOAD_SMOKE_TEST
@@ -27,6 +31,10 @@
 #define HTTP_UPLOAD_TIMEOUT_MS 10000
 #define NTP_SERVER "pool.ntp.org"
 #define NTP_SYNC_TIMEOUT_MS 10000
+#define OTA_HOSTNAME "esp32cam-01"
+#define OTA_PORT 3232
+#define OTA_PASSWORD ""
+#define OTA_WAIT_WINDOW_MS 15000
 #endif
 
 #ifndef UPLOAD_URL
@@ -43,6 +51,18 @@
 #endif
 #ifndef NTP_SYNC_TIMEOUT_MS
 #define NTP_SYNC_TIMEOUT_MS 10000
+#endif
+#ifndef OTA_HOSTNAME
+#define OTA_HOSTNAME "esp32cam-01"
+#endif
+#ifndef OTA_PORT
+#define OTA_PORT 3232
+#endif
+#ifndef OTA_PASSWORD
+#define OTA_PASSWORD ""
+#endif
+#ifndef OTA_WAIT_WINDOW_MS
+#define OTA_WAIT_WINDOW_MS 15000
 #endif
 
 namespace {
@@ -507,6 +527,40 @@ void runHttpUploadSmokeTest() {
 }
 #endif
 #endif
+
+#ifdef ENABLE_ARDUINO_OTA
+void setupArduinoOta() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("OTA setup skipped: Wi-Fi is not connected.");
+    return;
+  }
+
+  ArduinoOTA.setHostname(OTA_HOSTNAME);
+  ArduinoOTA.setPort(OTA_PORT);
+  if (strlen(OTA_PASSWORD) > 0) {
+    ArduinoOTA.setPassword(OTA_PASSWORD);
+  }
+  ArduinoOTA.onStart([]() {
+    Serial.println("OTA update started");
+  });
+  ArduinoOTA.onEnd([]() {
+    Serial.println("OTA update finished");
+  });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    const unsigned int percent = total == 0 ? 0 : (progress * 100U) / total;
+    Serial.printf("OTA update progress: %u%%\n", percent);
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("OTA update error: %u\n", static_cast<unsigned int>(error));
+  });
+  ArduinoOTA.begin();
+  Serial.printf("OTA ready: hostname=%s port=%u ip=%s\n",
+                OTA_HOSTNAME,
+                static_cast<unsigned int>(OTA_PORT),
+                WiFi.localIP().toString().c_str());
+}
+#endif
+
 }  // namespace
 
 void setup() {
@@ -514,6 +568,9 @@ void setup() {
   delay(1000);
 #if defined(HTTP_UPLOAD_SMOKE_TEST)
   runHttpUploadSmokeTest();
+#ifdef ENABLE_ARDUINO_OTA
+  setupArduinoOta();
+#endif
 #elif defined(JPEG_CAPTURE_SMOKE_TEST)
   captureJpegSmokeTest();
 #elif defined(CAMERA_INIT_SMOKE_TEST)
@@ -526,6 +583,9 @@ void setup() {
 }
 
 void loop() {
+#ifdef ENABLE_ARDUINO_OTA
+  ArduinoOTA.handle();
+#endif
   const uint32_t now = millis();
   if (now - lastLogMs >= kLogIntervalMs) {
     lastLogMs = now;

@@ -129,3 +129,29 @@ WSL を再起動すると IP が変わることがあるため、その場合は
 *   保存先の切替（NAS / Google Drive）
 *   短い動画クリップ
 *   通知 / アラート
+
+
+## ESP32-CAM firmware の OTA 更新
+
+OTAは、USBで `esp32cam_http_upload_ota` を一度書き込んでから使います。初回USB書き込みにより、ArduinoOTA待受とOTA対応partitionが入った状態にします。
+
+1. `firmware/esp32cam-http-upload/include/esp32cam_config.h.example` を `esp32cam_config.h` にコピーし、Wi-Fi、`UPLOAD_URL`、OTA設定をローカルで入れます。秘密値はコミットしません。
+2. USBで初回書き込みします。
+
+   ```bash
+   cd firmware/esp32cam-http-upload
+   pio run -e esp32cam_http_upload_ota -t upload
+   pio device monitor -e esp32cam_http_upload_ota
+   ```
+
+3. シリアルログで `OTA ready` と、既存の `HTTP upload smoke test` / `POST /upload` 成功を確認します。
+4. 以後、同一LANからPlatformIO OTA uploadを実行できます。
+
+   ```bash
+   export ESP32CAM_OTA_HOST=<ESP32-CAMのLAN IPまたはhostname>
+   export ESP32CAM_OTA_PORT=3232
+   export ESP32CAM_OTA_PASSWORD=<ローカル設定したOTA password。未設定なら空>
+   pio run -e esp32cam_http_upload_ota -t upload
+   ```
+
+OTA後も `POST /upload` が成功し、ブラウザ側の表示更新まで確認します。失敗した場合はUSBシリアルで再書き込みして復旧します。
