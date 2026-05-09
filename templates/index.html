@@ -63,6 +63,10 @@
              data-last-seen="{{ summary.camera.last_seen_at.isoformat() }}">
           Expected {{ summary.camera.expected_interval_seconds }}s
         </div>
+        <div class="cam-card-meta mono"
+             id="cam-frame-size-{{ summary.camera.camera_id | replace(' ','_') | replace('-','_') }}">
+          Last frame {{ '%.1f'|format(summary.latest_snapshot.size / 1024) }} KB
+        </div>
         {% else %}
         <div class="cam-card-meta text-4">No snapshots yet</div>
         {% endif %}
@@ -88,6 +92,8 @@
 <script>
 (function () {
   const RECONNECT_MS = 3000;
+  const STALE_AFTER_MS = 15000;
+  const OFFLINE_AFTER_MS = 60000;
   const pill = document.getElementById('live-pill');
   let ws = null, timer = null;
 
@@ -146,6 +152,39 @@
     if (label) label.textContent = 'healthy';
   }
 
+  function decrementOnlineCountIfNeeded(badge) {
+    if (!badge || badge.dataset.status !== 'healthy') return;
+    const stat = document.getElementById('stat-online');
+    if (!stat) return;
+    const current = Number.parseInt(stat.textContent, 10);
+    stat.textContent = String(Math.max(0, Number.isFinite(current) ? current - 1 : 0));
+  }
+
+  function setCameraStatus(cid, status) {
+    const badge = document.getElementById('cam-status-badge-' + cid);
+    if (!badge || badge.dataset.status === status) return;
+    if (status !== 'healthy') decrementOnlineCountIfNeeded(badge);
+    badge.classList.remove('healthy', 'stale', 'offline');
+    badge.classList.add(status);
+    badge.dataset.status = status;
+    const label = document.getElementById('cam-status-text-' + cid);
+    if (label) label.textContent = status;
+  }
+
+  function formatFrameSize(bytes) {
+    const size = Number(bytes);
+    if (!Number.isFinite(size) || size < 0) return null;
+    if (size >= 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`;
+    return `${(size / 1024).toFixed(1)} KB`;
+  }
+
+  function updateFrameSize(cid, snap) {
+    const target = document.getElementById('cam-frame-size-' + cid);
+    if (!target) return;
+    const formatted = formatFrameSize(snap.size_bytes ?? snap.size);
+    if (formatted) target.textContent = `Last frame ${formatted}`;
+  }
+
   function updateCameraTiming(cid, snap) {
     const interval = document.getElementById('cam-interval-' + cid);
     const now = new Date(snap.stored_at || snap.captured_at || Date.now());
@@ -159,6 +198,22 @@
       }
       if (!Number.isNaN(now.getTime())) interval.dataset.lastSeen = now.toISOString();
     }
+  }
+
+  function scheduleHealthChecks() {
+    setInterval(() => {
+      document.querySelectorAll('[id^="cam-interval-"][data-last-seen]').forEach((interval) => {
+        const seenAt = new Date(interval.dataset.lastSeen || '');
+        if (Number.isNaN(seenAt.getTime())) return;
+        const cid = interval.id.replace('cam-interval-', '');
+        const ageMs = Date.now() - seenAt.getTime();
+        if (ageMs >= OFFLINE_AFTER_MS) {
+          setCameraStatus(cid, 'offline');
+        } else if (ageMs >= STALE_AFTER_MS) {
+          setCameraStatus(cid, 'stale');
+        }
+      });
+    }, 5000);
   }
 
   function onEvent(event) {
@@ -175,6 +230,7 @@
     incrementStatSnapshotCount();
     markCameraHealthy(cid);
     updateCameraTiming(cid, snap);
+    updateFrameSize(cid, snap);
 
     if (img && snap.url) {
       img.src = snap.url + '?t=' + Date.now();
@@ -200,6 +256,7 @@
   }
 
   connect();
+  scheduleHealthChecks();
 })();
 </script>
 {% endblock %}

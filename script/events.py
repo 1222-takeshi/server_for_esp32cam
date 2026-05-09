@@ -27,6 +27,7 @@ def snapshot_created_event(snapshot: SnapshotRecord) -> SnapshotEvent:
             "relative_path": snapshot.relative_path,
             "url": f"/files/{snapshot.filename}",
             "size": snapshot.size,
+            "size_bytes": snapshot.size,
             "captured_at": snapshot.captured_at.isoformat() if snapshot.captured_at else None,
             "stored_at": snapshot.stored_at.isoformat(),
             "inference_status": snapshot.inference_status,
