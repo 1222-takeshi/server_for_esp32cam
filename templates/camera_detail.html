@@ -34,6 +34,7 @@
     <span>Last seen <span class="text-2" id="camera-last-seen">{{ camera.last_seen_at | jst }}</span></span>
     <span>Expected interval <span class="text-2 mono">{{ camera.expected_interval_seconds }}s</span></span>
     <span>Live interval <span class="text-2 mono" id="camera-live-interval" data-last-seen="{{ camera.last_seen_at.isoformat() }}">—</span></span>
+    <span>Last frame <span class="text-2 mono" id="camera-frame-size">{% if latest %}{{ '%.1f'|format(latest.size / 1024) }} KB{% else %}—{% endif %}</span></span>
     <span>Snapshots <span class="text-2 mono" id="snapshot-count">{{ snapshots | length }}</span></span>
   </div>
 
@@ -127,6 +128,8 @@
 (function () {
   const CAMERA_ID   = {{ camera.camera_id | tojson }};
   const RECONNECT_MS = 3000;
+  const STALE_AFTER_MS = 15000;
+  const OFFLINE_AFTER_MS = 60000;
   const pill     = document.getElementById('live-pill-detail');
   const latImg   = document.getElementById('latest-img');
   const latTs    = document.getElementById('latest-ts');
@@ -156,6 +159,34 @@
     return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} JST`;
   }
 
+  function formatFrameSize(bytes) {
+    const size = Number(bytes);
+    if (!Number.isFinite(size) || size < 0) return null;
+    if (size >= 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`;
+    return `${(size / 1024).toFixed(1)} KB`;
+  }
+
+  function updateFrameSize(snap) {
+    const target = document.getElementById('camera-frame-size');
+    if (!target) return;
+    const formatted = formatFrameSize(snap.size_bytes ?? snap.size);
+    if (formatted) target.textContent = formatted;
+  }
+
+  function setDetailStatus(status) {
+    const badge = document.getElementById('camera-status-badge');
+    const label = document.getElementById('camera-status-text');
+    if (!badge || badge.dataset.status === status) return;
+    badge.classList.remove('healthy', 'stale', 'offline');
+    badge.classList.add(status);
+    badge.dataset.status = status;
+    if (label) label.textContent = status;
+  }
+
+  function markCameraHealthy() {
+    setDetailStatus('healthy');
+  }
+
   function updateCameraTiming(snap) {
     const timestamp = snap.captured_at || snap.stored_at;
     const formatted = formatTimestamp(timestamp);
@@ -176,6 +207,21 @@
     if (!Number.isNaN(now.getTime())) interval.dataset.lastSeen = now.toISOString();
   }
 
+  function scheduleHealthChecks() {
+    setInterval(() => {
+      const interval = document.getElementById('camera-live-interval');
+      if (!interval) return;
+      const seenAt = new Date(interval.dataset.lastSeen || '');
+      if (Number.isNaN(seenAt.getTime())) return;
+      const ageMs = Date.now() - seenAt.getTime();
+      if (ageMs >= OFFLINE_AFTER_MS) {
+        setDetailStatus('offline');
+      } else if (ageMs >= STALE_AFTER_MS) {
+        setDetailStatus('stale');
+      }
+    }, 5000);
+  }
+
   function onEvent(ev) {
     let data;
     try { data = JSON.parse(ev.data); } catch { return; }
@@ -185,7 +231,9 @@
     const snap = data.snapshot || {};
 
     incrementSnapshotCount();
+    markCameraHealthy();
     updateCameraTiming(snap);
+    updateFrameSize(snap);
 
     if (latImg && snap.url) {
       latImg.src = snap.url + '?t=' + Date.now();
@@ -237,6 +285,7 @@
   }
 
   connect();
+  scheduleHealthChecks();
 })();
 </script>
 {% endblock %}
