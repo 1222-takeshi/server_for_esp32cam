@@ -472,14 +472,53 @@ upload_protocol = espota
 
 3. Confirm the serial log shows `OTA ready` and that the HTTP upload smoke test
    still succeeds with `HTTP status code: 200` against `POST /upload`.
-4. Upload a later build over Wi-Fi from the same LAN:
+4. Note the ESP32-CAM address from the serial log. IP address is the most
+   reliable upload destination, especially when mDNS/hostname resolution does
+   not work on the LAN:
+
+   ```text
+   WiFi connected
+   IP address: 192.168.1.50
+   OTA ready: hostname=esp32cam-01 port=3232 ip=192.168.1.50
+   ```
+
+   `esp32cam_config.h` configures the OTA service running on the ESP32-CAM
+   (`OTA_HOSTNAME`, `OTA_PORT`, `OTA_PASSWORD`). PlatformIO still needs the
+   host-side upload destination through environment variables or
+   `--upload-port`.
+5. Upload a later build over Wi-Fi from the same LAN:
 
    ```bash
-   export ESP32CAM_OTA_HOST=<ESP32-CAMのLAN IPまたはhostname>
+   export ESP32CAM_OTA_HOST=192.168.1.50
    export ESP32CAM_OTA_PORT=3232
    export ESP32CAM_OTA_PASSWORD=<local OTA password, if configured>
    pio run -e esp32cam_http_upload_ota -t upload
    ```
+
+   If mDNS works on your LAN, the hostname from `OTA_HOSTNAME` may also work:
+
+   ```bash
+   export ESP32CAM_OTA_HOST=esp32cam-01.local
+   ```
+
+   To avoid retyping these values, keep a local ignored file such as
+   `.env.local` and load it before OTA upload:
+
+   ```bash
+   source .env.local
+   pio run -e esp32cam_http_upload_ota -t upload
+   ```
+
+   Example `.env.local`:
+
+   ```bash
+   export ESP32CAM_OTA_HOST=192.168.1.50
+   export ESP32CAM_OTA_PORT=3232
+   export ESP32CAM_OTA_PASSWORD=
+   ```
+
+   For stable OTA operation, consider assigning a fixed DHCP lease for the
+   ESP32-CAM in the router so the IP address does not change.
 
 If OTA upload fails, reconnect USB serial, put the module into download mode, and
 flash the same environment again. After an OTA update, re-run the HTTP upload

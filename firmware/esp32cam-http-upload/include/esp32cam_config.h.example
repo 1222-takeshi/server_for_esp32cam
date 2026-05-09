@@ -24,6 +24,15 @@
 
 // ArduinoOTA settings. Keep OTA_PASSWORD empty for no password on a private
 // development LAN, or set it only in your local ignored esp32cam_config.h.
+//
+// These values configure the firmware running on the ESP32-CAM. PlatformIO OTA
+// upload still needs the host-side destination in your shell, for example:
+//   export ESP32CAM_OTA_HOST=192.168.1.50
+//   export ESP32CAM_OTA_HOST=esp32cam-01.local  # if mDNS works on your LAN
+//   export ESP32CAM_OTA_PORT=3232
+//   export ESP32CAM_OTA_PASSWORD=
+//
+// Use the IP printed by the serial monitor if hostname resolution is unreliable.
 #define OTA_HOSTNAME "esp32cam-01"
 #define OTA_PORT 3232
 #define OTA_PASSWORD ""
