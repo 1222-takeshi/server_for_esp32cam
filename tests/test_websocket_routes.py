@@ -14,3 +14,4 @@ def test_create_app_registers_snapshot_websocket_routes(app):
 
     assert "/ws/snapshots" in rules
     assert "/ws/cameras/<camera_id>/snapshots" in rules
+    assert "/ws/cameras/<camera_id>/upload" in rules
