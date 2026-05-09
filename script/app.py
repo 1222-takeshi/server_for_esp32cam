@@ -12,7 +12,8 @@ from script.events import SnapshotEventPublisher
 from script.inference import InferenceService
 from script.metadata import SQLiteMetadataStore
 from script.routes import server
-from script.storage import LocalFilesystemStorage
+from script.storage import LocalFilesystemStorage, StorageRetentionPolicy
+from script.upload_metrics import UploadMetricsRegistry
 from script.websocket_routes import register_websocket_routes
 
 
@@ -77,12 +78,19 @@ def create_app(test_config: dict | None = None) -> Flask:
     )
     inference_service.start()
     snapshot_event_publisher = SnapshotEventPublisher()
+    storage_retention_policy = StorageRetentionPolicy(
+        max_age_seconds=app.config["STORAGE_RETENTION_MAX_AGE_SECONDS"] or None,
+        max_bytes=app.config["STORAGE_RETENTION_MAX_BYTES"] or None,
+    )
+    upload_metrics = UploadMetricsRegistry()
 
     app.extensions["storage"] = storage
     app.extensions["metadata_store"] = metadata_store
     app.extensions["detector"] = detector
     app.extensions["inference_service"] = inference_service
     app.extensions["snapshot_event_publisher"] = snapshot_event_publisher
+    app.extensions["storage_retention_policy"] = storage_retention_policy
+    app.extensions["upload_metrics"] = upload_metrics
     app.register_blueprint(server)
     register_websocket_routes(app, snapshot_event_publisher)
 

@@ -18,6 +18,25 @@ class StoredImage:
     captured_at: datetime | None = None
 
 
+@dataclass(frozen=True)
+class StorageRetentionPolicy:
+    max_age_seconds: int | None = None
+    max_bytes: int | None = None
+
+    @property
+    def enabled(self) -> bool:
+        return (self.max_age_seconds is not None and self.max_age_seconds > 0) or (
+            self.max_bytes is not None and self.max_bytes > 0
+        )
+
+
+@dataclass(frozen=True)
+class StorageRetentionResult:
+    deleted_relative_paths: list[str]
+    deleted_bytes: int
+
+
+
 def _normalize_device_id(value: str | None) -> str | None:
     if value is None:
         return None
@@ -68,6 +87,15 @@ class Storage(Protocol):
         ...
 
     def read_image_by_relative_path(self, relative_path: str) -> bytes:
+        ...
+
+    def apply_retention(
+        self,
+        policy: StorageRetentionPolicy,
+        *,
+        now: datetime | None = None,
+        preserve_relative_paths: set[str] | None = None,
+    ) -> StorageRetentionResult:
         ...
 
 
@@ -217,3 +245,56 @@ class LocalFilesystemStorage:
 
     def read_image_by_relative_path(self, relative_path: str) -> bytes:
         return self._resolve_relative_path(relative_path).read_bytes()
+
+    def _delete_image(self, image: StoredImage) -> int:
+        path = self._resolve_relative_path(image.relative_path)
+        size = path.stat().st_size
+        self._metadata_path(path).unlink(missing_ok=True)
+        path.unlink(missing_ok=True)
+        self._cleanup_empty_parents(path)
+        return size
+
+    def apply_retention(
+        self,
+        policy: StorageRetentionPolicy,
+        *,
+        now: datetime | None = None,
+        preserve_relative_paths: set[str] | None = None,
+    ) -> StorageRetentionResult:
+        if not policy.enabled:
+            return StorageRetentionResult(deleted_relative_paths=[], deleted_bytes=0)
+
+        preserved = preserve_relative_paths or set()
+        reference = now or datetime.now(tz=timezone.utc)
+        images = self.list_images()
+        candidates = [image for image in images if image.relative_path not in preserved]
+        deleted: list[str] = []
+        deleted_bytes = 0
+
+        if policy.max_age_seconds is not None and policy.max_age_seconds > 0:
+            max_age_seconds = policy.max_age_seconds
+            for image in sorted(candidates, key=lambda item: item.created_at):
+                if (reference - image.created_at).total_seconds() > max_age_seconds:
+                    try:
+                        deleted_bytes += self._delete_image(image)
+                    except FileNotFoundError:
+                        continue
+                    deleted.append(image.relative_path)
+
+        if policy.max_bytes is not None and policy.max_bytes > 0:
+            remaining = [image for image in self.list_images() if image.relative_path not in deleted]
+            total_bytes = sum(image.size for image in remaining)
+            for image in sorted(remaining, key=lambda item: item.created_at):
+                if total_bytes <= policy.max_bytes:
+                    break
+                if image.relative_path in preserved:
+                    continue
+                try:
+                    deleted_bytes += self._delete_image(image)
+                except FileNotFoundError:
+                    total_bytes -= image.size
+                    continue
+                deleted.append(image.relative_path)
+                total_bytes -= image.size
+
+        return StorageRetentionResult(deleted_relative_paths=deleted, deleted_bytes=deleted_bytes)

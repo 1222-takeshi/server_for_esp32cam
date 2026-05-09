@@ -43,6 +43,9 @@
     export ESP32CAM_DB_PATH=/absolute/path/to/esp32cam.sqlite3
     export ESP32CAM_STORAGE_BACKEND=local
     export ESP32CAM_MAX_CONTENT_LENGTH=1048576
+    # Set either value to 0 or leave it unset to disable that retention rule.
+    export ESP32CAM_STORAGE_RETENTION_MAX_AGE_SECONDS=604800
+    export ESP32CAM_STORAGE_RETENTION_MAX_BYTES=1073741824
     export ESP32CAM_DETECTOR=disabled
     export ESP32CAM_MODEL_PATH=/absolute/path/to/detect.tflite
     export ESP32CAM_LABELS_PATH=/absolute/path/to/labels.txt
