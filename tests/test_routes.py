@@ -191,6 +191,36 @@ def test_index_page_shows_camera_dashboard_metadata(client):
     assert "Camera Dashboard" in page
 
 
+def test_index_page_marks_snapshot_stats_for_live_updates(client):
+    client.post(
+        "/upload",
+        data=b"\xff\xd8front-door",
+        headers=UPLOAD_HEADERS,
+    )
+
+    response = client.get("/")
+    page = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert 'id="stat-snapshots"' in page
+    assert "incrementStatSnapshotCount" in page
+
+
+def test_camera_detail_page_marks_snapshot_count_for_live_updates(client):
+    client.post(
+        "/upload",
+        data=b"\xff\xd8front-door",
+        headers=UPLOAD_HEADERS,
+    )
+
+    response = client.get("/cameras/esp32cam-front-door")
+    page = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert 'id="snapshot-count"' in page
+    assert "incrementSnapshotCount" in page
+
+
 def test_camera_detail_page_filters_snapshots_by_camera(client):
     front = client.post(
         "/upload",

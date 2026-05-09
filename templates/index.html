@@ -15,7 +15,7 @@
     </div>
     <div class="stat-card">
       <div class="stat-label">Snapshots</div>
-      <div class="stat-value">{{ image_count }}</div>
+      <div class="stat-value" id="stat-snapshots">{{ image_count }}</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">Online</div>
@@ -97,6 +97,13 @@
     }
   }
 
+  function incrementStatSnapshotCount() {
+    const stat = document.getElementById('stat-snapshots');
+    if (!stat) return;
+    const current = Number.parseInt(stat.textContent, 10);
+    stat.textContent = String(Number.isFinite(current) ? current + 1 : 1);
+  }
+
   function onEvent(event) {
     let data;
     try { data = JSON.parse(event.data); } catch { return; }
@@ -107,6 +114,8 @@
     const img   = document.getElementById('cam-img-'   + cid);
     const meta  = document.getElementById('cam-meta-'  + cid);
     const flash = document.getElementById('cam-flash-' + cid);
+
+    incrementStatSnapshotCount();
 
     if (img && snap.url) {
       img.src = snap.url + '?t=' + Date.now();
