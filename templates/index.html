@@ -48,13 +48,20 @@
       <div class="cam-card-body">
         <div class="cam-card-name">
           <span>{{ summary.camera.display_name }}</span>
-          <span class="badge {{ summary.status }}">
-            <span class="badge-dot"></span>{{ summary.status }}
+          <span class="badge {{ summary.status }}"
+                id="cam-status-badge-{{ summary.camera.camera_id | replace(' ','_') | replace('-','_') }}"
+                data-status="{{ summary.status }}">
+            <span class="badge-dot"></span><span id="cam-status-text-{{ summary.camera.camera_id | replace(' ','_') | replace('-','_') }}">{{ summary.status }}</span>
           </span>
         </div>
         {% if summary.latest_snapshot %}
         <div class="cam-card-meta" id="cam-meta-{{ summary.camera.camera_id | replace(' ','_') | replace('-','_') }}">
           {{ summary.latest_snapshot.captured_at.strftime('%Y-%m-%d %H:%M:%S') if summary.latest_snapshot.captured_at else summary.latest_snapshot.stored_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC
+        </div>
+        <div class="cam-card-meta"
+             id="cam-interval-{{ summary.camera.camera_id | replace(' ','_') | replace('-','_') }}"
+             data-last-seen="{{ summary.camera.last_seen_at.isoformat() }}">
+          Expected {{ summary.camera.expected_interval_seconds }}s
         </div>
         {% else %}
         <div class="cam-card-meta text-4">No snapshots yet</div>
@@ -104,6 +111,47 @@
     stat.textContent = String(Number.isFinite(current) ? current + 1 : 1);
   }
 
+  function formatTimestamp(value) {
+    if (!value) return null;
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return null;
+    return d.toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+  }
+
+  function incrementOnlineCountIfNeeded(badge) {
+    if (!badge || badge.dataset.status === 'healthy') return;
+    const stat = document.getElementById('stat-online');
+    if (!stat) return;
+    const current = Number.parseInt(stat.textContent, 10);
+    stat.textContent = String(Number.isFinite(current) ? current + 1 : 1);
+  }
+
+  function markCameraHealthy(cid) {
+    const badge = document.getElementById('cam-status-badge-' + cid);
+    incrementOnlineCountIfNeeded(badge);
+    if (!badge) return;
+    badge.classList.remove('stale', 'offline');
+    badge.classList.add('healthy');
+    badge.dataset.status = 'healthy';
+    const label = document.getElementById('cam-status-text-' + cid);
+    if (label) label.textContent = 'healthy';
+  }
+
+  function updateCameraTiming(cid, snap) {
+    const interval = document.getElementById('cam-interval-' + cid);
+    const now = new Date(snap.stored_at || snap.captured_at || Date.now());
+    if (interval) {
+      const previous = interval.dataset.lastSeen ? new Date(interval.dataset.lastSeen) : null;
+      if (previous && !Number.isNaN(previous.getTime()) && !Number.isNaN(now.getTime())) {
+        const seconds = Math.max(0, Math.round((now - previous) / 1000));
+        interval.textContent = seconds > 0 ? `Live interval ~${seconds}s` : 'Live now';
+      } else {
+        interval.textContent = 'Live now';
+      }
+      if (!Number.isNaN(now.getTime())) interval.dataset.lastSeen = now.toISOString();
+    }
+  }
+
   function onEvent(event) {
     let data;
     try { data = JSON.parse(event.data); } catch { return; }
@@ -116,13 +164,15 @@
     const flash = document.getElementById('cam-flash-' + cid);
 
     incrementStatSnapshotCount();
+    markCameraHealthy(cid);
+    updateCameraTiming(cid, snap);
 
     if (img && snap.url) {
       img.src = snap.url + '?t=' + Date.now();
     }
-    if (meta && snap.captured_at) {
-      const d = new Date(snap.captured_at);
-      meta.textContent = d.toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+    if (meta) {
+      const timestamp = formatTimestamp(snap.captured_at || snap.stored_at);
+      if (timestamp) meta.textContent = timestamp;
     }
     if (flash) {
       flash.classList.add('flash');
