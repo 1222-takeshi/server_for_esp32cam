@@ -31,7 +31,7 @@
 
   <!-- ── Meta strip ── -->
   <div style="display:flex;gap:24px;flex-wrap:wrap;margin-bottom:28px;font-size:13px;color:var(--text-4);">
-    <span>Last seen <span class="text-2" id="camera-last-seen">{{ camera.last_seen_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC</span></span>
+    <span>Last seen <span class="text-2" id="camera-last-seen">{{ camera.last_seen_at | jst }}</span></span>
     <span>Expected interval <span class="text-2 mono">{{ camera.expected_interval_seconds }}s</span></span>
     <span>Live interval <span class="text-2 mono" id="camera-live-interval" data-last-seen="{{ camera.last_seen_at.isoformat() }}">—</span></span>
     <span>Snapshots <span class="text-2 mono" id="snapshot-count">{{ snapshots | length }}</span></span>
@@ -62,7 +62,7 @@
         <div style="margin-top:12px;display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--text-4);">
           <span class="mono" id="latest-filename">{{ latest.filename }}</span>
           {% if latest.captured_at %}
-          <span id="latest-ts">{{ latest.captured_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC</span>
+          <span id="latest-ts">{{ latest.captured_at | jst }}</span>
           {% endif %}
           {% if latest.inference_error %}
           <span style="color:var(--red);">{{ latest.inference_error }}</span>
@@ -99,7 +99,7 @@
               {{ snap.filename }}
             </div>
             <div style="font-size:11px;color:var(--text-4);margin-top:2px;">
-              {{ snap.stored_at.strftime('%H:%M:%S') }}
+              {{ snap.stored_at | jst('%H:%M:%S JST') }}
               {% if snap.detections %}
               · <span style="color:var(--green);">{{ snap.detections|length }} det</span>
               {% endif %}
@@ -144,7 +144,16 @@
     if (!value) return null;
     const d = new Date(value);
     if (Number.isNaN(d.getTime())) return null;
-    return d.toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Tokyo',
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hour12: false,
+    }).formatToParts(d).reduce((acc, part) => {
+      acc[part.type] = part.value;
+      return acc;
+    }, {});
+    return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} JST`;
   }
 
   function updateCameraTiming(snap) {
@@ -182,8 +191,8 @@
       latImg.src = snap.url + '?t=' + Date.now();
     }
     if (latTs && snap.captured_at) {
-      const d = new Date(snap.captured_at);
-      latTs.textContent = d.toISOString().replace('T',' ').slice(0,19) + ' UTC';
+      const timestamp = formatTimestamp(snap.captured_at);
+      if (timestamp) latTs.textContent = timestamp;
     }
     if (latName && snap.filename) {
       latName.textContent = snap.filename;

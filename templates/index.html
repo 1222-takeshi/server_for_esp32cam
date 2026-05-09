@@ -56,7 +56,7 @@
         </div>
         {% if summary.latest_snapshot %}
         <div class="cam-card-meta" id="cam-meta-{{ summary.camera.camera_id | replace(' ','_') | replace('-','_') }}">
-          {{ summary.latest_snapshot.captured_at.strftime('%Y-%m-%d %H:%M:%S') if summary.latest_snapshot.captured_at else summary.latest_snapshot.stored_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC
+          {{ (summary.latest_snapshot.captured_at if summary.latest_snapshot.captured_at else summary.latest_snapshot.stored_at) | jst }}
         </div>
         <div class="cam-card-meta"
              id="cam-interval-{{ summary.camera.camera_id | replace(' ','_') | replace('-','_') }}"
@@ -115,7 +115,16 @@
     if (!value) return null;
     const d = new Date(value);
     if (Number.isNaN(d.getTime())) return null;
-    return d.toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Tokyo',
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hour12: false,
+    }).formatToParts(d).reduce((acc, part) => {
+      acc[part.type] = part.value;
+      return acc;
+    }, {});
+    return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} JST`;
   }
 
   function incrementOnlineCountIfNeeded(badge) {
