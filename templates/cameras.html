@@ -33,11 +33,11 @@
                 <span class="badge-dot"></span>{{ summary.status }}
               </span>
             </td>
-            <td class="mono" style="font-size:12px;">{{ summary.camera.last_seen_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+            <td class="mono" style="font-size:12px;">{{ summary.camera.last_seen_at | jst }}</td>
             <td class="mono" style="font-size:12px;">{{ summary.camera.expected_interval_seconds }}s</td>
             <td style="font-size:12px;color:var(--text-3);">
               {% if summary.latest_snapshot %}
-                {{ summary.latest_snapshot.captured_at.strftime('%H:%M:%S') if summary.latest_snapshot.captured_at else '—' }}
+                {{ summary.latest_snapshot.captured_at | jst('%H:%M:%S JST') if summary.latest_snapshot.captured_at else '—' }}
                 {% if summary.latest_snapshot.detections %}
                 <span style="color:var(--green);margin-left:6px;">{{ summary.latest_snapshot.detections|length }} det</span>
                 {% endif %}
