@@ -47,9 +47,9 @@
               {% else %}—{% endif %}
             </td>
             <td class="mono" style="font-size:11px;color:var(--text-3);">
-              {{ file.captured_at.isoformat() if file.captured_at else '—' }}
+              {{ file.captured_at | jst if file.captured_at else '—' }}
             </td>
-            <td class="mono" style="font-size:11px;color:var(--text-4);">{{ file.stored_at.strftime('%H:%M:%S') }}</td>
+            <td class="mono" style="font-size:11px;color:var(--text-4);">{{ file.stored_at | jst('%H:%M:%S JST') }}</td>
             <td class="mono" style="font-size:11px;color:var(--text-4);">
               {% if file.size >= 1024 %}{{ '%.1f'|format(file.size/1024) }} KB{% else %}{{ file.size }} B{% endif %}
             </td>

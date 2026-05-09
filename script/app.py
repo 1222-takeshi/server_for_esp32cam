@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from flask import Flask, jsonify
 from werkzeug.exceptions import RequestEntityTooLarge
 
@@ -11,6 +14,9 @@ from script.metadata import SQLiteMetadataStore
 from script.routes import server
 from script.storage import LocalFilesystemStorage
 from script.websocket_routes import register_websocket_routes
+
+
+JST = ZoneInfo("Asia/Tokyo")
 
 
 def _create_detector(app: Flask):
@@ -40,6 +46,14 @@ def _create_detector(app: Flask):
 def create_app(test_config: dict | None = None) -> Flask:
     app = Flask(__name__, template_folder=str(Config.BASE_DIR / "templates"))
     app.config.from_object(Config)
+
+    @app.template_filter("jst")
+    def format_jst(value: datetime | None, fmt: str = "%Y-%m-%d %H:%M:%S JST") -> str:
+        if value is None:
+            return "—"
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=JST)
+        return value.astimezone(JST).strftime(fmt)
 
     if test_config:
         app.config.update(test_config)

@@ -162,7 +162,8 @@ def test_files_page_lists_latest_upload_first(client):
     assert second["filename"] in page
     assert first["filename"] in page
     assert "esp32cam-garden" in page
-    assert "2026-03-11T12:35:56+00:00" in page
+    assert "2026-03-11 21:35:56 JST" in page
+    assert "2026-03-11T12:35:56+00:00" not in page
     assert page.index(second["filename"]) < page.index(first["filename"])
 
 
@@ -207,6 +208,8 @@ def test_index_page_marks_snapshot_stats_for_live_updates(client):
     assert 'id="cam-status-badge-esp32cam_front_door"' in page
     assert 'id="cam-status-text-esp32cam_front_door"' in page
     assert 'id="cam-interval-esp32cam_front_door"' in page
+    assert "2026-03-11 21:34:56 JST" in page
+    assert "2026-03-11 12:34:56 UTC" not in page
     assert "incrementStatSnapshotCount" in page
     assert "markCameraHealthy" in page
     assert "updateCameraTiming" in page
@@ -226,6 +229,8 @@ def test_camera_detail_page_marks_snapshot_count_for_live_updates(client):
     assert 'id="snapshot-count"' in page
     assert 'id="camera-last-seen"' in page
     assert 'id="camera-live-interval"' in page
+    assert "2026-03-11 21:34:56 JST" in page
+    assert "2026-03-11 12:34:56 UTC" not in page
     assert "incrementSnapshotCount" in page
     assert "updateCameraTiming" in page
 
