@@ -31,8 +31,9 @@
 
   <!-- ── Meta strip ── -->
   <div style="display:flex;gap:24px;flex-wrap:wrap;margin-bottom:28px;font-size:13px;color:var(--text-4);">
-    <span>Last seen <span class="text-2">{{ camera.last_seen_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC</span></span>
+    <span>Last seen <span class="text-2" id="camera-last-seen">{{ camera.last_seen_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC</span></span>
     <span>Expected interval <span class="text-2 mono">{{ camera.expected_interval_seconds }}s</span></span>
+    <span>Live interval <span class="text-2 mono" id="camera-live-interval" data-last-seen="{{ camera.last_seen_at.isoformat() }}">—</span></span>
     <span>Snapshots <span class="text-2 mono" id="snapshot-count">{{ snapshots | length }}</span></span>
   </div>
 
@@ -139,6 +140,33 @@
     count.textContent = String(Number.isFinite(current) ? current + 1 : 1);
   }
 
+  function formatTimestamp(value) {
+    if (!value) return null;
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return null;
+    return d.toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+  }
+
+  function updateCameraTiming(snap) {
+    const timestamp = snap.captured_at || snap.stored_at;
+    const formatted = formatTimestamp(timestamp);
+    const lastSeen = document.getElementById('camera-last-seen');
+    if (lastSeen && formatted) lastSeen.textContent = formatted;
+
+    const interval = document.getElementById('camera-live-interval');
+    const now = new Date(snap.stored_at || snap.captured_at || Date.now());
+    if (!interval) return;
+
+    const previous = interval.dataset.lastSeen ? new Date(interval.dataset.lastSeen) : null;
+    if (previous && !Number.isNaN(previous.getTime()) && !Number.isNaN(now.getTime())) {
+      const seconds = Math.max(0, Math.round((now - previous) / 1000));
+      interval.textContent = seconds > 0 ? `~${seconds}s` : 'now';
+    } else {
+      interval.textContent = 'now';
+    }
+    if (!Number.isNaN(now.getTime())) interval.dataset.lastSeen = now.toISOString();
+  }
+
   function onEvent(ev) {
     let data;
     try { data = JSON.parse(ev.data); } catch { return; }
@@ -148,6 +176,7 @@
     const snap = data.snapshot || {};
 
     incrementSnapshotCount();
+    updateCameraTiming(snap);
 
     if (latImg && snap.url) {
       latImg.src = snap.url + '?t=' + Date.now();

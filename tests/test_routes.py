@@ -203,7 +203,13 @@ def test_index_page_marks_snapshot_stats_for_live_updates(client):
 
     assert response.status_code == 200
     assert 'id="stat-snapshots"' in page
+    assert 'id="stat-online"' in page
+    assert 'id="cam-status-badge-esp32cam_front_door"' in page
+    assert 'id="cam-status-text-esp32cam_front_door"' in page
+    assert 'id="cam-interval-esp32cam_front_door"' in page
     assert "incrementStatSnapshotCount" in page
+    assert "markCameraHealthy" in page
+    assert "updateCameraTiming" in page
 
 
 def test_camera_detail_page_marks_snapshot_count_for_live_updates(client):
@@ -218,7 +224,10 @@ def test_camera_detail_page_marks_snapshot_count_for_live_updates(client):
 
     assert response.status_code == 200
     assert 'id="snapshot-count"' in page
+    assert 'id="camera-last-seen"' in page
+    assert 'id="camera-live-interval"' in page
     assert "incrementSnapshotCount" in page
+    assert "updateCameraTiming" in page
 
 
 def test_camera_detail_page_filters_snapshots_by_camera(client):
