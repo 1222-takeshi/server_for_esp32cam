@@ -55,6 +55,18 @@ def test_handle_binary_snapshot_upload_rejects_non_jpeg_payload(app):
     }
 
 
+def test_upload_metrics_track_invalid_binary_payload_errors(app):
+    websocket = FakeUploadWebSocket([b"not-a-jpeg", None])
+
+    with app.app_context():
+        _handle_binary_upload_connection(websocket, camera_id="esp32cam-01")
+        metrics = app.extensions["upload_metrics"].snapshot("esp32cam-01")
+
+    assert metrics["frames_received"] == 0
+    assert metrics["errors"] == 1
+    assert metrics["last_error"] == "Invalid JPEG payload"
+
+
 def test_upload_metrics_track_frames_bytes_errors_and_disconnects(app):
     websocket = FakeUploadWebSocket([JPEG_BYTES, "text-control-message", None])
 

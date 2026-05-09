@@ -275,7 +275,10 @@ class LocalFilesystemStorage:
             max_age_seconds = policy.max_age_seconds
             for image in sorted(candidates, key=lambda item: item.created_at):
                 if (reference - image.created_at).total_seconds() > max_age_seconds:
-                    deleted_bytes += self._delete_image(image)
+                    try:
+                        deleted_bytes += self._delete_image(image)
+                    except FileNotFoundError:
+                        continue
                     deleted.append(image.relative_path)
 
         if policy.max_bytes is not None and policy.max_bytes > 0:
@@ -286,7 +289,11 @@ class LocalFilesystemStorage:
                     break
                 if image.relative_path in preserved:
                     continue
-                deleted_bytes += self._delete_image(image)
+                try:
+                    deleted_bytes += self._delete_image(image)
+                except FileNotFoundError:
+                    total_bytes -= image.size
+                    continue
                 deleted.append(image.relative_path)
                 total_bytes -= image.size
 

@@ -85,7 +85,10 @@ class UploadMetricsRegistry:
 
     def snapshot(self, camera_id: str) -> dict[str, object]:
         with self._lock:
-            return self._get(camera_id).to_dict()
+            metrics = self._metrics.get(camera_id)
+            if metrics is None:
+                return CameraUploadMetrics(camera_id=camera_id).to_dict()
+            return metrics.to_dict()
 
     def snapshot_all(self) -> list[dict[str, object]]:
         with self._lock:

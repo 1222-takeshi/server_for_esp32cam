@@ -204,6 +204,24 @@ def test_apply_retention_deletes_images_older_than_max_age(tmp_path):
     assert keep_path.exists()
 
 
+def test_apply_retention_ignores_stale_candidates_that_were_already_deleted(tmp_path, monkeypatch):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+    captured_at = datetime(2026, 5, 9, 12, 0, tzinfo=timezone.utc)
+    stale = storage.save_image(b"\xff\xd8old", "image/jpeg", device_id="cam-a", captured_at=captured_at)
+    stale_path = storage.upload_dir / stale.relative_path
+    storage._metadata_path(stale_path).unlink()
+    stale_path.unlink()
+    monkeypatch.setattr(storage, "list_images", lambda: [stale])
+
+    result = storage.apply_retention(
+        StorageRetentionPolicy(max_age_seconds=60),
+        now=datetime.fromtimestamp(1_800_000_120, tz=timezone.utc),
+    )
+
+    assert result.deleted_relative_paths == []
+    assert result.deleted_bytes == 0
+
+
 def test_apply_retention_deletes_oldest_images_until_under_max_bytes(tmp_path):
     storage = LocalFilesystemStorage(tmp_path / "uploads")
     captured_at = datetime(2026, 5, 9, 12, 0, tzinfo=timezone.utc)

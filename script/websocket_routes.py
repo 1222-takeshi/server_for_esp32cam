@@ -71,6 +71,8 @@ def _handle_binary_upload_connection(websocket: WebSocketLike, *, camera_id: str
                 response = {"type": "snapshot.error", "message": error_message}
             else:
                 response = handle_binary_snapshot_upload(message, camera_id=camera_id)
+                if response.get("type") == "snapshot.error":
+                    metrics.record_error(camera_id, str(response.get("message", "Upload failed")))
             websocket.send(json.dumps(response))
     finally:
         metrics.record_disconnect(camera_id)
