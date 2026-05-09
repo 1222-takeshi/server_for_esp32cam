@@ -441,23 +441,33 @@ HTTP upload smoke testが通ったら、次は連続アップロード、OTA対�
 ## ArduinoOTA / PlatformIO OTA upload
 
 OTA updates are intended for the next step after the USB-based HTTP upload smoke
-test has succeeded. Flash the firmware over USB first so the ESP32-CAM has a
+test has succeeded. Flash the OTA-capable firmware over USB first so the ESP32-CAM has a
 known-good recovery path and an OTA-capable partition table.
 
-The OTA environment keeps the existing `POST /upload` HTTP upload smoke test and
-also enables ArduinoOTA:
+The USB bootstrap environment keeps the existing `POST /upload` HTTP upload smoke
+test and also enables ArduinoOTA:
 
 ```ini
+[env:esp32cam_http_upload_ota_usb]
+upload_protocol = esptool
+```
+
+The network OTA environment reuses the same firmware build flags, but uploads with
+`espota`:
+
+```ini
+[env:esp32cam_http_upload_ota]
+extends = env:esp32cam_http_upload_ota_usb
 upload_protocol = espota
 ```
 
 1. Copy `include/esp32cam_config.h.example` to `include/esp32cam_config.h` and
    set Wi-Fi, `UPLOAD_URL`, and local OTA settings. Do not commit the local file.
-2. Build and upload once over USB:
+2. Build and upload the OTA-capable firmware once over USB:
 
    ```bash
-   pio run -e esp32cam_http_upload_ota -t upload
-   pio device monitor -e esp32cam_http_upload_ota
+   pio run -e esp32cam_http_upload_ota_usb -t upload
+   pio device monitor -e esp32cam_http_upload_ota_usb
    ```
 
 3. Confirm the serial log shows `OTA ready` and that the HTTP upload smoke test
