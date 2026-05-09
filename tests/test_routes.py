@@ -280,6 +280,24 @@ def test_api_cameras_returns_camera_summaries(client):
     assert body["cameras"][0]["status"] == "healthy"
 
 
+def test_api_camera_upload_metrics_returns_diagnostics(app, client):
+    app.extensions["upload_metrics"].record_connection("esp32cam-front-door")
+    app.extensions["upload_metrics"].record_frame("esp32cam-front-door", 12345)
+    app.extensions["upload_metrics"].record_disconnect("esp32cam-front-door")
+
+    response = client.get("/api/cameras/esp32cam-front-door/upload-metrics")
+    body = response.get_json()
+
+    assert response.status_code == 200
+    assert body["camera_id"] == "esp32cam-front-door"
+    assert body["connections"] == 1
+    assert body["active_connections"] == 0
+    assert body["disconnects"] == 1
+    assert body["frames_received"] == 1
+    assert body["bytes_received"] == 12345
+    assert body["last_frame_at"] is not None
+
+
 def test_api_camera_snapshots_returns_camera_scoped_snapshots(client):
     client.post(
         "/upload",

@@ -127,3 +127,32 @@ def test_metadata_store_sync_preserves_camera_first_and_last_seen_at(tmp_path):
     assert camera is not None
     assert camera.first_seen_at == older
     assert camera.last_seen_at == newer
+
+
+def test_metadata_store_deletes_snapshots_by_relative_path(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    delete_me = store.record_snapshot(
+        _stored_image(
+            name="delete.jpg",
+            relative_path="cam-a/images/delete.jpg",
+            camera_id="cam-a",
+            captured_at=stored_at,
+            stored_at=stored_at,
+        )
+    )
+    keep_me = store.record_snapshot(
+        _stored_image(
+            name="keep.jpg",
+            relative_path="cam-a/images/keep.jpg",
+            camera_id="cam-a",
+            captured_at=stored_at,
+            stored_at=stored_at,
+        )
+    )
+
+    deleted = store.delete_snapshots_by_relative_paths([delete_me.relative_path])
+
+    snapshots = store.list_camera_snapshots("cam-a")
+    assert deleted == 1
+    assert [snapshot.id for snapshot in snapshots] == [keep_me.id]

@@ -7,6 +7,7 @@ from flask import Flask, current_app
 from flask_sock import Sock
 
 from script.events import SnapshotEventPublisher
+from script.retention import apply_upload_retention
 from script.routes import _looks_like_jpeg, _serialize_snapshot
 from script.websocket_hub import WebSocketHub, WebSocketLike
 
@@ -39,6 +40,8 @@ def handle_binary_snapshot_upload(
     snapshot = current_app.extensions["metadata_store"].record_snapshot(stored)
     current_app.extensions["inference_service"].enqueue_snapshot(snapshot.id)
     current_app.extensions["snapshot_event_publisher"].publish_snapshot_created(snapshot)
+    current_app.extensions["upload_metrics"].record_frame(camera_id, len(data))
+    apply_upload_retention(stored)
     return {
         "type": "snapshot.stored",
         "camera_id": camera_id,
@@ -54,16 +57,23 @@ def _handle_binary_upload_connection(websocket: WebSocketLike, *, camera_id: str
     if receive is None:
         return
 
-    while True:
-        message = receive()
-        if message is None:
-            return
+    metrics = current_app.extensions["upload_metrics"]
+    metrics.record_connection(camera_id)
+    try:
+        while True:
+            message = receive()
+            if message is None:
+                return
 
-        if isinstance(message, str):
-            response = {"type": "snapshot.error", "message": "Expected binary JPEG payload"}
-        else:
-            response = handle_binary_snapshot_upload(message, camera_id=camera_id)
-        websocket.send(json.dumps(response))
+            if isinstance(message, str):
+                error_message = "Expected binary JPEG payload"
+                metrics.record_error(camera_id, error_message)
+                response = {"type": "snapshot.error", "message": error_message}
+            else:
+                response = handle_binary_snapshot_upload(message, camera_id=camera_id)
+            websocket.send(json.dumps(response))
+    finally:
+        metrics.record_disconnect(camera_id)
 
 
 def register_websocket_routes(app: Flask, publisher: SnapshotEventPublisher) -> WebSocketHub:

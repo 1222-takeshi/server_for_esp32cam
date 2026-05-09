@@ -228,6 +228,17 @@ class SQLiteMetadataStore:
         for image in images:
             self.record_snapshot(image)
 
+    def delete_snapshots_by_relative_paths(self, relative_paths: list[str]) -> int:
+        if not relative_paths:
+            return 0
+        placeholders = ",".join("?" for _ in relative_paths)
+        with self._lock, self._connection:
+            cursor = self._connection.execute(
+                f"DELETE FROM snapshots WHERE relative_path IN ({placeholders})",
+                tuple(relative_paths),
+            )
+        return int(cursor.rowcount)
+
     def total_snapshot_count(self) -> int:
         with self._lock:
             row = self._connection.execute("SELECT COUNT(*) AS count FROM snapshots").fetchone()
