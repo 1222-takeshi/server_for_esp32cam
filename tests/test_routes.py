@@ -208,11 +208,14 @@ def test_index_page_marks_snapshot_stats_for_live_updates(client):
     assert 'id="cam-status-badge-esp32cam_front_door"' in page
     assert 'id="cam-status-text-esp32cam_front_door"' in page
     assert 'id="cam-interval-esp32cam_front_door"' in page
+    assert 'id="cam-frame-size-esp32cam_front_door"' in page
     assert "2026-03-11 21:34:56 JST" in page
     assert "2026-03-11 12:34:56 UTC" not in page
     assert "incrementStatSnapshotCount" in page
     assert "markCameraHealthy" in page
     assert "updateCameraTiming" in page
+    assert "updateFrameSize" in page
+    assert "scheduleHealthChecks" in page
 
 
 def test_camera_detail_page_marks_snapshot_count_for_live_updates(client):
@@ -229,10 +232,13 @@ def test_camera_detail_page_marks_snapshot_count_for_live_updates(client):
     assert 'id="snapshot-count"' in page
     assert 'id="camera-last-seen"' in page
     assert 'id="camera-live-interval"' in page
+    assert 'id="camera-frame-size"' in page
     assert "2026-03-11 21:34:56 JST" in page
     assert "2026-03-11 12:34:56 UTC" not in page
     assert "incrementSnapshotCount" in page
     assert "updateCameraTiming" in page
+    assert "updateFrameSize" in page
+    assert "scheduleHealthChecks" in page
 
 
 def test_camera_detail_page_filters_snapshots_by_camera(client):
@@ -412,3 +418,4 @@ def test_upload_publishes_snapshot_created_event(app, client):
     assert event["camera_id"] == "esp32cam-front-door"
     assert event["snapshot"]["filename"] == body["filename"]
     assert event["snapshot"]["url"] == f"/files/{body['filename']}"
+    assert event["snapshot"]["size_bytes"] == body["size"]
