@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from flask import Blueprint, current_app, jsonify, render_template, request, send_file
 
 from script.metadata import CameraSummary, SnapshotRecord
+from script.retention import apply_upload_retention
 from script.storage import Storage
 
 server = Blueprint("server", __name__)
@@ -132,6 +133,7 @@ def upload_file():
         snapshot = _metadata_store().record_snapshot(stored)
         _inference_service().enqueue_snapshot(snapshot.id)
         _snapshot_event_publisher().publish_snapshot_created(snapshot)
+        apply_upload_retention(stored)
         current_app.logger.info("File uploaded successfully: %s", stored.name)
         return (
             jsonify(
@@ -201,6 +203,11 @@ def camera_detail(camera_id: str):
 @server.route("/api/cameras")
 def api_cameras():
     return jsonify({"cameras": [_serialize_camera_summary(item) for item in _metadata_store().list_camera_summaries()]})
+
+
+@server.route("/api/cameras/<camera_id>/upload-metrics")
+def api_camera_upload_metrics(camera_id: str):
+    return jsonify(current_app.extensions["upload_metrics"].snapshot(camera_id))
 
 
 @server.route("/api/cameras/<camera_id>/snapshots")
