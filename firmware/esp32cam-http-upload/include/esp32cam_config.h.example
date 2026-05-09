@@ -37,3 +37,17 @@
 #define OTA_PORT 3232
 #define OTA_PASSWORD ""
 #define OTA_WAIT_WINDOW_MS 15000
+
+// WebSocket upload settings. This sends JPEG binary frames to the Flask server
+// endpoint `/ws/cameras/<DEVICE_ID>/upload` and the server stores each frame as
+// a normal snapshot. Use the server machine's LAN IP, not localhost/127.0.0.1.
+#define WS_UPLOAD_HOST "YOUR_MAC_LAN_IP"
+#define WS_UPLOAD_PORT 8080
+#define WS_UPLOAD_PATH "/ws/cameras/" DEVICE_ID "/upload"
+
+// Continuous capture settings for WebSocket upload mode.
+// CAPTURE_INTERVAL_MS controls the time between frame attempts.
+// CAPTURE_FRAME_LIMIT = 0 means unlimited; set a positive value to capture a
+// video-like burst of exactly that many frames, then keep OTA/alive loop running.
+#define CAPTURE_INTERVAL_MS 5000
+#define CAPTURE_FRAME_LIMIT 0

@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <cstring>
 
-#if defined(WIFI_SMOKE_TEST) || defined(HTTP_UPLOAD_SMOKE_TEST) || defined(ENABLE_ARDUINO_OTA)
+#if defined(WIFI_SMOKE_TEST) || defined(HTTP_UPLOAD_SMOKE_TEST) || defined(WEBSOCKET_UPLOAD_SMOKE_TEST) || defined(ENABLE_ARDUINO_OTA)
 #include <WiFi.h>
 #endif
 
@@ -14,7 +14,11 @@
 #include <time.h>
 #endif
 
-#if defined(CAMERA_INIT_SMOKE_TEST) || defined(JPEG_CAPTURE_SMOKE_TEST) || defined(HTTP_UPLOAD_SMOKE_TEST)
+#ifdef WEBSOCKET_UPLOAD_SMOKE_TEST
+#include <WebSocketsClient.h>
+#endif
+
+#if defined(CAMERA_INIT_SMOKE_TEST) || defined(JPEG_CAPTURE_SMOKE_TEST) || defined(HTTP_UPLOAD_SMOKE_TEST) || defined(WEBSOCKET_UPLOAD_SMOKE_TEST)
 #include "esp_camera.h"
 #endif
 
@@ -35,6 +39,11 @@
 #define OTA_PORT 3232
 #define OTA_PASSWORD ""
 #define OTA_WAIT_WINDOW_MS 15000
+#define WS_UPLOAD_HOST ""
+#define WS_UPLOAD_PORT 8080
+#define WS_UPLOAD_PATH "/ws/cameras/" DEVICE_ID "/upload"
+#define CAPTURE_INTERVAL_MS 5000
+#define CAPTURE_FRAME_LIMIT 0
 #endif
 
 #ifndef UPLOAD_URL
@@ -64,6 +73,21 @@
 #ifndef OTA_WAIT_WINDOW_MS
 #define OTA_WAIT_WINDOW_MS 15000
 #endif
+#ifndef WS_UPLOAD_HOST
+#define WS_UPLOAD_HOST ""
+#endif
+#ifndef WS_UPLOAD_PORT
+#define WS_UPLOAD_PORT 8080
+#endif
+#ifndef WS_UPLOAD_PATH
+#define WS_UPLOAD_PATH "/ws/cameras/" DEVICE_ID "/upload"
+#endif
+#ifndef CAPTURE_INTERVAL_MS
+#define CAPTURE_INTERVAL_MS 5000
+#endif
+#ifndef CAPTURE_FRAME_LIMIT
+#define CAPTURE_FRAME_LIMIT 0
+#endif
 
 namespace {
 constexpr uint32_t kBaudRate = 115200;
@@ -71,7 +95,7 @@ constexpr uint32_t kLogIntervalMs = 5000;
 uint32_t lastLogMs = 0;
 uint32_t bootCount = 0;
 
-#if defined(CAMERA_INIT_SMOKE_TEST) || defined(JPEG_CAPTURE_SMOKE_TEST) || defined(HTTP_UPLOAD_SMOKE_TEST)
+#if defined(CAMERA_INIT_SMOKE_TEST) || defined(JPEG_CAPTURE_SMOKE_TEST) || defined(HTTP_UPLOAD_SMOKE_TEST) || defined(WEBSOCKET_UPLOAD_SMOKE_TEST)
 bool cameraInitSucceeded = false;
 
 // AI Thinker ESP32-CAM pin map for OV2640.
@@ -93,14 +117,25 @@ constexpr int kCameraPinHref = 23;
 constexpr int kCameraPinPclk = 22;
 #endif
 
-#if defined(JPEG_CAPTURE_SMOKE_TEST) || defined(HTTP_UPLOAD_SMOKE_TEST)
+#if defined(JPEG_CAPTURE_SMOKE_TEST) || defined(HTTP_UPLOAD_SMOKE_TEST) || defined(WEBSOCKET_UPLOAD_SMOKE_TEST)
 bool jpegCaptureSucceeded = false;
 #endif
 
-#ifdef HTTP_UPLOAD_SMOKE_TEST
+#if defined(HTTP_UPLOAD_SMOKE_TEST) || defined(WEBSOCKET_UPLOAD_SMOKE_TEST)
 bool wifiConnected = false;
+#endif
+
+#ifdef HTTP_UPLOAD_SMOKE_TEST
 bool httpUploadSucceeded = false;
 int lastHttpStatusCode = 0;
+#endif
+
+#ifdef WEBSOCKET_UPLOAD_SMOKE_TEST
+WebSocketsClient webSocket;
+bool websocketConnected = false;
+bool websocketUploadSucceeded = false;
+uint32_t lastCaptureMs = 0;
+uint32_t websocketFramesSent = 0;
 #endif
 
 void printHardwareInfo() {
@@ -127,7 +162,7 @@ void printSerialSmokeBootInfo() {
   Serial.println("========================================");
 }
 
-#if defined(WIFI_SMOKE_TEST) || defined(HTTP_UPLOAD_SMOKE_TEST)
+#if defined(WIFI_SMOKE_TEST) || defined(HTTP_UPLOAD_SMOKE_TEST) || defined(WEBSOCKET_UPLOAD_SMOKE_TEST)
 void printMacAddress() {
   uint8_t mac[6] = {0};
   WiFi.macAddress(mac);
@@ -199,7 +234,7 @@ void connectWiFi() {
 }
 #endif
 
-#if defined(CAMERA_INIT_SMOKE_TEST) || defined(JPEG_CAPTURE_SMOKE_TEST) || defined(HTTP_UPLOAD_SMOKE_TEST)
+#if defined(CAMERA_INIT_SMOKE_TEST) || defined(JPEG_CAPTURE_SMOKE_TEST) || defined(HTTP_UPLOAD_SMOKE_TEST) || defined(WEBSOCKET_UPLOAD_SMOKE_TEST)
 camera_config_t buildAiThinkerCameraConfig() {
   camera_config_t config = {};
   config.ledc_channel = LEDC_CHANNEL_0;
@@ -287,7 +322,7 @@ void initCameraSmokeTest() {
 }
 #endif
 
-#if defined(JPEG_CAPTURE_SMOKE_TEST) || defined(HTTP_UPLOAD_SMOKE_TEST)
+#if defined(JPEG_CAPTURE_SMOKE_TEST) || defined(HTTP_UPLOAD_SMOKE_TEST) || defined(WEBSOCKET_UPLOAD_SMOKE_TEST)
 const char *pixelFormatName(const pixformat_t format) {
   switch (format) {
     case PIXFORMAT_JPEG:
@@ -351,22 +386,22 @@ void captureJpegSmokeTest() {
   Serial.println("========================================");
 }
 
-#ifdef HTTP_UPLOAD_SMOKE_TEST
-bool connectWiFiForHttpUpload() {
+#if defined(HTTP_UPLOAD_SMOKE_TEST) || defined(WEBSOCKET_UPLOAD_SMOKE_TEST)
+bool connectWiFiForUpload(const char *testName, const bool requireHttpUploadUrl) {
   printMacAddress();
 
 #if ESP32CAM_HAS_LOCAL_CONFIG
   Serial.println("Local config: include/esp32cam_config.h found");
 #else
   Serial.println("Local config: include/esp32cam_config.h not found");
-  Serial.println("Copy include/esp32cam_config.h.example to include/esp32cam_config.h and set WIFI_SSID/WIFI_PASSWORD/UPLOAD_URL.");
+  Serial.println("Copy include/esp32cam_config.h.example to include/esp32cam_config.h and set WIFI_SSID/WIFI_PASSWORD/upload settings.");
 #endif
 
   if (strlen(WIFI_SSID) == 0 || strcmp(WIFI_SSID, "YOUR_WIFI_SSID") == 0) {
-    Serial.println("HTTP upload smoke test skipped: WIFI_SSID is not configured.");
+    Serial.printf("%s skipped: WIFI_SSID is not configured.\n", testName);
     return false;
   }
-  if (strlen(UPLOAD_URL) == 0 || strcmp(UPLOAD_URL, "http://YOUR_MAC_LAN_IP:8080/upload") == 0) {
+  if (requireHttpUploadUrl && (strlen(UPLOAD_URL) == 0 || strcmp(UPLOAD_URL, "http://YOUR_MAC_LAN_IP:8080/upload") == 0)) {
     Serial.println("HTTP upload smoke test skipped: UPLOAD_URL is not configured.");
     return false;
   }
@@ -407,7 +442,9 @@ bool connectWiFiForHttpUpload() {
   Serial.printf("RSSI: %d dBm\n", WiFi.RSSI());
   return true;
 }
+#endif
 
+#ifdef HTTP_UPLOAD_SMOKE_TEST
 String capturedAtIso8601Utc() {
   configTime(0, 0, NTP_SERVER);
   const uint32_t startedAt = millis();
@@ -445,7 +482,7 @@ void runHttpUploadSmokeTest() {
   Serial.printf("Upload URL: %s\n", strlen(UPLOAD_URL) > 0 ? UPLOAD_URL : "not configured");
   Serial.printf("Device ID: %s\n", DEVICE_ID);
 
-  wifiConnected = connectWiFiForHttpUpload();
+  wifiConnected = connectWiFiForUpload("HTTP upload smoke test", true);
   if (!wifiConnected) {
     httpUploadSucceeded = false;
     Serial.println("HTTP upload skipped because Wi-Fi/configuration is not ready.");
@@ -526,6 +563,103 @@ void runHttpUploadSmokeTest() {
   Serial.println("========================================");
 }
 #endif
+
+#ifdef WEBSOCKET_UPLOAD_SMOKE_TEST
+void webSocketEvent(const WStype_t type, uint8_t *payload, const size_t length) {
+  switch (type) {
+    case WStype_CONNECTED:
+      websocketConnected = true;
+      Serial.printf("WebSocket connected: %s\n", payload != nullptr ? reinterpret_cast<const char *>(payload) : "");
+      break;
+    case WStype_DISCONNECTED:
+      websocketConnected = false;
+      Serial.println("WebSocket disconnected");
+      break;
+    case WStype_TEXT:
+      Serial.printf("WebSocket response: %.*s\n", static_cast<int>(length), payload);
+      break;
+    case WStype_ERROR:
+      Serial.printf("WebSocket error: %.*s\n", static_cast<int>(length), payload);
+      break;
+    default:
+      break;
+  }
+}
+
+void setupWebSocketUpload() {
+  Serial.println();
+  Serial.println("========================================");
+  Serial.println("ESP32-CAM PlatformIO WebSocket continuous upload test");
+  printHardwareInfo();
+  Serial.printf("WebSocket destination: ws://%s:%u%s\n",
+                strlen(WS_UPLOAD_HOST) > 0 ? WS_UPLOAD_HOST : "not configured",
+                static_cast<unsigned int>(WS_UPLOAD_PORT),
+                WS_UPLOAD_PATH);
+  Serial.printf("Device ID: %s\n", DEVICE_ID);
+  Serial.printf("Capture interval: %lu ms\n", static_cast<unsigned long>(CAPTURE_INTERVAL_MS));
+  Serial.printf("Frame limit: %lu\n", static_cast<unsigned long>(CAPTURE_FRAME_LIMIT));
+
+  wifiConnected = connectWiFiForUpload("WebSocket upload test", false);
+  if (!wifiConnected) {
+    Serial.println("WebSocket upload skipped because Wi-Fi/configuration is not ready.");
+    Serial.println("========================================");
+    return;
+  }
+  if (strlen(WS_UPLOAD_HOST) == 0 || strcmp(WS_UPLOAD_HOST, "YOUR_MAC_LAN_IP") == 0) {
+    Serial.println("WebSocket upload skipped: WS_UPLOAD_HOST is not configured.");
+    Serial.println("========================================");
+    return;
+  }
+
+  const bool initOk = initCamera("ESP32-CAM PlatformIO WebSocket upload camera step",
+                                 psramFound() ? "QVGA" : "QQVGA",
+                                 "Starting WebSocket client for continuous capture...");
+  if (!initOk) {
+    return;
+  }
+
+  webSocket.begin(WS_UPLOAD_HOST, WS_UPLOAD_PORT, WS_UPLOAD_PATH);
+  webSocket.onEvent(webSocketEvent);
+  webSocket.setReconnectInterval(5000);
+  Serial.println("WebSocket client started");
+  Serial.println("========================================");
+}
+
+void captureAndUploadWebSocketFrame() {
+  if (!wifiConnected || !websocketConnected) {
+    return;
+  }
+  if (CAPTURE_FRAME_LIMIT > 0 && websocketFramesSent >= CAPTURE_FRAME_LIMIT) {
+    return;
+  }
+
+  camera_fb_t *fb = esp_camera_fb_get();
+  if (fb == nullptr) {
+    jpegCaptureSucceeded = false;
+    websocketUploadSucceeded = false;
+    Serial.println("WebSocket frame capture failed: esp_camera_fb_get returned null");
+    return;
+  }
+
+  jpegCaptureSucceeded = (fb->format == PIXFORMAT_JPEG && fb->len > 0);
+  if (!jpegCaptureSucceeded) {
+    websocketUploadSucceeded = false;
+    Serial.println("WebSocket upload skipped: captured frame is not a non-empty JPEG");
+    esp_camera_fb_return(fb);
+    return;
+  }
+
+  websocketUploadSucceeded = webSocket.sendBIN(fb->buf, fb->len);
+  if (websocketUploadSucceeded) {
+    ++websocketFramesSent;
+  }
+  Serial.printf("WebSocket frame upload: %s size=%u frames_sent=%lu\n",
+                websocketUploadSucceeded ? "queued" : "failed",
+                fb->len,
+                static_cast<unsigned long>(websocketFramesSent));
+  esp_camera_fb_return(fb);
+}
+#endif
 #endif
 
 #ifdef ENABLE_ARDUINO_OTA
@@ -571,6 +705,11 @@ void setup() {
 #ifdef ENABLE_ARDUINO_OTA
   setupArduinoOta();
 #endif
+#elif defined(WEBSOCKET_UPLOAD_SMOKE_TEST)
+  setupWebSocketUpload();
+#ifdef ENABLE_ARDUINO_OTA
+  setupArduinoOta();
+#endif
 #elif defined(JPEG_CAPTURE_SMOKE_TEST)
   captureJpegSmokeTest();
 #elif defined(CAMERA_INIT_SMOKE_TEST)
@@ -587,6 +726,13 @@ void loop() {
   ArduinoOTA.handle();
 #endif
   const uint32_t now = millis();
+#ifdef WEBSOCKET_UPLOAD_SMOKE_TEST
+  webSocket.loop();
+  if (now - lastCaptureMs >= CAPTURE_INTERVAL_MS) {
+    lastCaptureMs = now;
+    captureAndUploadWebSocketFrame();
+  }
+#endif
   if (now - lastLogMs >= kLogIntervalMs) {
     lastLogMs = now;
 #if defined(HTTP_UPLOAD_SMOKE_TEST)
@@ -597,6 +743,17 @@ void loop() {
                   jpegCaptureSucceeded ? "ok" : "failed",
                   httpUploadSucceeded ? "ok" : "failed",
                   lastHttpStatusCode,
+                  ESP.getFreeHeap(),
+                  psramFound() ? ESP.getFreePsram() : 0);
+#elif defined(WEBSOCKET_UPLOAD_SMOKE_TEST)
+    Serial.printf("alive: millis=%lu wifi=%s ws=%s camera_init=%s jpeg_capture=%s ws_upload=%s frames_sent=%lu free_heap=%u free_psram=%u\n",
+                  static_cast<unsigned long>(now),
+                  wifiConnected ? "ok" : "failed",
+                  websocketConnected ? "connected" : "disconnected",
+                  cameraInitSucceeded ? "ok" : "failed",
+                  jpegCaptureSucceeded ? "ok" : "failed",
+                  websocketUploadSucceeded ? "ok" : "failed",
+                  static_cast<unsigned long>(websocketFramesSent),
                   ESP.getFreeHeap(),
                   psramFound() ? ESP.getFreePsram() : 0);
 #elif defined(JPEG_CAPTURE_SMOKE_TEST)

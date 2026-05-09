@@ -9,8 +9,10 @@ AI Thinker ESP32-CAM（OV2640想定）をPlatformIOで扱うための段階的�
 3. `esp32cam_camera_init_smoke`: カメラ初期化・OV2640センサーID確認
 4. `esp32cam_jpeg_capture_smoke`: JPEG framebufferを1枚撮影し、形式・サイズ・解像度を確認
 5. `esp32cam_http_upload_smoke`: JPEGを1枚撮影し、Mac上のFlaskサーバー `/upload` へHTTP POST送信
+6. `esp32cam_websocket_upload`: WebSocketでJPEG binary frameを連続送信
+7. `esp32cam_*_ota*`: ArduinoOTA対応ファームウェアのUSB初回書き込み・OTA更新
 
-OTAや常時ストリーミング/WebSocket化はまだこのステップでは扱いません。
+HTTP POSTを既存の安定経路として残しつつ、WebSocket連続アップロードを追加しています。
 
 ## 前提
 
@@ -523,3 +525,77 @@ upload_protocol = espota
 If OTA upload fails, reconnect USB serial, put the module into download mode, and
 flash the same environment again. After an OTA update, re-run the HTTP upload
 smoke test and verify the server still receives `POST /upload`.
+
+## WebSocket continuous upload
+
+`esp32cam_websocket_upload` sends captured JPEG frames as binary WebSocket
+messages to the Flask server endpoint:
+
+```text
+/ws/cameras/<DEVICE_ID>/upload
+```
+
+The server stores each received binary JPEG frame through the same snapshot
+storage, metadata, inference queue, and browser WebSocket notification path used
+by HTTP `POST /upload`. This keeps the browser-side real-time update behavior
+unchanged while allowing the ESP32-CAM to stream frames over a persistent socket.
+
+1. Start the Flask server on the LAN machine.
+2. Copy `include/esp32cam_config.h.example` to `include/esp32cam_config.h` and
+   set at least:
+
+   ```cpp
+   #define WIFI_SSID "..."
+   #define WIFI_PASSWORD "..."
+   #define DEVICE_ID "esp32cam-01"
+   #define WS_UPLOAD_HOST "192.168.1.23"  // Flask server LAN IP
+   #define WS_UPLOAD_PORT 8080
+   #define WS_UPLOAD_PATH "/ws/cameras/" DEVICE_ID "/upload"
+   ```
+
+3. Configure continuous capture:
+
+   ```cpp
+   #define CAPTURE_INTERVAL_MS 5000  // capture one frame every 5 seconds
+   #define CAPTURE_FRAME_LIMIT 0     // 0 = unlimited
+   ```
+
+   For a video-like burst, set `CAPTURE_FRAME_LIMIT` to a positive number. For
+   example, `CAPTURE_INTERVAL_MS=200` and `CAPTURE_FRAME_LIMIT=50` captures up
+   to 50 frames at roughly 5 fps, depending on Wi-Fi/camera throughput.
+
+4. Build and upload:
+
+   ```bash
+   pio run -e esp32cam_websocket_upload -t upload
+   pio device monitor -e esp32cam_websocket_upload
+   ```
+
+   OTA-capable WebSocket firmware can also be installed first over USB and then
+   updated over Wi-Fi:
+
+   ```bash
+   pio run -e esp32cam_websocket_upload_ota_usb -t upload
+   source .env.local
+   pio run -e esp32cam_websocket_upload_ota -t upload
+   ```
+
+The loop calls both `webSocket.loop()` and `ArduinoOTA.handle()` frequently, so
+OTA remains responsive while continuous capture is running. If the frame limit is
+reached, capture stops but the main loop keeps running for OTA/alive logging.
+
+### Roadmap: recognition, tracking, servo control
+
+The current implementation intentionally stops at reliable frame ingestion:
+
+- ESP32-CAM captures frames and sends JPEG binary frames over WebSocket.
+- The server stores each frame and enqueues it for the existing inference path.
+- Browser clients continue receiving snapshot notifications over WebSocket.
+
+Next layers can be added on top of this path without changing the ingestion
+contract:
+
+1. run image recognition on stored frame sequences server-side,
+2. derive target positions from image-based tracking,
+3. expose a command channel back to the ESP32-CAM,
+4. drive pan/tilt servos from tracking results.
