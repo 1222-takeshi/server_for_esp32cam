@@ -760,3 +760,36 @@ def test_delete_camera_removes_associated_snapshots(client):
 
     snapshots_response = client.get("/api/cameras/cam-delete-snap/snapshots")
     assert snapshots_response.status_code == 404
+
+
+def test_delete_camera_with_delete_files_removes_storage(client, app):
+    client.post(
+        "/upload",
+        data=b"\xff\xd8jpeg",
+        headers={
+            "Content-Type": "image/jpeg",
+            "X-Device-Id": "cam-delete-files",
+            "X-Captured-At": "2026-01-01T12:00:00Z",
+        },
+    )
+    upload_dir = app.extensions["storage"].upload_dir
+    camera_dir = upload_dir / "cam-delete-files"
+    assert camera_dir.exists()
+
+    response = client.delete("/api/cameras/cam-delete-files?delete_files=true")
+
+    assert response.status_code == 200
+    assert not camera_dir.exists()
+
+
+def test_delete_camera_removes_associated_device_logs(client):
+    client.post(
+        "/api/log_error",
+        json={"device_id": "cam-delete-logs", "message": "test log"},
+        content_type="application/json",
+    )
+
+    client.delete("/api/cameras/cam-delete-logs")
+
+    logs_response = client.get("/api/cameras/cam-delete-logs/logs")
+    assert logs_response.status_code == 404
