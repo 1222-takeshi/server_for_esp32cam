@@ -124,6 +124,18 @@ device_logs (
     logged_at TEXT NOT NULL,
     FOREIGN KEY(camera_id) REFERENCES cameras(camera_id) ON DELETE CASCADE
 )
+
+detections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot_id INTEGER NOT NULL,
+    label TEXT NOT NULL,
+    score REAL NOT NULL,
+    x1 REAL NOT NULL,
+    y1 REAL NOT NULL,
+    x2 REAL NOT NULL,
+    y2 REAL NOT NULL,
+    FOREIGN KEY(snapshot_id) REFERENCES snapshots(id) ON DELETE CASCADE
+)
 ```
 
 ### カメラステータス判定ロジック
