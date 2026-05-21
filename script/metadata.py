@@ -292,16 +292,56 @@ class SQLiteMetadataStore:
                 "SELECT * FROM cameras ORDER BY last_seen_at DESC, camera_id ASC"
             ).fetchall()
 
+        if not camera_rows:
+            return []
+
+        camera_ids = [row["camera_id"] for row in camera_rows]
+        placeholders = ",".join("?" for _ in camera_ids)
+
+        with self._lock:
+            snapshot_rows = self._connection.execute(
+                f"""
+                SELECT *
+                FROM (
+                    SELECT *, ROW_NUMBER() OVER (PARTITION BY camera_id ORDER BY stored_at DESC) AS rn
+                    FROM snapshots
+                    WHERE camera_id IN ({placeholders})
+                ) ranked
+                WHERE rn = 1
+                """,
+                camera_ids,
+            ).fetchall()
+
+            detection_rows = self._connection.execute(
+                f"""
+                SELECT snapshots.camera_id, MAX(snapshots.stored_at) AS latest_detection_at
+                FROM detections
+                JOIN snapshots ON snapshots.id = detections.snapshot_id
+                WHERE snapshots.camera_id IN ({placeholders})
+                GROUP BY snapshots.camera_id
+                """,
+                camera_ids,
+            ).fetchall()
+
+        detections_by_id = self._detections_by_snapshot_id([row["id"] for row in snapshot_rows])
+        latest_snapshot_by_camera: dict[str, SnapshotRecord] = {
+            row["camera_id"]: self._snapshot_from_row(row, detections_by_id.get(row["id"], ()))
+            for row in snapshot_rows
+        }
+        latest_detection_by_camera: dict[str, datetime] = {
+            row["camera_id"]: dt
+            for row in detection_rows
+            if (dt := _parse_datetime(row["latest_detection_at"])) is not None
+        }
+
         summaries: list[CameraSummary] = []
         for row in camera_rows:
             camera = self._camera_from_row(row)
-            snapshots = self.list_camera_snapshots(camera.camera_id, limit=1)
-            latest_detection = self._latest_detection_time(camera.camera_id)
             summaries.append(
                 CameraSummary(
                     camera=camera,
-                    latest_snapshot=snapshots[0] if snapshots else None,
-                    latest_detection_at=latest_detection,
+                    latest_snapshot=latest_snapshot_by_camera.get(camera.camera_id),
+                    latest_detection_at=latest_detection_by_camera.get(camera.camera_id),
                     status=_camera_status(camera.last_seen_at, camera.expected_interval_seconds),
                 )
             )
