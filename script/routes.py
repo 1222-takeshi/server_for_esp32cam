@@ -230,7 +230,8 @@ def api_patch_camera(camera_id: str):
     if display_name is not None and (not isinstance(display_name, str) or not display_name.strip()):
         return jsonify({"message": "display_name must be a non-empty string"}), 400
     if expected_interval_seconds is not None:
-        if not isinstance(expected_interval_seconds, int) or isinstance(expected_interval_seconds, bool) or expected_interval_seconds <= 0:
+        is_valid_int = isinstance(expected_interval_seconds, int) and not isinstance(expected_interval_seconds, bool)
+        if not is_valid_int or expected_interval_seconds <= 0:
             return jsonify({"message": "expected_interval_seconds must be a positive integer"}), 400
 
     camera = _metadata_store().update_camera(

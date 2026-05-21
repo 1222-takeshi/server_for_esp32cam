@@ -713,3 +713,16 @@ def test_patch_camera_updates_both_fields(client):
     body = response.get_json()
     assert body["display_name"] == "駐車場カメラ"
     assert body["expected_interval_seconds"] == 120
+
+
+def test_patch_camera_rejects_whitespace_only_display_name(client):
+    client.post("/api/status_update", json={"device_id": "cam-patch"}, content_type="application/json")
+
+    response = client.patch(
+        "/api/cameras/cam-patch",
+        json={"display_name": "   "},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 400
+    assert "display_name" in response.get_json()["message"]
