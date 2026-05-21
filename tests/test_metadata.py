@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from script.metadata import SQLiteMetadataStore
+from script.metadata import ALLOWED_LOG_LEVELS, SQLiteMetadataStore
 from script.storage import StoredImage
 
 
@@ -156,3 +156,79 @@ def test_metadata_store_deletes_snapshots_by_relative_path(tmp_path):
     snapshots = store.list_camera_snapshots("cam-a")
     assert deleted == 1
     assert [snapshot.id for snapshot in snapshots] == [keep_me.id]
+
+
+def test_record_device_log_stores_log(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    store.record_heartbeat("cam-a")
+
+    log = store.record_device_log("cam-a", level="error", message="sensor fault")
+
+    assert log.camera_id == "cam-a"
+    assert log.level == "error"
+    assert log.message == "sensor fault"
+    assert log.logged_at.tzinfo is not None
+
+
+def test_record_device_log_rejects_invalid_level(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    store.record_heartbeat("cam-a")
+
+    import pytest
+    with pytest.raises(ValueError, match="Invalid log level"):
+        store.record_device_log("cam-a", level="verbose", message="test")
+
+
+def test_record_device_log_uses_explicit_logged_at(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    store.record_heartbeat("cam-a")
+    explicit_time = datetime(2026, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
+
+    log = store.record_device_log("cam-a", level="info", message="boot", logged_at=explicit_time)
+
+    assert log.logged_at == explicit_time
+
+
+def test_record_device_log_covers_all_allowed_levels(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    store.record_heartbeat("cam-a")
+
+    for level in ALLOWED_LOG_LEVELS:
+        log = store.record_device_log("cam-a", level=level, message=f"{level} message")
+        assert log.level == level
+
+
+def test_list_device_logs_returns_empty_for_unknown_camera(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+
+    logs = store.list_device_logs("nonexistent-cam")
+
+    assert logs == []
+
+
+def test_list_device_logs_returns_logs_in_descending_order(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    store.record_heartbeat("cam-a")
+    t1 = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
+    t2 = datetime(2026, 1, 1, 11, 0, tzinfo=timezone.utc)
+    t3 = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+
+    store.record_device_log("cam-a", level="info", message="first", logged_at=t1)
+    store.record_device_log("cam-a", level="warning", message="second", logged_at=t2)
+    store.record_device_log("cam-a", level="error", message="third", logged_at=t3)
+
+    logs = store.list_device_logs("cam-a")
+
+    assert [log.message for log in logs] == ["third", "second", "first"]
+
+
+def test_list_device_logs_respects_limit(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    store.record_heartbeat("cam-a")
+
+    for i in range(10):
+        store.record_device_log("cam-a", level="info", message=f"log {i}")
+
+    logs = store.list_device_logs("cam-a", limit=3)
+
+    assert len(logs) == 3
