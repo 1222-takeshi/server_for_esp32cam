@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from datetime import datetime, timedelta, timezone
 
 from script.metadata import ALLOWED_LOG_LEVELS, SQLiteMetadataStore
@@ -167,14 +168,13 @@ def test_record_device_log_stores_log(tmp_path):
     assert log.camera_id == "cam-a"
     assert log.level == "error"
     assert log.message == "sensor fault"
-    assert log.logged_at.tzinfo is not None
+    assert log.logged_at.tzinfo == timezone.utc
 
 
 def test_record_device_log_rejects_invalid_level(tmp_path):
     store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
     store.record_heartbeat("cam-a")
 
-    import pytest
     with pytest.raises(ValueError, match="Invalid log level"):
         store.record_device_log("cam-a", level="verbose", message="test")
 
