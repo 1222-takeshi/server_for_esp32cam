@@ -510,23 +510,6 @@ class SQLiteMetadataStore:
                     ),
                 )
 
-    def _latest_detection_time(self, camera_id: str) -> datetime | None:
-        with self._lock:
-            row = self._connection.execute(
-                """
-                SELECT snapshots.stored_at
-                FROM detections
-                JOIN snapshots ON snapshots.id = detections.snapshot_id
-                WHERE snapshots.camera_id = ?
-                ORDER BY snapshots.stored_at DESC
-                LIMIT 1
-                """,
-                (camera_id,),
-            ).fetchone()
-        if row is None:
-            return None
-        return _parse_datetime(row["stored_at"])
-
     def _detections_by_snapshot_id(
         self,
         snapshot_ids: list[int],
