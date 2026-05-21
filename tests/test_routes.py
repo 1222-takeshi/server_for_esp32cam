@@ -726,3 +726,37 @@ def test_patch_camera_rejects_whitespace_only_display_name(client):
 
     assert response.status_code == 400
     assert "display_name" in response.get_json()["message"]
+
+
+def test_delete_camera_removes_camera(client):
+    client.post("/api/status_update", json={"device_id": "cam-delete"}, content_type="application/json")
+
+    response = client.delete("/api/cameras/cam-delete")
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["message"] == "Camera deleted"
+    assert body["camera_id"] == "cam-delete"
+
+
+def test_delete_camera_returns_404_for_unknown_camera(client):
+    response = client.delete("/api/cameras/nonexistent-cam")
+
+    assert response.status_code == 404
+
+
+def test_delete_camera_removes_associated_snapshots(client):
+    client.post(
+        "/upload",
+        data=b"\xff\xd8jpeg",
+        headers={
+            "Content-Type": "image/jpeg",
+            "X-Device-Id": "cam-delete-snap",
+            "X-Captured-At": "2026-01-01T12:00:00Z",
+        },
+    )
+
+    client.delete("/api/cameras/cam-delete-snap")
+
+    snapshots_response = client.get("/api/cameras/cam-delete-snap/snapshots")
+    assert snapshots_response.status_code == 404

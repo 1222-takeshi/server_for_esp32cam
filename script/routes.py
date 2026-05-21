@@ -221,6 +221,22 @@ def api_cameras():
     return jsonify({"cameras": [_serialize_camera_summary(item) for item in _metadata_store().list_camera_summaries()]})
 
 
+@server.route("/api/cameras/<camera_id>", methods=["DELETE"])
+def api_delete_camera(camera_id: str):
+    delete_files = request.args.get("delete_files", "false").lower() == "true"
+    deleted = _metadata_store().delete_camera(camera_id)
+    if not deleted:
+        return jsonify({"message": "Camera not found"}), 404
+
+    if delete_files:
+        try:
+            _storage().delete_camera_files(camera_id)
+        except Exception as exc:  # pragma: no cover
+            current_app.logger.warning("Failed to delete storage for camera %s: %s", camera_id, exc)
+
+    return jsonify({"message": "Camera deleted", "camera_id": camera_id}), 200
+
+
 @server.route("/api/cameras/<camera_id>", methods=["PATCH"])
 def api_patch_camera(camera_id: str):
     body = request.get_json(silent=True) or {}

@@ -305,6 +305,20 @@ class SQLiteMetadataStore:
             )
         return self.get_camera(camera_id)
 
+    def delete_camera(self, camera_id: str) -> bool:
+        if self.get_camera(camera_id) is None:
+            return False
+        with self._lock, self._connection:
+            self._connection.execute(
+                "DELETE FROM snapshots WHERE camera_id = ?",
+                (camera_id,),
+            )
+            self._connection.execute(
+                "DELETE FROM cameras WHERE camera_id = ?",
+                (camera_id,),
+            )
+        return True
+
     def list_camera_summaries(self) -> list[CameraSummary]:
         with self._lock:
             camera_rows = self._connection.execute(

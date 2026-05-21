@@ -98,6 +98,9 @@ class Storage(Protocol):
     ) -> StorageRetentionResult:
         ...
 
+    def delete_camera_files(self, camera_id: str) -> None:
+        ...
+
 
 class LocalFilesystemStorage:
     def __init__(self, upload_dir: str | Path):
@@ -245,6 +248,12 @@ class LocalFilesystemStorage:
 
     def read_image_by_relative_path(self, relative_path: str) -> bytes:
         return self._resolve_relative_path(relative_path).read_bytes()
+
+    def delete_camera_files(self, camera_id: str) -> None:
+        camera_dir = self._camera_image_dir(camera_id).parent
+        if camera_dir.exists() and camera_dir.is_dir():
+            import shutil
+            shutil.rmtree(camera_dir)
 
     def _delete_image(self, image: StoredImage) -> int:
         path = self._resolve_relative_path(image.relative_path)
