@@ -221,6 +221,34 @@ def api_cameras():
     return jsonify({"cameras": [_serialize_camera_summary(item) for item in _metadata_store().list_camera_summaries()]})
 
 
+@server.route("/api/cameras/<camera_id>", methods=["PATCH"])
+def api_patch_camera(camera_id: str):
+    body = request.get_json(silent=True) or {}
+    display_name = body.get("display_name")
+    expected_interval_seconds = body.get("expected_interval_seconds")
+
+    if display_name is not None and (not isinstance(display_name, str) or not display_name.strip()):
+        return jsonify({"message": "display_name must be a non-empty string"}), 400
+    if expected_interval_seconds is not None:
+        if not isinstance(expected_interval_seconds, int) or expected_interval_seconds <= 0:
+            return jsonify({"message": "expected_interval_seconds must be a positive integer"}), 400
+
+    camera = _metadata_store().update_camera(
+        camera_id,
+        display_name=display_name.strip() if display_name is not None else None,
+        expected_interval_seconds=expected_interval_seconds,
+    )
+    if camera is None:
+        return jsonify({"message": "Camera not found"}), 404
+    return jsonify(
+        {
+            "camera_id": camera.camera_id,
+            "display_name": camera.display_name,
+            "expected_interval_seconds": camera.expected_interval_seconds,
+        }
+    ), 200
+
+
 @server.route("/api/cameras/<camera_id>/upload-metrics")
 def api_camera_upload_metrics(camera_id: str):
     return jsonify(current_app.extensions["upload_metrics"].snapshot(camera_id))

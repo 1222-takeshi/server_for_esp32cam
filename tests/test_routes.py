@@ -611,3 +611,67 @@ def test_api_camera_logs_returns_404_for_unknown_camera(client):
     response = client.get("/api/cameras/nonexistent-camera/logs")
 
     assert response.status_code == 404
+
+
+def test_patch_camera_updates_display_name(client):
+    client.post("/api/status_update", json={"device_id": "cam-patch"}, content_type="application/json")
+
+    response = client.patch(
+        "/api/cameras/cam-patch",
+        json={"display_name": "玄関カメラ"},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["display_name"] == "玄関カメラ"
+    assert body["camera_id"] == "cam-patch"
+
+
+def test_patch_camera_updates_interval(client):
+    client.post("/api/status_update", json={"device_id": "cam-patch"}, content_type="application/json")
+
+    response = client.patch(
+        "/api/cameras/cam-patch",
+        json={"expected_interval_seconds": 60},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["expected_interval_seconds"] == 60
+
+
+def test_patch_camera_returns_404_for_unknown_camera(client):
+    response = client.patch(
+        "/api/cameras/nonexistent",
+        json={"display_name": "test"},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 404
+
+
+def test_patch_camera_rejects_empty_display_name(client):
+    client.post("/api/status_update", json={"device_id": "cam-patch"}, content_type="application/json")
+
+    response = client.patch(
+        "/api/cameras/cam-patch",
+        json={"display_name": ""},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 400
+    assert "display_name" in response.get_json()["message"]
+
+
+def test_patch_camera_rejects_invalid_interval(client):
+    client.post("/api/status_update", json={"device_id": "cam-patch"}, content_type="application/json")
+
+    response = client.patch(
+        "/api/cameras/cam-patch",
+        json={"expected_interval_seconds": -1},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 400
+    assert "expected_interval_seconds" in response.get_json()["message"]

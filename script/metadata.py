@@ -286,6 +286,25 @@ class SQLiteMetadataStore:
             return None
         return self._camera_from_row(row)
 
+    def update_camera(
+        self,
+        camera_id: str,
+        *,
+        display_name: str | None = None,
+        expected_interval_seconds: int | None = None,
+    ) -> CameraRecord | None:
+        camera = self.get_camera(camera_id)
+        if camera is None:
+            return None
+        new_display_name = display_name if display_name is not None else camera.display_name
+        new_interval = expected_interval_seconds if expected_interval_seconds is not None else camera.expected_interval_seconds
+        with self._lock, self._connection:
+            self._connection.execute(
+                "UPDATE cameras SET display_name = ?, expected_interval_seconds = ? WHERE camera_id = ?",
+                (new_display_name, new_interval, camera_id),
+            )
+        return self.get_camera(camera_id)
+
     def list_camera_summaries(self) -> list[CameraSummary]:
         with self._lock:
             camera_rows = self._connection.execute(
