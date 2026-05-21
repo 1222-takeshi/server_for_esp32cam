@@ -52,6 +52,18 @@ class CameraSummary:
     status: str
 
 
+_ALLOWED_LOG_LEVELS = frozenset({"info", "warning", "error", "critical"})
+
+
+@dataclass(frozen=True)
+class DeviceLogRecord:
+    id: int
+    camera_id: str
+    level: str
+    message: str
+    logged_at: datetime
+
+
 def _parse_datetime(value: str | None) -> datetime | None:
     if value is None:
         return None
@@ -128,6 +140,15 @@ class SQLiteMetadataStore:
                     x2 REAL NOT NULL,
                     y2 REAL NOT NULL,
                     FOREIGN KEY(snapshot_id) REFERENCES snapshots(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS device_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    camera_id TEXT NOT NULL,
+                    level TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    logged_at TEXT NOT NULL,
+                    FOREIGN KEY(camera_id) REFERENCES cameras(camera_id)
                 );
                 """
             )
@@ -499,3 +520,52 @@ class SQLiteMetadataStore:
             snapshot_id: tuple(records)
             for snapshot_id, records in grouped.items()
         }
+
+    def record_heartbeat(self, camera_id: str, *, seen_at: datetime | None = None) -> CameraRecord:
+        return self.ensure_camera(camera_id, seen_at=seen_at)
+
+    def record_device_log(
+        self,
+        camera_id: str,
+        *,
+        level: str,
+        message: str,
+        logged_at: datetime | None = None,
+    ) -> DeviceLogRecord:
+        if level not in _ALLOWED_LOG_LEVELS:
+            raise ValueError(f"Invalid log level: {level!r}. Must be one of {sorted(_ALLOWED_LOG_LEVELS)}")
+        self.ensure_camera(camera_id)
+        effective_logged_at = (logged_at or datetime.now(tz=timezone.utc)).astimezone(timezone.utc)
+        with self._lock, self._connection:
+            cursor = self._connection.execute(
+                "INSERT INTO device_logs (camera_id, level, message, logged_at) VALUES (?, ?, ?, ?)",
+                (camera_id, level, message, effective_logged_at.isoformat()),
+            )
+            row = self._connection.execute(
+                "SELECT * FROM device_logs WHERE id = ?",
+                (cursor.lastrowid,),
+            ).fetchone()
+        return DeviceLogRecord(
+            id=row["id"],
+            camera_id=row["camera_id"],
+            level=row["level"],
+            message=row["message"],
+            logged_at=_parse_datetime(row["logged_at"]) or effective_logged_at,
+        )
+
+    def list_device_logs(self, camera_id: str, *, limit: int = 50) -> list[DeviceLogRecord]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT * FROM device_logs WHERE camera_id = ? ORDER BY logged_at DESC LIMIT ?",
+                (camera_id, limit),
+            ).fetchall()
+        return [
+            DeviceLogRecord(
+                id=row["id"],
+                camera_id=row["camera_id"],
+                level=row["level"],
+                message=row["message"],
+                logged_at=_parse_datetime(row["logged_at"]) or datetime.now(tz=timezone.utc),
+            )
+            for row in rows
+        ]

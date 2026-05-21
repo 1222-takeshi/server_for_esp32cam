@@ -437,3 +437,118 @@ def test_upload_publishes_snapshot_created_event(app, client):
     assert event["snapshot"]["filename"] == body["filename"]
     assert event["snapshot"]["url"] == f"/files/{body['filename']}"
     assert event["snapshot"]["size_bytes"] == body["size"]
+
+
+def test_status_update_records_heartbeat(client):
+    response = client.post(
+        "/api/status_update",
+        json={"device_id": "esp32cam-heartbeat"},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["message"] == "Status updated"
+    assert body["camera_id"] == "esp32cam-heartbeat"
+    assert "last_seen_at" in body
+
+
+def test_status_update_rejects_missing_device_id(client):
+    response = client.post("/api/status_update", json={}, content_type="application/json")
+
+    assert response.status_code == 400
+    assert response.get_json()["message"] == "device_id is required"
+
+
+def test_log_error_records_device_log(client):
+    client.post(
+        "/api/status_update",
+        json={"device_id": "esp32cam-log-test"},
+        content_type="application/json",
+    )
+    response = client.post(
+        "/api/log_error",
+        json={"device_id": "esp32cam-log-test", "level": "error", "message": "OOM crash"},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 201
+    body = response.get_json()
+    assert body["camera_id"] == "esp32cam-log-test"
+    assert body["level"] == "error"
+    assert body["message"] == "OOM crash"
+    assert "logged_at" in body
+
+
+def test_log_error_uses_error_level_by_default(client):
+    client.post("/api/status_update", json={"device_id": "cam-default"}, content_type="application/json")
+    response = client.post(
+        "/api/log_error",
+        json={"device_id": "cam-default", "message": "unexpected reboot"},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 201
+    assert response.get_json()["level"] == "error"
+
+
+def test_log_error_rejects_missing_device_id(client):
+    response = client.post(
+        "/api/log_error",
+        json={"message": "some error"},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["message"] == "device_id is required"
+
+
+def test_log_error_rejects_missing_message(client):
+    response = client.post(
+        "/api/log_error",
+        json={"device_id": "cam-x"},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["message"] == "message is required"
+
+
+def test_log_error_rejects_invalid_level(client):
+    client.post("/api/status_update", json={"device_id": "cam-y"}, content_type="application/json")
+    response = client.post(
+        "/api/log_error",
+        json={"device_id": "cam-y", "level": "verbose", "message": "test"},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 400
+    assert "level" in response.get_json()["message"]
+
+
+def test_api_camera_logs_returns_logs_for_camera(client):
+    client.post("/api/status_update", json={"device_id": "cam-logs"}, content_type="application/json")
+    client.post(
+        "/api/log_error",
+        json={"device_id": "cam-logs", "level": "warning", "message": "low memory"},
+        content_type="application/json",
+    )
+    client.post(
+        "/api/log_error",
+        json={"device_id": "cam-logs", "level": "error", "message": "upload failed"},
+        content_type="application/json",
+    )
+
+    response = client.get("/api/cameras/cam-logs/logs")
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["camera_id"] == "cam-logs"
+    assert len(body["logs"]) == 2
+    assert body["logs"][0]["message"] == "upload failed"
+
+
+def test_api_camera_logs_returns_404_for_unknown_camera(client):
+    response = client.get("/api/cameras/nonexistent-camera/logs")
+
+    assert response.status_code == 404
