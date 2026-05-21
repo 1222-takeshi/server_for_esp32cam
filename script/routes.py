@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from flask import Blueprint, current_app, jsonify, render_template, request, send_file
 
-from script.metadata import _ALLOWED_LOG_LEVELS, CameraSummary, DeviceLogRecord, SnapshotRecord
+from script.metadata import ALLOWED_LOG_LEVELS, CameraSummary, DeviceLogRecord, SnapshotRecord
 from script.retention import apply_upload_retention
 from script.storage import Storage
 
@@ -278,13 +278,17 @@ def api_log_error():
 
     if not device_id:
         return jsonify({"message": "device_id is required"}), 400
+    if len(device_id) > 128:
+        return jsonify({"message": "device_id is too long"}), 400
     if not message:
         return jsonify({"message": "message is required"}), 400
-    if level not in _ALLOWED_LOG_LEVELS:
-        return jsonify({"message": f"level must be one of {sorted(_ALLOWED_LOG_LEVELS)}"}), 400
+    if len(message) > 2000:
+        return jsonify({"message": "message is too long"}), 400
+    if level not in ALLOWED_LOG_LEVELS:
+        return jsonify({"message": f"level must be one of {sorted(ALLOWED_LOG_LEVELS)}"}), 400
 
     log = _metadata_store().record_device_log(device_id, level=level, message=message)
-    current_app.logger.info("Device log from %s [%s]: %s", device_id, level, message)
+    current_app.logger.info("Device log from %s [%s]: %.200s", device_id, level, message)
     return jsonify(_serialize_device_log(log)), 201
 
 

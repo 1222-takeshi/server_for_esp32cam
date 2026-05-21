@@ -52,7 +52,7 @@ class CameraSummary:
     status: str
 
 
-_ALLOWED_LOG_LEVELS = frozenset({"info", "warning", "error", "critical"})
+ALLOWED_LOG_LEVELS = frozenset({"info", "warning", "error", "critical"})
 
 
 @dataclass(frozen=True)
@@ -148,7 +148,7 @@ class SQLiteMetadataStore:
                     level TEXT NOT NULL,
                     message TEXT NOT NULL,
                     logged_at TEXT NOT NULL,
-                    FOREIGN KEY(camera_id) REFERENCES cameras(camera_id)
+                    FOREIGN KEY(camera_id) REFERENCES cameras(camera_id) ON DELETE CASCADE
                 );
                 """
             )
@@ -532,8 +532,8 @@ class SQLiteMetadataStore:
         message: str,
         logged_at: datetime | None = None,
     ) -> DeviceLogRecord:
-        if level not in _ALLOWED_LOG_LEVELS:
-            raise ValueError(f"Invalid log level: {level!r}. Must be one of {sorted(_ALLOWED_LOG_LEVELS)}")
+        if level not in ALLOWED_LOG_LEVELS:
+            raise ValueError(f"Invalid log level: {level!r}. Must be one of {sorted(ALLOWED_LOG_LEVELS)}")
         self.ensure_camera(camera_id)
         effective_logged_at = (logged_at or datetime.now(tz=timezone.utc)).astimezone(timezone.utc)
         with self._lock, self._connection:

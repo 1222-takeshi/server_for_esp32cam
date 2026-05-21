@@ -514,6 +514,28 @@ def test_log_error_rejects_missing_message(client):
     assert response.get_json()["message"] == "message is required"
 
 
+def test_log_error_rejects_too_long_device_id(client):
+    response = client.post(
+        "/api/log_error",
+        json={"device_id": "x" * 129, "message": "test"},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["message"] == "device_id is too long"
+
+
+def test_log_error_rejects_too_long_message(client):
+    response = client.post(
+        "/api/log_error",
+        json={"device_id": "cam-z", "message": "x" * 2001},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["message"] == "message is too long"
+
+
 def test_log_error_rejects_invalid_level(client):
     client.post("/api/status_update", json={"device_id": "cam-y"}, content_type="application/json")
     response = client.post(
