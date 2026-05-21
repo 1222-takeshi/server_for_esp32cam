@@ -89,6 +89,21 @@ def test_upload_rejects_missing_device_metadata(client):
     assert response.get_json()["message"] == "Missing device metadata"
 
 
+def test_upload_rejects_too_long_device_id(client):
+    response = client.post(
+        "/upload",
+        data=b"\xff\xd8jpeg",
+        headers={
+            "Content-Type": "image/jpeg",
+            "X-Device-Id": "x" * 129,
+            "X-Captured-At": "2026-03-11T12:34:56Z",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["message"] == "device_id is too long"
+
+
 def test_upload_rejects_invalid_captured_at_metadata(client):
     response = client.post(
         "/upload",
@@ -458,6 +473,28 @@ def test_status_update_rejects_missing_device_id(client):
 
     assert response.status_code == 400
     assert response.get_json()["message"] == "device_id is required"
+
+
+def test_status_update_accepts_device_id_at_max_length(client):
+    response = client.post(
+        "/api/status_update",
+        json={"device_id": "x" * 128},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["message"] == "Status updated"
+
+
+def test_status_update_rejects_too_long_device_id(client):
+    response = client.post(
+        "/api/status_update",
+        json={"device_id": "x" * 129},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["message"] == "device_id is too long"
 
 
 def test_log_error_records_device_log(client):
