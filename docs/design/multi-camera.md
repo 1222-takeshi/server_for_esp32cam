@@ -84,8 +84,8 @@ UTC に正規化された ISO 8601 形式で保存される。
 ### ポイント
 
 - `<camera_id>` はデバイスが送信する `X-Device-Id` ヘッダの値（空白を除去・正規化済み）
-- カメラIDが不正（空文字等）の場合は `device metadata is required` エラーを返す
-- レガシーデータ（カメラIDなし）は `uploads/` 直下の `.jpg` を `list_images()` でスキャンして取り込む
+- `X-Device-Id` または `X-Captured-At` ヘッダが欠損・空の場合は HTTP 400 `"Missing device metadata"` を返す
+- レガシーデータ（カメラIDなし）は `list_images()` の `rglob("*")` によって `.jpg`/`.jpeg` 拡張子のファイルが自動的に取り込まれる
 
 ---
 
@@ -179,6 +179,7 @@ X-Captured-At: 2026-01-01T12:00:00Z
 
 | エンドポイント | メソッド | 成功レスポンス | 説明 |
 |---|---|---|---|
+| `/healthz` | GET | `200` | サーバー稼働確認（`{"status": "ok"}`）|
 | `/api/cameras` | GET | `200` | カメラ一覧（ステータス付き）|
 | `/api/cameras/<camera_id>/snapshots` | GET | `200` | カメラ別スナップショット一覧（最新50件）|
 | `/api/cameras/<camera_id>/upload-metrics` | GET | `200` | アップロード診断メトリクス |
@@ -214,7 +215,7 @@ X-Captured-At: 2026-01-01T12:00:00Z
 | `ESP32CAM_STORAGE_RETENTION_MAX_AGE_SECONDS` | `0`（無効）| 保持期間上限（秒）|
 | `ESP32CAM_STORAGE_RETENTION_MAX_BYTES` | `0`（無効）| 保持容量上限（バイト）|
 | `ESP32CAM_INFERENCE_MODE` | `async` | 推論実行モード（`sync` / `async`）|
-| `ESP32CAM_DETECTOR` | `disabled` | 推論バックエンド（`disabled` / `tflite`）|
+| `ESP32CAM_DETECTOR` | `disabled` | 推論バックエンド（`disabled` / `tflite_cpu`）|
 | `ESP32CAM_MODEL_PATH` | `""` | TFLite モデルファイルパス |
 | `ESP32CAM_LABELS_PATH` | `""` | ラベルファイルパス |
 | `ESP32CAM_DETECTION_THRESHOLD` | `0.5` | 検出スコア閾値 |
@@ -226,7 +227,7 @@ X-Captured-At: 2026-01-01T12:00:00Z
 
 ## 8. レガシーデータ移行方針
 
-`uploads/` 直下に直置きされた旧形式の JPEG（`camera_id` なし）は `list_images()` の `rglob("*.jpg")` によって自動的に取り込まれ、`snapshots.camera_id = NULL` として登録される。強制的なデータ移行は不要。
+`uploads/` 直下に直置きされた旧形式の JPEG（`camera_id` なし）は `list_images()` の `rglob("*")` によって `.jpg`/`.jpeg` 拡張子のファイルが自動的に取り込まれ、`snapshots.camera_id = NULL` として登録される。強制的なデータ移行は不要。
 
 ---
 
