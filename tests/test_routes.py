@@ -675,3 +675,41 @@ def test_patch_camera_rejects_invalid_interval(client):
 
     assert response.status_code == 400
     assert "expected_interval_seconds" in response.get_json()["message"]
+
+
+def test_patch_camera_rejects_boolean_interval(client):
+    client.post("/api/status_update", json={"device_id": "cam-patch"}, content_type="application/json")
+
+    response = client.patch(
+        "/api/cameras/cam-patch",
+        json={"expected_interval_seconds": True},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 400
+    assert "expected_interval_seconds" in response.get_json()["message"]
+
+
+def test_patch_camera_with_no_fields_is_idempotent(client):
+    client.post("/api/status_update", json={"device_id": "cam-patch"}, content_type="application/json")
+    client.patch("/api/cameras/cam-patch", json={"display_name": "元の名前"}, content_type="application/json")
+
+    response = client.patch("/api/cameras/cam-patch", json={}, content_type="application/json")
+
+    assert response.status_code == 200
+    assert response.get_json()["display_name"] == "元の名前"
+
+
+def test_patch_camera_updates_both_fields(client):
+    client.post("/api/status_update", json={"device_id": "cam-patch"}, content_type="application/json")
+
+    response = client.patch(
+        "/api/cameras/cam-patch",
+        json={"display_name": "駐車場カメラ", "expected_interval_seconds": 120},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["display_name"] == "駐車場カメラ"
+    assert body["expected_interval_seconds"] == 120
