@@ -460,6 +460,17 @@ def test_status_update_rejects_missing_device_id(client):
     assert response.get_json()["message"] == "device_id is required"
 
 
+def test_status_update_rejects_too_long_device_id(client):
+    response = client.post(
+        "/api/status_update",
+        json={"device_id": "x" * 129},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["message"] == "device_id is too long"
+
+
 def test_log_error_records_device_log(client):
     client.post(
         "/api/status_update",

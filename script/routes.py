@@ -257,6 +257,8 @@ def api_status_update():
     device_id = (body.get("device_id") or "").strip()
     if not device_id:
         return jsonify({"message": "device_id is required"}), 400
+    if len(device_id) > 128:
+        return jsonify({"message": "device_id is too long"}), 400
 
     camera = _metadata_store().record_heartbeat(device_id)
     current_app.logger.info("Heartbeat from device: %s", device_id)
