@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from flask import Blueprint, current_app, jsonify, render_template, request, send_file
 
-from script.metadata import CameraSummary, SnapshotRecord
+from script.metadata import ALLOWED_LOG_LEVELS, CameraSummary, DeviceLogRecord, SnapshotRecord
 from script.retention import apply_upload_retention
 from script.storage import Storage
 
@@ -63,6 +63,16 @@ def _serialize_snapshot(snapshot: SnapshotRecord) -> dict[str, object]:
         "inference_status": snapshot.inference_status,
         "inference_error": snapshot.inference_error,
         "detections": [_serialize_detection(detection) for detection in snapshot.detections],
+    }
+
+
+def _serialize_device_log(log: DeviceLogRecord) -> dict[str, object]:
+    return {
+        "id": log.id,
+        "camera_id": log.camera_id,
+        "level": log.level,
+        "message": log.message,
+        "logged_at": log.logged_at.isoformat(),
     }
 
 
@@ -239,3 +249,54 @@ def api_detections():
 
     detections = _metadata_store().list_detections(camera_id=camera_id, since=since)
     return jsonify({"detections": detections})
+
+
+@server.route("/api/status_update", methods=["POST"])
+def api_status_update():
+    body = request.get_json(silent=True) or {}
+    device_id = (body.get("device_id") or "").strip()
+    if not device_id:
+        return jsonify({"message": "device_id is required"}), 400
+
+    camera = _metadata_store().record_heartbeat(device_id)
+    current_app.logger.info("Heartbeat from device: %s", device_id)
+    return jsonify(
+        {
+            "message": "Status updated",
+            "camera_id": camera.camera_id,
+            "last_seen_at": camera.last_seen_at.isoformat(),
+        }
+    ), 200
+
+
+@server.route("/api/log_error", methods=["POST"])
+def api_log_error():
+    body = request.get_json(silent=True) or {}
+    device_id = (body.get("device_id") or "").strip()
+    level = (body.get("level") or "error").strip().lower()
+    message = (body.get("message") or "").strip()
+
+    if not device_id:
+        return jsonify({"message": "device_id is required"}), 400
+    if len(device_id) > 128:
+        return jsonify({"message": "device_id is too long"}), 400
+    if not message:
+        return jsonify({"message": "message is required"}), 400
+    if len(message) > 2000:
+        return jsonify({"message": "message is too long"}), 400
+    if level not in ALLOWED_LOG_LEVELS:
+        return jsonify({"message": f"level must be one of {sorted(ALLOWED_LOG_LEVELS)}"}), 400
+
+    log = _metadata_store().record_device_log(device_id, level=level, message=message)
+    current_app.logger.info("Device log from %s [%s]: %.200s", device_id, level, message)
+    return jsonify(_serialize_device_log(log)), 201
+
+
+@server.route("/api/cameras/<camera_id>/logs")
+def api_camera_logs(camera_id: str):
+    camera = _metadata_store().get_camera(camera_id)
+    if camera is None:
+        return jsonify({"message": "Camera not found"}), 404
+
+    logs = _metadata_store().list_device_logs(camera_id)
+    return jsonify({"camera_id": camera_id, "logs": [_serialize_device_log(log) for log in logs]})
