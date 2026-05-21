@@ -9,6 +9,8 @@ from script.metadata import ALLOWED_LOG_LEVELS, CameraSummary, DeviceLogRecord, 
 from script.retention import apply_upload_retention
 from script.storage import Storage
 
+DEVICE_ID_MAX_LENGTH = 128
+
 server = Blueprint("server", __name__)
 
 
@@ -126,6 +128,10 @@ def upload_file():
     if not device_id or not captured_at_raw:
         current_app.logger.error("Missing device metadata")
         return jsonify({"message": "Missing device metadata"}), 400
+
+    if len(device_id) > DEVICE_ID_MAX_LENGTH:
+        current_app.logger.error("device_id too long: %d chars", len(device_id))
+        return jsonify({"message": "device_id is too long"}), 400
 
     try:
         captured_at = _parse_captured_at(captured_at_raw)
@@ -257,7 +263,7 @@ def api_status_update():
     device_id = (body.get("device_id") or "").strip()
     if not device_id:
         return jsonify({"message": "device_id is required"}), 400
-    if len(device_id) > 128:
+    if len(device_id) > DEVICE_ID_MAX_LENGTH:
         return jsonify({"message": "device_id is too long"}), 400
 
     camera = _metadata_store().record_heartbeat(device_id)
@@ -280,7 +286,7 @@ def api_log_error():
 
     if not device_id:
         return jsonify({"message": "device_id is required"}), 400
-    if len(device_id) > 128:
+    if len(device_id) > DEVICE_ID_MAX_LENGTH:
         return jsonify({"message": "device_id is too long"}), 400
     if not message:
         return jsonify({"message": "message is required"}), 400
