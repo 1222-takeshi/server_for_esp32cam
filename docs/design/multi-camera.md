@@ -29,10 +29,10 @@
 
 | 機能 | 優先度 | Issue |
 |---|---|---|
-| カメラの `display_name` 設定 API | Medium | — |
-| `expected_interval_seconds` のカメラ別設定 | Low | — |
+| カメラの `display_name` 設定 API | Medium | #83 |
+| `expected_interval_seconds` のカメラ別設定 | Low | #83 |
 | ログのページネーション（`?limit=&offset=`）| Low | #80 |
-| カメラ削除 API | Low | — |
+| カメラ削除 API | Low | #84 |
 | クラウドストレージバックエンド（S3 等）| Low | — |
 
 ---
@@ -214,6 +214,12 @@ X-Captured-At: 2026-01-01T12:00:00Z
 | `ESP32CAM_STORAGE_RETENTION_MAX_AGE_SECONDS` | `0`（無効）| 保持期間上限（秒）|
 | `ESP32CAM_STORAGE_RETENTION_MAX_BYTES` | `0`（無効）| 保持容量上限（バイト）|
 | `ESP32CAM_INFERENCE_MODE` | `async` | 推論実行モード（`sync` / `async`）|
+| `ESP32CAM_DETECTOR` | `disabled` | 推論バックエンド（`disabled` / `tflite`）|
+| `ESP32CAM_MODEL_PATH` | `""` | TFLite モデルファイルパス |
+| `ESP32CAM_LABELS_PATH` | `""` | ラベルファイルパス |
+| `ESP32CAM_DETECTION_THRESHOLD` | `0.5` | 検出スコア閾値 |
+| `ESP32CAM_PERSON_LABEL` | `person` | 人物ラベル名 |
+| `ESP32CAM_PERSON_CLASS_ID` | `0` | 人物クラスID |
 | `PORT` | `8080` | サーバーポート番号 |
 
 ---
