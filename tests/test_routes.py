@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+import shutil
 import time
+from unittest.mock import patch
 
 UPLOAD_HEADERS = {
     "Content-Type": "image/jpeg",
@@ -833,6 +835,34 @@ def test_delete_camera_removes_associated_device_logs(client):
 
     logs_response = client.get("/api/cameras/cam-delete-logs/logs")
     assert logs_response.status_code == 404
+
+
+def test_upload_logs_disk_warning_at_85_percent(client, caplog):
+    fake_usage = type("disk_usage", (), {"total": 100, "used": 86, "free": 14})()
+    with patch("script.routes.shutil.disk_usage", return_value=fake_usage):
+        import logging
+        with caplog.at_level(logging.WARNING, logger="script.routes"):
+            client.post(
+                "/upload",
+                data=b"\xff\xd8" + b"\x00" * 100,
+                content_type="image/jpeg",
+                headers={"X-Device-Id": "cam-disk", "X-Captured-At": "2026-01-01T00:00:00Z"},
+            )
+    assert any("Disk usage high" in r.message for r in caplog.records)
+
+
+def test_upload_logs_disk_error_at_95_percent(client, caplog):
+    fake_usage = type("disk_usage", (), {"total": 100, "used": 96, "free": 4})()
+    with patch("script.routes.shutil.disk_usage", return_value=fake_usage):
+        import logging
+        with caplog.at_level(logging.ERROR, logger="script.routes"):
+            client.post(
+                "/upload",
+                data=b"\xff\xd8" + b"\x00" * 100,
+                content_type="image/jpeg",
+                headers={"X-Device-Id": "cam-disk2", "X-Captured-At": "2026-01-01T00:00:00Z"},
+            )
+    assert any("Disk usage critical" in r.message for r in caplog.records)
 
 
 def test_api_camera_snapshots_returns_pagination_envelope(client):

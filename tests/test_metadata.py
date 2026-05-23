@@ -370,3 +370,9 @@ def test_migrate_schema_adds_cascade_to_existing_db(tmp_path):
     assert "ON DELETE CASCADE" in row["sql"].upper()
     assert store.get_camera("cam-x") is not None
     assert len(store.list_camera_snapshots("cam-x")) == 1
+
+
+def test_metadata_store_enables_wal_mode(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "wal.sqlite3")
+    row = store._connection.execute("PRAGMA journal_mode").fetchone()
+    assert row[0] == "wal"

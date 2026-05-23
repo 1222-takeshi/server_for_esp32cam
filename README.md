@@ -45,6 +45,16 @@ Continuous video and remote I/O control remain later phases.
 * Add alerting and notifications after dashboard and detection history are stable.
 * Evaluate short clip upload as a later phase.
 
+## Quick Start (Docker)
+
+```bash
+cp .env.example .env          # configure environment variables
+docker compose build
+docker compose up
+```
+
+The dashboard is then available at `http://localhost:8080`.
+
 For detailed information on setup, usage, troubleshooting, and future development, please refer to the `docs` directory.
 
 *   [Requirements](docs/requirements.md)
