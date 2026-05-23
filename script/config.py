@@ -26,3 +26,5 @@ class Config:
     )
     STORAGE_RETENTION_MAX_BYTES = int(os.getenv("ESP32CAM_STORAGE_RETENTION_MAX_BYTES", "0"))
     MAX_WS_CONNECTIONS = int(os.getenv("ESP32CAM_MAX_WS_CONNECTIONS", "50"))
+    DEVICE_API_KEY = os.getenv("ESP32CAM_DEVICE_API_KEY", "")
+    ADMIN_TOKEN = os.getenv("ESP32CAM_ADMIN_TOKEN", "")

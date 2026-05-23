@@ -6,6 +6,7 @@ import re
 
 from flask import Blueprint, current_app, jsonify, render_template, request, send_file
 
+from script.auth import require_admin_auth, require_device_auth
 from script.metadata import ALLOWED_LOG_LEVELS, CameraSummary, DeviceLogRecord, SnapshotRecord
 from script.retention import apply_upload_retention
 from script.storage import Storage
@@ -120,6 +121,7 @@ def healthz():
 
 
 @server.route("/upload", methods=["POST"])
+@require_device_auth
 def upload_file():
     if not request.data:
         current_app.logger.error("No data received")
@@ -236,6 +238,7 @@ def api_cameras():
 
 
 @server.route("/api/cameras/<camera_id>", methods=["DELETE"])
+@require_admin_auth
 def api_delete_camera(camera_id: str):
     if _validate_device_id(camera_id):
         return jsonify({"message": "Camera not found"}), 404
@@ -258,6 +261,7 @@ def api_delete_camera(camera_id: str):
 
 
 @server.route("/api/cameras/<camera_id>", methods=["PATCH"])
+@require_admin_auth
 def api_patch_camera(camera_id: str):
     if _validate_device_id(camera_id):
         return jsonify({"message": "Camera not found"}), 404
@@ -329,6 +333,7 @@ def api_detections():
 
 
 @server.route("/api/status_update", methods=["POST"])
+@require_device_auth
 def api_status_update():
     body = request.get_json(silent=True) or {}
     device_id = (body.get("device_id") or "").strip()
@@ -348,6 +353,7 @@ def api_status_update():
 
 
 @server.route("/api/log_error", methods=["POST"])
+@require_device_auth
 def api_log_error():
     body = request.get_json(silent=True) or {}
     device_id = (body.get("device_id") or "").strip()
