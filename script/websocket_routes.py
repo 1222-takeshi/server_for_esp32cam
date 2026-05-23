@@ -3,9 +3,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 
-from flask import Flask, current_app
+from flask import Flask, current_app, request
 from flask_sock import Sock
 
+from script.auth import check_device_api_key
 from script.events import SnapshotEventPublisher
 from script.retention import apply_upload_retention
 from script.routes import _looks_like_jpeg, _serialize_snapshot, _validate_device_id
@@ -117,6 +118,9 @@ def register_websocket_routes(
 
     @sock.route("/ws/cameras/<camera_id>/upload")
     def camera_upload(websocket, camera_id: str):
+        if not check_device_api_key(request.headers.get("X-API-Key")):
+            websocket.send(json.dumps({"type": "error", "message": "Unauthorized"}))
+            return
         if _validate_device_id(camera_id):
             websocket.send(json.dumps({"type": "error", "message": "Invalid camera_id"}))
             return
