@@ -325,6 +325,6 @@ def test_migrate_schema_adds_cascade_to_existing_db(tmp_path):
     row = store._connection.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='snapshots'"
     ).fetchone()
-    assert "ON DELETE CASCADE" in row[0].upper()
+    assert "ON DELETE CASCADE" in row["sql"].upper()
     assert store.get_camera("cam-x") is not None
     assert len(store.list_camera_snapshots("cam-x")) == 1

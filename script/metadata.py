@@ -104,8 +104,13 @@ class SQLiteMetadataStore:
             self._connection.execute("PRAGMA foreign_keys = ON")
         self._initialize_schema()
         self._migrate_schema()
+        # Re-apply after _initialize_schema's executescript implicitly commits
+        with self._connection:
+            self._connection.execute("PRAGMA foreign_keys = ON")
 
     def _migrate_schema(self) -> None:
+        # device_logs was introduced with ON DELETE CASCADE from the start, so only
+        # snapshots needs a migration for databases created before this change.
         row = self._connection.execute(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='snapshots'"
         ).fetchone()
@@ -113,7 +118,7 @@ class SQLiteMetadataStore:
             return
 
         with self._lock, self._connection:
-            self._connection.executescript(
+            self._connection.execute(
                 """
                 CREATE TABLE snapshots_new (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -126,11 +131,15 @@ class SQLiteMetadataStore:
                     inference_status TEXT NOT NULL,
                     inference_error TEXT,
                     FOREIGN KEY(camera_id) REFERENCES cameras(camera_id) ON DELETE CASCADE
-                );
-                INSERT INTO snapshots_new SELECT * FROM snapshots;
-                DROP TABLE snapshots;
-                ALTER TABLE snapshots_new RENAME TO snapshots;
+                )
                 """
+            )
+            self._connection.execute(
+                "INSERT INTO snapshots_new SELECT * FROM snapshots"
+            )
+            self._connection.execute("DROP TABLE snapshots")
+            self._connection.execute(
+                "ALTER TABLE snapshots_new RENAME TO snapshots"
             )
 
     def _initialize_schema(self) -> None:
