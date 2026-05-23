@@ -5,6 +5,7 @@ import logging
 import urllib.error
 import urllib.request
 from datetime import timezone
+from urllib.parse import urlparse
 
 from script.detector import Detection
 from script.metadata import SnapshotRecord
@@ -14,6 +15,11 @@ _logger = logging.getLogger(__name__)
 
 class WebhookNotifier:
     def __init__(self, url: str, *, min_score: float = 0.5) -> None:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError(
+                f"ESP32CAM_WEBHOOK_URL must use http or https scheme, got: {url!r}"
+            )
         self._url = url
         self._min_score = min_score
 

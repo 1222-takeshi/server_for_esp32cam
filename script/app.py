@@ -75,8 +75,13 @@ def create_app(test_config: dict | None = None) -> Flask:
     metadata_store.sync_storage_index(storage.list_images())
     detector = _create_detector(app)
     webhook_url = app.config.get("WEBHOOK_URL", "")
+    webhook_min_score = app.config["WEBHOOK_MIN_SCORE"]
+    if not (0.0 <= webhook_min_score <= 1.0):
+        raise ValueError(
+            f"ESP32CAM_WEBHOOK_MIN_SCORE must be between 0.0 and 1.0, got {webhook_min_score}"
+        )
     notifier = (
-        WebhookNotifier(webhook_url, min_score=app.config["WEBHOOK_MIN_SCORE"])
+        WebhookNotifier(webhook_url, min_score=webhook_min_score)
         if webhook_url
         else DISABLED_NOTIFIER
     )
