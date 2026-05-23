@@ -103,6 +103,44 @@ class SQLiteMetadataStore:
         with self._connection:
             self._connection.execute("PRAGMA foreign_keys = ON")
         self._initialize_schema()
+        self._migrate_schema()
+        # Re-apply after _initialize_schema's executescript implicitly commits
+        with self._connection:
+            self._connection.execute("PRAGMA foreign_keys = ON")
+
+    def _migrate_schema(self) -> None:
+        # device_logs was introduced with ON DELETE CASCADE from the start, so only
+        # snapshots needs a migration for databases created before this change.
+        row = self._connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='snapshots'"
+        ).fetchone()
+        if row is None or "ON DELETE CASCADE" in row["sql"].upper():
+            return
+
+        with self._lock, self._connection:
+            self._connection.execute(
+                """
+                CREATE TABLE snapshots_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    filename TEXT NOT NULL UNIQUE,
+                    relative_path TEXT NOT NULL UNIQUE,
+                    size INTEGER NOT NULL,
+                    camera_id TEXT,
+                    captured_at TEXT,
+                    stored_at TEXT NOT NULL,
+                    inference_status TEXT NOT NULL,
+                    inference_error TEXT,
+                    FOREIGN KEY(camera_id) REFERENCES cameras(camera_id) ON DELETE CASCADE
+                )
+                """
+            )
+            self._connection.execute(
+                "INSERT INTO snapshots_new SELECT * FROM snapshots"
+            )
+            self._connection.execute("DROP TABLE snapshots")
+            self._connection.execute(
+                "ALTER TABLE snapshots_new RENAME TO snapshots"
+            )
 
     def _initialize_schema(self) -> None:
         with self._lock, self._connection:
@@ -127,7 +165,7 @@ class SQLiteMetadataStore:
                     stored_at TEXT NOT NULL,
                     inference_status TEXT NOT NULL,
                     inference_error TEXT,
-                    FOREIGN KEY(camera_id) REFERENCES cameras(camera_id)
+                    FOREIGN KEY(camera_id) REFERENCES cameras(camera_id) ON DELETE CASCADE
                 );
 
                 CREATE TABLE IF NOT EXISTS detections (
@@ -307,10 +345,6 @@ class SQLiteMetadataStore:
 
     def delete_camera(self, camera_id: str) -> bool:
         with self._lock, self._connection:
-            self._connection.execute(
-                "DELETE FROM snapshots WHERE camera_id = ?",
-                (camera_id,),
-            )
             cursor = self._connection.execute(
                 "DELETE FROM cameras WHERE camera_id = ?",
                 (camera_id,),
