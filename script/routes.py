@@ -376,6 +376,7 @@ def api_log_error():
 
 
 @server.route("/api/cameras/<camera_id>/logs")
+@require_admin_auth
 def api_camera_logs(camera_id: str):
     if _validate_device_id(camera_id):
         return jsonify({"message": "Camera not found"}), 404

@@ -3,7 +3,27 @@ from __future__ import annotations
 import functools
 import hmac
 
-from flask import current_app, jsonify, request
+import logging
+
+from flask import Flask, current_app, jsonify, request
+
+_logger = logging.getLogger(__name__)
+
+
+def validate_auth_config(app: Flask) -> None:
+    """Warn and normalise whitespace-only keys at startup."""
+    for key in ("DEVICE_API_KEY", "ADMIN_TOKEN"):
+        value = app.config.get(key, "")
+        stripped = value.strip()
+        if value and not stripped:
+            _logger.warning(
+                "Config %s is set to whitespace-only — treating as disabled. "
+                "Set a non-empty value to enable authentication.",
+                key,
+            )
+            app.config[key] = ""
+        elif stripped != value:
+            app.config[key] = stripped
 
 
 def _constant_time_equal(a: str, b: str) -> bool:
