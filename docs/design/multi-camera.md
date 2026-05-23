@@ -24,15 +24,13 @@
 | ハートビートエンドポイント（`/api/status_update`）| `script/routes.py` |
 | エラーログエンドポイント（`/api/log_error`）| `script/routes.py` |
 | アップロード保持ポリシー（最大容量・最大保持期間）| `script/retention.py` |
+| カメラ `display_name`・`expected_interval_seconds` 設定 API（#83）| `script/routes.py` |
+| カメラ削除 API（`DELETE /api/cameras/<id>?delete_files=`）（#84）| `script/routes.py`, `script/storage.py` |
 
 ### 未実装（今後の課題）
 
 | 機能 | 優先度 | Issue |
 |---|---|---|
-| カメラの `display_name` 設定 API | Medium | #83 |
-| `expected_interval_seconds` のカメラ別設定 | Low | #83 |
-| ログのページネーション（`?limit=&offset=`）| Low | #80 |
-| カメラ削除 API | Low | #84 |
 | クラウドストレージバックエンド（S3 等）| Low | — |
 
 ---
@@ -43,7 +41,7 @@
 
 | CI ジョブ | 影響 |
 |---|---|
-| `pytest` | カメラ別保存・メタデータ管理・APIの各層にユニット・結合テストを追加済み。全 93 件パス |
+| `pytest` | カメラ別保存・メタデータ管理・APIの各層にユニット・結合テストを追加済み。全 115 件パス |
 | `ruff` | 新規コードはすべて lint パス済み |
 | ESP32 ファームウェアビルド | サーバー変更の影響なし（ファームウェア側は HTTP/WebSocket の仕様変更なし）|
 
@@ -96,11 +94,11 @@ UTC に正規化された ISO 8601 形式で保存される。
 ```sql
 cameras (
     camera_id TEXT PRIMARY KEY,
-    display_name TEXT NOT NULL,            -- 現在は camera_id と同一
-    expected_interval_seconds INTEGER NOT NULL,  -- ヘルス判定に使用（サーバー全体で統一）
+    display_name TEXT NOT NULL,
+    expected_interval_seconds INTEGER NOT NULL,
     first_seen_at TEXT NOT NULL,
     last_seen_at TEXT NOT NULL,
-    is_active INTEGER NOT NULL DEFAULT 1   -- 現状は常に 1。削除APIは未実装
+    is_active INTEGER NOT NULL DEFAULT 1
 )
 
 snapshots (
@@ -113,7 +111,7 @@ snapshots (
     stored_at TEXT NOT NULL,
     inference_status TEXT NOT NULL,        -- pending / processing / succeeded / failed / skipped
     inference_error TEXT,
-    FOREIGN KEY(camera_id) REFERENCES cameras(camera_id)
+    FOREIGN KEY(camera_id) REFERENCES cameras(camera_id) ON DELETE CASCADE
 )
 
 device_logs (
@@ -194,6 +192,8 @@ X-Captured-At: 2026-01-01T12:00:00Z
 |---|---|---|---|
 | `/healthz` | GET | `200` | サーバー稼働確認（`{"status": "ok"}`）|
 | `/api/cameras` | GET | `200` | カメラ一覧（ステータス付き）|
+| `/api/cameras/<camera_id>` | DELETE | `200` | カメラ削除。`?delete_files=true` で画像ファイルも削除 |
+| `/api/cameras/<camera_id>` | PATCH | `200` | カメラ設定更新（`display_name`・`expected_interval_seconds`）|
 | `/api/cameras/<camera_id>/snapshots` | GET | `200` | カメラ別スナップショット一覧（最新50件）|
 | `/api/cameras/<camera_id>/upload-metrics` | GET | `200` | アップロード診断メトリクス |
 | `/api/cameras/<camera_id>/logs` | GET | `200` | デバイスログ一覧（最新50件）|

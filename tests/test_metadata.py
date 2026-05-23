@@ -267,6 +267,48 @@ def test_list_camera_summaries_latest_detection_at_is_set_when_detection_exists(
     assert summary.latest_detection_at == now
 
 
+def test_list_camera_summaries_returns_latest_snapshot_per_camera(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    t1 = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    t2 = datetime(2026, 1, 1, 13, 0, tzinfo=timezone.utc)
+    store.record_snapshot(
+        _stored_image(name="old.jpg", relative_path="cam-a/images/old.jpg", camera_id="cam-a", captured_at=t1, stored_at=t1)
+    )
+    store.record_snapshot(
+        _stored_image(name="new.jpg", relative_path="cam-a/images/new.jpg", camera_id="cam-a", captured_at=t2, stored_at=t2)
+    )
+
+    summaries = store.list_camera_summaries()
+    summary = next(s for s in summaries if s.camera.camera_id == "cam-a")
+
+    assert summary.latest_snapshot is not None
+    assert summary.latest_snapshot.filename == "new.jpg"
+
+
+def test_list_camera_summaries_camera_without_snapshots(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    store.record_heartbeat("cam-a")
+
+    summaries = store.list_camera_summaries()
+    summary = next(s for s in summaries if s.camera.camera_id == "cam-a")
+
+    assert summary.latest_snapshot is None
+    assert summary.latest_detection_at is None
+
+
+def test_list_camera_summaries_ordered_by_last_seen_at_desc(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    t_early = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    t_late = datetime(2026, 1, 1, 13, 0, tzinfo=timezone.utc)
+    store.record_heartbeat("cam-early", seen_at=t_early)
+    store.record_heartbeat("cam-late", seen_at=t_late)
+
+    summaries = store.list_camera_summaries()
+    camera_ids = [s.camera.camera_id for s in summaries]
+
+    assert camera_ids.index("cam-late") < camera_ids.index("cam-early")
+
+
 def test_delete_camera_cascades_snapshots(tmp_path):
     store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
     now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
