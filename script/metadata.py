@@ -106,6 +106,8 @@ class SQLiteMetadataStore:
             os.umask(old_mask)
         os.chmod(self.db_path, 0o600)
         self._connection.row_factory = sqlite3.Row
+        self._connection.execute("PRAGMA journal_mode = WAL")
+        self._connection.execute("PRAGMA synchronous = NORMAL")
         with self._connection:
             self._connection.execute("PRAGMA foreign_keys = ON")
         self._initialize_schema()
