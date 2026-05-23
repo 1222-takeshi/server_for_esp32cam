@@ -6,9 +6,8 @@ RUN useradd --create-home --shell /bin/sh appuser
 
 COPY pyproject.toml ./
 COPY script/ ./script/
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir . && pip install --no-cache-dir gunicorn gevent
 
-COPY script/ ./script/
 COPY templates/ ./templates/
 
 RUN mkdir -p uploads data && chown -R appuser:appuser /app
@@ -24,4 +23,4 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:${PORT}/healthz')" || exit 1
 
-CMD ["python", "script/server.py"]
+CMD gunicorn -k gevent -w 1 -b "0.0.0.0:${PORT}" script.server:app
