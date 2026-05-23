@@ -7,6 +7,7 @@ from typing import Protocol
 from script.detector import DetectionSkipped
 from script.metadata import SQLiteMetadataStore
 from script.storage import Storage
+from script.webhook import DISABLED_NOTIFIER
 
 
 class DetectorLike(Protocol):
@@ -22,11 +23,13 @@ class InferenceService:
         storage: Storage,
         detector: DetectorLike,
         mode: str = "async",
+        notifier=DISABLED_NOTIFIER,
     ) -> None:
         self.metadata_store = metadata_store
         self.storage = storage
         self.detector = detector
         self.mode = mode
+        self._notifier = notifier
         self._queue: Queue[int] = Queue()
         self._stop_event = threading.Event()
         self._worker: threading.Thread | None = None
@@ -85,3 +88,5 @@ class InferenceService:
             return
 
         self.metadata_store.mark_snapshot_result(snapshot_id, detections=detections)
+        if detections:
+            self._notifier.notify(snapshot, detections)

@@ -15,6 +15,7 @@ from script.auth import validate_auth_config
 from script.routes import server
 from script.storage import LocalFilesystemStorage, StorageRetentionPolicy
 from script.upload_metrics import UploadMetricsRegistry
+from script.webhook import DISABLED_NOTIFIER, WebhookNotifier
 from script.websocket_routes import register_websocket_routes
 
 
@@ -73,11 +74,23 @@ def create_app(test_config: dict | None = None) -> Flask:
     )
     metadata_store.sync_storage_index(storage.list_images())
     detector = _create_detector(app)
+    webhook_url = app.config.get("WEBHOOK_URL", "")
+    webhook_min_score = app.config["WEBHOOK_MIN_SCORE"]
+    if not (0.0 <= webhook_min_score <= 1.0):
+        raise ValueError(
+            f"ESP32CAM_WEBHOOK_MIN_SCORE must be between 0.0 and 1.0, got {webhook_min_score}"
+        )
+    notifier = (
+        WebhookNotifier(webhook_url, min_score=webhook_min_score)
+        if webhook_url
+        else DISABLED_NOTIFIER
+    )
     inference_service = InferenceService(
         metadata_store=metadata_store,
         storage=storage,
         detector=detector,
         mode=app.config["INFERENCE_MODE"],
+        notifier=notifier,
     )
     inference_service.start()
     snapshot_event_publisher = SnapshotEventPublisher()
