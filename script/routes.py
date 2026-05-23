@@ -19,6 +19,7 @@ server = Blueprint("server", __name__)
 _PAGINATION_LIMIT_MAX = 200
 _PAGINATION_LIMIT_DEFAULT = 50
 _PAGINATION_OFFSET_MAX = 10_000_000
+_FILES_PAGE_MAX = _PAGINATION_OFFSET_MAX // _PAGINATION_LIMIT_DEFAULT
 
 
 def _parse_pagination() -> tuple[int, int] | tuple[None, None]:
@@ -202,7 +203,7 @@ def upload_file():
 @server.route("/files")
 def list_files():
     try:
-        page = min(max(1, int(request.args.get("page", 1))), 200_000)
+        page = min(max(1, int(request.args.get("page", 1))), _FILES_PAGE_MAX)
     except ValueError:
         page = 1
     limit = _PAGINATION_LIMIT_DEFAULT
