@@ -3,6 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 from datetime import datetime, timezone
 import re
+import shutil
 
 from flask import Blueprint, current_app, jsonify, render_template, request, send_file
 
@@ -15,6 +16,20 @@ DEVICE_ID_MAX_LENGTH = 128
 _DEVICE_ID_RE = re.compile(rf"[A-Za-z0-9_\-]{{1,{DEVICE_ID_MAX_LENGTH}}}")
 
 server = Blueprint("server", __name__)
+
+
+def _check_disk_usage() -> None:
+    upload_dir = current_app.config["UPLOAD_DIR"]
+    usage = shutil.disk_usage(upload_dir)
+    pct = usage.used * 100 / usage.total
+    if pct >= 95:
+        current_app.logger.error(
+            "Disk usage critical: %.1f%% used (%d bytes free)", pct, usage.free
+        )
+    elif pct >= 85:
+        current_app.logger.warning(
+            "Disk usage high: %.1f%% used (%d bytes free)", pct, usage.free
+        )
 
 
 def _storage() -> Storage:
@@ -164,6 +179,7 @@ def upload_file():
         _inference_service().enqueue_snapshot(snapshot.id)
         _snapshot_event_publisher().publish_snapshot_created(snapshot)
         apply_upload_retention(stored)
+        _check_disk_usage()
         current_app.logger.info("File uploaded successfully: %s", stored.name)
         return (
             jsonify(
