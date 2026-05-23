@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from io import BytesIO
 from datetime import datetime, timezone
+import re
 
 from flask import Blueprint, current_app, jsonify, render_template, request, send_file
 
@@ -10,6 +11,7 @@ from script.retention import apply_upload_retention
 from script.storage import Storage
 
 DEVICE_ID_MAX_LENGTH = 128
+_DEVICE_ID_RE = re.compile(r"[A-Za-z0-9_\-]{1,128}")
 
 server = Blueprint("server", __name__)
 
@@ -28,6 +30,15 @@ def _inference_service():
 
 def _snapshot_event_publisher():
     return current_app.extensions["snapshot_event_publisher"]
+
+
+def _validate_device_id(device_id: str) -> str | None:
+    """Returns an error message string if invalid, None if valid."""
+    if not device_id:
+        return "device_id is required"
+    if not _DEVICE_ID_RE.fullmatch(device_id):
+        return "device_id contains invalid characters or exceeds maximum length"
+    return None
 
 
 def _looks_like_jpeg(data: bytes) -> bool:
@@ -125,13 +136,14 @@ def upload_file():
     device_id = request.headers.get("X-Device-Id", "").strip()
     captured_at_raw = request.headers.get("X-Captured-At", "").strip()
 
-    if not device_id or not captured_at_raw:
+    if not captured_at_raw:
         current_app.logger.error("Missing device metadata")
         return jsonify({"message": "Missing device metadata"}), 400
 
-    if len(device_id) > DEVICE_ID_MAX_LENGTH:
-        current_app.logger.error("device_id too long: %d chars", len(device_id))
-        return jsonify({"message": "device_id is too long"}), 400
+    device_id_error = _validate_device_id(device_id)
+    if device_id_error:
+        current_app.logger.error("Invalid device_id in upload: %s", device_id_error)
+        return jsonify({"message": device_id_error}), 400
 
     try:
         captured_at = _parse_captured_at(captured_at_raw)
@@ -166,7 +178,7 @@ def upload_file():
         )
     except Exception as exc:  # pragma: no cover
         current_app.logger.error("File upload failed: %s", exc)
-        return jsonify({"message": "File upload failed", "error": str(exc)}), 500
+        return jsonify({"message": "File upload failed"}), 500
 
 
 @server.route("/files")
@@ -310,10 +322,9 @@ def api_detections():
 def api_status_update():
     body = request.get_json(silent=True) or {}
     device_id = (body.get("device_id") or "").strip()
-    if not device_id:
-        return jsonify({"message": "device_id is required"}), 400
-    if len(device_id) > DEVICE_ID_MAX_LENGTH:
-        return jsonify({"message": "device_id is too long"}), 400
+    device_id_error = _validate_device_id(device_id)
+    if device_id_error:
+        return jsonify({"message": device_id_error}), 400
 
     camera = _metadata_store().record_heartbeat(device_id)
     current_app.logger.info("Heartbeat from device: %s", device_id)
@@ -333,10 +344,9 @@ def api_log_error():
     level = (body.get("level") or "error").strip().lower()
     message = (body.get("message") or "").strip()
 
-    if not device_id:
-        return jsonify({"message": "device_id is required"}), 400
-    if len(device_id) > DEVICE_ID_MAX_LENGTH:
-        return jsonify({"message": "device_id is too long"}), 400
+    device_id_error = _validate_device_id(device_id)
+    if device_id_error:
+        return jsonify({"message": device_id_error}), 400
     if not message:
         return jsonify({"message": "message is required"}), 400
     if len(message) > 2000:

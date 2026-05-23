@@ -8,7 +8,7 @@ from flask_sock import Sock
 
 from script.events import SnapshotEventPublisher
 from script.retention import apply_upload_retention
-from script.routes import _looks_like_jpeg, _serialize_snapshot
+from script.routes import _looks_like_jpeg, _serialize_snapshot, _validate_device_id
 from script.websocket_hub import WebSocketHub, WebSocketLike
 
 
@@ -92,6 +92,9 @@ def register_websocket_routes(app: Flask, publisher: SnapshotEventPublisher) -> 
 
     @sock.route("/ws/cameras/<camera_id>/snapshots")
     def camera_snapshots(websocket, camera_id: str):
+        if _validate_device_id(camera_id):
+            websocket.send(json.dumps({"type": "error", "message": "Invalid camera_id"}))
+            return
         disconnect = hub.connect(websocket, camera_id=camera_id)
         try:
             _keep_connection_open(websocket)
@@ -100,6 +103,9 @@ def register_websocket_routes(app: Flask, publisher: SnapshotEventPublisher) -> 
 
     @sock.route("/ws/cameras/<camera_id>/upload")
     def camera_upload(websocket, camera_id: str):
+        if _validate_device_id(camera_id):
+            websocket.send(json.dumps({"type": "error", "message": "Invalid camera_id"}))
+            return
         _handle_binary_upload_connection(websocket, camera_id=camera_id)
 
     app.extensions["sock"] = sock

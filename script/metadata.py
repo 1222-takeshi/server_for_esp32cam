@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import os
 from pathlib import Path
 import sqlite3
 import threading
@@ -99,6 +100,7 @@ class SQLiteMetadataStore:
         self._default_expected_interval_seconds = default_expected_interval_seconds
         self._lock = threading.RLock()
         self._connection = sqlite3.connect(self.db_path, check_same_thread=False)
+        os.chmod(self.db_path, 0o600)
         self._connection.row_factory = sqlite3.Row
         with self._connection:
             self._connection.execute("PRAGMA foreign_keys = ON")
