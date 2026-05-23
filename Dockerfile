@@ -5,7 +5,8 @@ WORKDIR /app
 RUN useradd --create-home --shell /bin/sh appuser
 
 COPY pyproject.toml ./
-RUN pip install --no-cache-dir -e .
+COPY script/ ./script/
+RUN pip install --no-cache-dir .
 
 COPY script/ ./script/
 COPY templates/ ./templates/
@@ -19,5 +20,8 @@ ENV ESP32CAM_UPLOAD_DIR=/app/uploads \
     PORT=8080
 
 EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:${PORT}/healthz')" || exit 1
 
 CMD ["python", "script/server.py"]
