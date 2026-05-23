@@ -309,14 +309,54 @@ class SQLiteMetadataStore:
             row = self._connection.execute("SELECT COUNT(*) AS count FROM snapshots").fetchone()
         return int(row["count"])
 
-    def list_recent_snapshots(self, *, limit: int | None = None) -> list[SnapshotRecord]:
-        query = "SELECT * FROM snapshots ORDER BY stored_at DESC"
-        params: tuple[object, ...] = ()
-        if limit is not None:
-            query += " LIMIT ?"
-            params = (limit,)
+    def count_snapshots(
+        self,
+        *,
+        camera_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> int:
+        query = "SELECT COUNT(*) AS count FROM snapshots WHERE 1 = 1"
+        params: list[object] = []
+        if camera_id is not None:
+            query += " AND camera_id = ?"
+            params.append(camera_id)
+        if since is not None:
+            query += " AND stored_at >= ?"
+            params.append(since.astimezone(timezone.utc).isoformat())
+        if until is not None:
+            query += " AND stored_at <= ?"
+            params.append(until.astimezone(timezone.utc).isoformat())
         with self._lock:
-            rows = self._connection.execute(query, params).fetchall()
+            row = self._connection.execute(query, tuple(params)).fetchone()
+        return int(row["count"])
+
+    def list_recent_snapshots(
+        self,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+        camera_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> list[SnapshotRecord]:
+        query = "SELECT * FROM snapshots WHERE 1 = 1"
+        params: list[object] = []
+        if camera_id is not None:
+            query += " AND camera_id = ?"
+            params.append(camera_id)
+        if since is not None:
+            query += " AND stored_at >= ?"
+            params.append(since.astimezone(timezone.utc).isoformat())
+        if until is not None:
+            query += " AND stored_at <= ?"
+            params.append(until.astimezone(timezone.utc).isoformat())
+        query += " ORDER BY stored_at DESC"
+        if limit is not None:
+            query += " LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+        with self._lock:
+            rows = self._connection.execute(query, tuple(params)).fetchall()
         detections = self._detections_by_snapshot_id([row["id"] for row in rows])
         return [self._snapshot_from_row(row, detections.get(row["id"], ())) for row in rows]
 
@@ -418,19 +458,78 @@ class SQLiteMetadataStore:
             )
         return summaries
 
-    def list_camera_snapshots(self, camera_id: str, *, limit: int = 20) -> list[SnapshotRecord]:
+    def count_camera_snapshots(
+        self,
+        camera_id: str,
+        *,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> int:
+        return self.count_snapshots(camera_id=camera_id, since=since, until=until)
+
+    def list_camera_snapshots(
+        self,
+        camera_id: str,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> list[SnapshotRecord]:
+        query = "SELECT * FROM snapshots WHERE camera_id = ?"
+        params: list[object] = [camera_id]
+        if since is not None:
+            query += " AND stored_at >= ?"
+            params.append(since.astimezone(timezone.utc).isoformat())
+        if until is not None:
+            query += " AND stored_at <= ?"
+            params.append(until.astimezone(timezone.utc).isoformat())
+        query += " ORDER BY stored_at DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
         with self._lock:
-            rows = self._connection.execute(
-                """
-                SELECT * FROM snapshots
-                WHERE camera_id = ?
-                ORDER BY stored_at DESC
-                LIMIT ?
-                """,
-                (camera_id, limit),
-            ).fetchall()
+            rows = self._connection.execute(query, tuple(params)).fetchall()
         detections = self._detections_by_snapshot_id([row["id"] for row in rows])
         return [self._snapshot_from_row(row, detections.get(row["id"], ())) for row in rows]
+
+    def _detection_where_clause(
+        self,
+        *,
+        camera_id: str | None = None,
+        since: datetime | None = None,
+        confidence_min: float | None = None,
+    ) -> tuple[str, list[object]]:
+        where = "WHERE 1 = 1"
+        params: list[object] = []
+        if camera_id is not None:
+            where += " AND snapshots.camera_id = ?"
+            params.append(camera_id)
+        if since is not None:
+            where += " AND snapshots.stored_at >= ?"
+            params.append(since.astimezone(timezone.utc).isoformat())
+        if confidence_min is not None:
+            where += " AND detections.score >= ?"
+            params.append(confidence_min)
+        return where, params
+
+    def count_detections(
+        self,
+        *,
+        camera_id: str | None = None,
+        since: datetime | None = None,
+        confidence_min: float | None = None,
+    ) -> int:
+        where, params = self._detection_where_clause(
+            camera_id=camera_id, since=since, confidence_min=confidence_min
+        )
+        query = f"""
+            SELECT COUNT(*) AS count
+            FROM detections
+            JOIN snapshots ON snapshots.id = detections.snapshot_id
+            {where}
+        """
+        with self._lock:
+            row = self._connection.execute(query, tuple(params)).fetchone()
+        return int(row["count"])
 
     def list_detections(
         self,
@@ -438,8 +537,13 @@ class SQLiteMetadataStore:
         camera_id: str | None = None,
         since: datetime | None = None,
         limit: int = 50,
+        offset: int = 0,
+        confidence_min: float | None = None,
     ) -> list[dict[str, object]]:
-        query = """
+        where, params = self._detection_where_clause(
+            camera_id=camera_id, since=since, confidence_min=confidence_min
+        )
+        query = f"""
             SELECT
                 detections.label,
                 detections.score,
@@ -453,17 +557,10 @@ class SQLiteMetadataStore:
                 snapshots.stored_at
             FROM detections
             JOIN snapshots ON snapshots.id = detections.snapshot_id
-            WHERE 1 = 1
+            {where}
+            ORDER BY snapshots.stored_at DESC LIMIT ? OFFSET ?
         """
-        params: list[object] = []
-        if camera_id is not None:
-            query += " AND snapshots.camera_id = ?"
-            params.append(camera_id)
-        if since is not None:
-            query += " AND snapshots.stored_at >= ?"
-            params.append(since.astimezone(timezone.utc).isoformat())
-        query += " ORDER BY snapshots.stored_at DESC LIMIT ?"
-        params.append(limit)
+        params.extend([limit, offset])
 
         with self._lock:
             rows = self._connection.execute(query, tuple(params)).fetchall()

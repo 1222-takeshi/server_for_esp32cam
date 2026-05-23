@@ -16,6 +16,21 @@ _DEVICE_ID_RE = re.compile(rf"[A-Za-z0-9_\-]{{1,{DEVICE_ID_MAX_LENGTH}}}")
 
 server = Blueprint("server", __name__)
 
+_PAGINATION_LIMIT_MAX = 200
+_PAGINATION_LIMIT_DEFAULT = 50
+
+
+def _parse_pagination() -> tuple[int, int] | tuple[None, None]:
+    """Returns (limit, offset) or (None, None) on error."""
+    try:
+        limit = int(request.args.get("limit", _PAGINATION_LIMIT_DEFAULT))
+        offset = int(request.args.get("offset", 0))
+    except ValueError:
+        return None, None
+    if limit < 1 or limit > _PAGINATION_LIMIT_MAX or offset < 0:
+        return None, None
+    return limit, offset
+
 
 def _storage() -> Storage:
     return current_app.extensions["storage"]
@@ -186,8 +201,23 @@ def upload_file():
 @server.route("/files")
 def list_files():
     try:
-        files = _metadata_store().list_recent_snapshots()
-        return render_template("files.html", files=files)
+        page = max(1, int(request.args.get("page", 1)))
+    except ValueError:
+        page = 1
+    limit = _PAGINATION_LIMIT_DEFAULT
+    offset = (page - 1) * limit
+    try:
+        store = _metadata_store()
+        total = store.count_snapshots()
+        files = store.list_recent_snapshots(limit=limit, offset=offset)
+        total_pages = max(1, (total + limit - 1) // limit)
+        return render_template(
+            "files.html",
+            files=files,
+            page=page,
+            total_pages=total_pages,
+            total=total,
+        )
     except Exception as exc:  # pragma: no cover
         current_app.logger.error("Error listing files: %s", exc)
         return jsonify({"message": "Error listing files"}), 500
@@ -306,13 +336,37 @@ def api_camera_snapshots(camera_id: str):
     camera = _metadata_store().get_camera(camera_id)
     if camera is None:
         return jsonify({"message": "Camera not found"}), 404
+
+    limit, offset = _parse_pagination()
+    if limit is None:
+        return jsonify({"message": "Invalid pagination parameters"}), 400
+
+    since, until = None, None
+    since_raw = request.args.get("since")
+    until_raw = request.args.get("until")
+    if since_raw:
+        try:
+            since = _parse_captured_at(since_raw)
+        except ValueError:
+            return jsonify({"message": "Invalid since parameter"}), 400
+    if until_raw:
+        try:
+            until = _parse_captured_at(until_raw)
+        except ValueError:
+            return jsonify({"message": "Invalid until parameter"}), 400
+
+    store = _metadata_store()
+    total = store.count_camera_snapshots(camera_id, since=since, until=until)
+    snapshots = store.list_camera_snapshots(
+        camera_id, limit=limit, offset=offset, since=since, until=until
+    )
     return jsonify(
         {
             "camera_id": camera_id,
-            "snapshots": [
-                _serialize_snapshot(snapshot)
-                for snapshot in _metadata_store().list_camera_snapshots(camera_id, limit=50)
-            ],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "snapshots": [_serialize_snapshot(s) for s in snapshots],
         }
     )
 
@@ -328,8 +382,33 @@ def api_detections():
         except ValueError:
             return jsonify({"message": "Invalid since parameter"}), 400
 
-    detections = _metadata_store().list_detections(camera_id=camera_id, since=since)
-    return jsonify({"detections": detections})
+    confidence_min = None
+    confidence_raw = request.args.get("confidence_min")
+    if confidence_raw is not None:
+        try:
+            confidence_min = float(confidence_raw)
+            if not (0.0 <= confidence_min <= 1.0):
+                raise ValueError
+        except ValueError:
+            return jsonify({"message": "Invalid confidence_min parameter"}), 400
+
+    limit, offset = _parse_pagination()
+    if limit is None:
+        return jsonify({"message": "Invalid pagination parameters"}), 400
+
+    store = _metadata_store()
+    total = store.count_detections(camera_id=camera_id, since=since, confidence_min=confidence_min)
+    detections = store.list_detections(
+        camera_id=camera_id, since=since, limit=limit, offset=offset, confidence_min=confidence_min
+    )
+    return jsonify(
+        {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "detections": detections,
+        }
+    )
 
 
 @server.route("/api/status_update", methods=["POST"])
