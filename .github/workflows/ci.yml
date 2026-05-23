@@ -11,6 +11,9 @@ on:
       - "perf/**"
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -47,7 +50,8 @@ jobs:
       - name: Prepare config.h for CI
         run: cp examples/esp32cam_snapshot_upload/config.h.example examples/esp32cam_snapshot_upload/config.h
       - name: Compile ESP32-CAM example
-        uses: arduino/compile-sketches@v1
+        # arduino/compile-sketches v1.1.2
+        uses: arduino/compile-sketches@25426ace8a446e747a3d3d7a9da759a6925613aa
         with:
           fqbn: esp32:esp32:esp32cam
           platforms: |
