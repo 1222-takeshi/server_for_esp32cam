@@ -726,3 +726,73 @@ def test_patch_camera_rejects_whitespace_only_display_name(client):
 
     assert response.status_code == 400
     assert "display_name" in response.get_json()["message"]
+
+
+def test_delete_camera_removes_camera(client):
+    client.post("/api/status_update", json={"device_id": "cam-delete"}, content_type="application/json")
+
+    response = client.delete("/api/cameras/cam-delete")
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["message"] == "Camera deleted"
+    assert body["camera_id"] == "cam-delete"
+    assert body["storage_deleted"] is False
+
+
+def test_delete_camera_returns_404_for_unknown_camera(client):
+    response = client.delete("/api/cameras/nonexistent-cam")
+
+    assert response.status_code == 404
+
+
+def test_delete_camera_removes_associated_snapshots(client):
+    client.post(
+        "/upload",
+        data=b"\xff\xd8jpeg",
+        headers={
+            "Content-Type": "image/jpeg",
+            "X-Device-Id": "cam-delete-snap",
+            "X-Captured-At": "2026-01-01T12:00:00Z",
+        },
+    )
+
+    client.delete("/api/cameras/cam-delete-snap")
+
+    snapshots_response = client.get("/api/cameras/cam-delete-snap/snapshots")
+    assert snapshots_response.status_code == 404
+
+
+def test_delete_camera_with_delete_files_removes_storage(client, app):
+    client.post(
+        "/upload",
+        data=b"\xff\xd8jpeg",
+        headers={
+            "Content-Type": "image/jpeg",
+            "X-Device-Id": "cam-delete-files",
+            "X-Captured-At": "2026-01-01T12:00:00Z",
+        },
+    )
+    upload_dir = app.extensions["storage"].upload_dir
+    camera_dir = upload_dir / "cam-delete-files"
+    assert camera_dir.exists()
+
+    response = client.delete("/api/cameras/cam-delete-files?delete_files=true")
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["storage_deleted"] is True
+    assert not camera_dir.exists()
+
+
+def test_delete_camera_removes_associated_device_logs(client):
+    client.post(
+        "/api/log_error",
+        json={"device_id": "cam-delete-logs", "message": "test log"},
+        content_type="application/json",
+    )
+
+    client.delete("/api/cameras/cam-delete-logs")
+
+    logs_response = client.get("/api/cameras/cam-delete-logs/logs")
+    assert logs_response.status_code == 404
