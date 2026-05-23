@@ -222,6 +222,35 @@ def test_apply_retention_ignores_stale_candidates_that_were_already_deleted(tmp_
     assert result.deleted_bytes == 0
 
 
+def test_delete_camera_files_removes_camera_directory(tmp_path):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+    storage.save_image(
+        b"\xff\xd8jpeg",
+        "image/jpeg",
+        device_id="cam-to-delete",
+        captured_at=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc),
+    )
+    camera_dir = tmp_path / "uploads" / "cam-to-delete"
+    assert camera_dir.exists()
+
+    storage.delete_camera_files("cam-to-delete")
+
+    assert not camera_dir.exists()
+
+
+def test_delete_camera_files_does_nothing_for_missing_directory(tmp_path):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+
+    storage.delete_camera_files("nonexistent-cam")
+
+
+def test_delete_camera_files_rejects_path_traversal(tmp_path):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+
+    with pytest.raises(ValueError):
+        storage.delete_camera_files("../secret")
+
+
 def test_apply_retention_deletes_oldest_images_until_under_max_bytes(tmp_path):
     storage = LocalFilesystemStorage(tmp_path / "uploads")
     captured_at = datetime(2026, 5, 9, 12, 0, tzinfo=timezone.utc)

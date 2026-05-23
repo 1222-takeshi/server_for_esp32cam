@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -96,6 +97,9 @@ class Storage(Protocol):
         now: datetime | None = None,
         preserve_relative_paths: set[str] | None = None,
     ) -> StorageRetentionResult:
+        ...
+
+    def delete_camera_files(self, camera_id: str) -> None:
         ...
 
 
@@ -245,6 +249,13 @@ class LocalFilesystemStorage:
 
     def read_image_by_relative_path(self, relative_path: str) -> bytes:
         return self._resolve_relative_path(relative_path).read_bytes()
+
+    def delete_camera_files(self, camera_id: str) -> None:
+        camera_dir = self._camera_image_dir(camera_id).parent.resolve()
+        if camera_dir == self.upload_dir or self.upload_dir not in camera_dir.parents:
+            raise ValueError(f"camera_id resolves outside upload_dir: {camera_id!r}")
+        if camera_dir.exists() and camera_dir.is_dir():
+            shutil.rmtree(camera_dir)
 
     def _delete_image(self, image: StoredImage) -> int:
         path = self._resolve_relative_path(image.relative_path)
