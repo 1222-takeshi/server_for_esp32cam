@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
+import pytest
+
 from script.events import SnapshotEventPublisher
 from script.metadata import SnapshotRecord
-from script.websocket_hub import WebSocketHub
+from script.websocket_hub import ConnectionLimitExceeded, WebSocketHub
 
 
 class FakeWebSocket:
@@ -87,3 +89,40 @@ def test_websocket_hub_removes_socket_when_send_fails():
 
     assert broken_ws.messages == []
     assert len(healthy_ws.messages) == 2
+
+
+def test_websocket_hub_rejects_connection_when_limit_reached():
+    publisher = SnapshotEventPublisher()
+    hub = WebSocketHub(publisher, max_connections=2)
+
+    hub.connect(FakeWebSocket())
+    hub.connect(FakeWebSocket())
+
+    with pytest.raises(ConnectionLimitExceeded):
+        hub.connect(FakeWebSocket())
+
+
+def test_websocket_hub_frees_slot_on_disconnect():
+    publisher = SnapshotEventPublisher()
+    hub = WebSocketHub(publisher, max_connections=1)
+
+    disconnect = hub.connect(FakeWebSocket())
+    disconnect()
+
+    # After disconnect the slot is free and a new connection should succeed
+    hub.connect(FakeWebSocket())
+
+
+def test_websocket_hub_tracks_active_connections():
+    publisher = SnapshotEventPublisher()
+    hub = WebSocketHub(publisher)
+
+    assert hub.active_connections == 0
+    d1 = hub.connect(FakeWebSocket())
+    assert hub.active_connections == 1
+    d2 = hub.connect(FakeWebSocket())
+    assert hub.active_connections == 2
+    d1()
+    assert hub.active_connections == 1
+    d2()
+    assert hub.active_connections == 0
