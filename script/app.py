@@ -92,7 +92,9 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.extensions["storage_retention_policy"] = storage_retention_policy
     app.extensions["upload_metrics"] = upload_metrics
     app.register_blueprint(server)
-    register_websocket_routes(app, snapshot_event_publisher)
+    register_websocket_routes(
+        app, snapshot_event_publisher, max_connections=app.config["MAX_WS_CONNECTIONS"]
+    )
 
     @app.errorhandler(RequestEntityTooLarge)
     def handle_request_entity_too_large(_error):
