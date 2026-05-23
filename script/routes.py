@@ -18,6 +18,7 @@ server = Blueprint("server", __name__)
 
 _PAGINATION_LIMIT_MAX = 200
 _PAGINATION_LIMIT_DEFAULT = 50
+_PAGINATION_OFFSET_MAX = 10_000_000
 
 
 def _parse_pagination() -> tuple[int, int] | tuple[None, None]:
@@ -27,7 +28,7 @@ def _parse_pagination() -> tuple[int, int] | tuple[None, None]:
         offset = int(request.args.get("offset", 0))
     except ValueError:
         return None, None
-    if limit < 1 or limit > _PAGINATION_LIMIT_MAX or offset < 0:
+    if limit < 1 or limit > _PAGINATION_LIMIT_MAX or offset < 0 or offset > _PAGINATION_OFFSET_MAX:
         return None, None
     return limit, offset
 
@@ -201,7 +202,7 @@ def upload_file():
 @server.route("/files")
 def list_files():
     try:
-        page = max(1, int(request.args.get("page", 1)))
+        page = min(max(1, int(request.args.get("page", 1))), 200_000)
     except ValueError:
         page = 1
     limit = _PAGINATION_LIMIT_DEFAULT
@@ -374,6 +375,8 @@ def api_camera_snapshots(camera_id: str):
 @server.route("/api/detections")
 def api_detections():
     camera_id = request.args.get("camera_id")
+    if camera_id is not None and _validate_device_id(camera_id):
+        return jsonify({"message": "Invalid camera_id parameter"}), 400
     since_raw = request.args.get("since")
     since = None
     if since_raw:
