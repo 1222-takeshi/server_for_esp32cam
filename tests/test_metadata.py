@@ -265,3 +265,66 @@ def test_list_camera_summaries_latest_detection_at_is_set_when_detection_exists(
 
     assert summary.latest_detection_at is not None
     assert summary.latest_detection_at == now
+
+
+def test_delete_camera_cascades_snapshots(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    store.record_snapshot(
+        _stored_image(
+            name="img.jpg",
+            relative_path="cam-a/images/img.jpg",
+            camera_id="cam-a",
+            captured_at=now,
+            stored_at=now,
+        )
+    )
+
+    store.delete_camera("cam-a")
+
+    assert store.get_camera("cam-a") is None
+    assert store.list_camera_snapshots("cam-a") == []
+
+
+def test_migrate_schema_adds_cascade_to_existing_db(tmp_path):
+    import sqlite3
+
+    db_path = tmp_path / "legacy.sqlite3"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        PRAGMA foreign_keys = ON;
+        CREATE TABLE cameras (
+            camera_id TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL,
+            expected_interval_seconds INTEGER NOT NULL,
+            first_seen_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TABLE snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT NOT NULL UNIQUE,
+            relative_path TEXT NOT NULL UNIQUE,
+            size INTEGER NOT NULL,
+            camera_id TEXT,
+            captured_at TEXT,
+            stored_at TEXT NOT NULL,
+            inference_status TEXT NOT NULL,
+            inference_error TEXT,
+            FOREIGN KEY(camera_id) REFERENCES cameras(camera_id)
+        );
+        INSERT INTO cameras VALUES ('cam-x', 'Cam X', 300, '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00', 1);
+        INSERT INTO snapshots VALUES (NULL, 'img.jpg', 'cam-x/images/img.jpg', 100, 'cam-x', NULL, '2026-01-01T00:00:00+00:00', 'pending', NULL);
+        """
+    )
+    conn.close()
+
+    store = SQLiteMetadataStore(db_path)
+
+    row = store._connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='snapshots'"
+    ).fetchone()
+    assert "ON DELETE CASCADE" in row["sql"].upper()
+    assert store.get_camera("cam-x") is not None
+    assert len(store.list_camera_snapshots("cam-x")) == 1
