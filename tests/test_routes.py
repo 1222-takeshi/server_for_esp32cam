@@ -737,6 +737,7 @@ def test_delete_camera_removes_camera(client):
     body = response.get_json()
     assert body["message"] == "Camera deleted"
     assert body["camera_id"] == "cam-delete"
+    assert body["storage_deleted"] is False
 
 
 def test_delete_camera_returns_404_for_unknown_camera(client):
@@ -779,6 +780,8 @@ def test_delete_camera_with_delete_files_removes_storage(client, app):
     response = client.delete("/api/cameras/cam-delete-files?delete_files=true")
 
     assert response.status_code == 200
+    body = response.get_json()
+    assert body["storage_deleted"] is True
     assert not camera_dir.exists()
 
 

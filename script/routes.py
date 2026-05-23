@@ -228,13 +228,17 @@ def api_delete_camera(camera_id: str):
     if not deleted:
         return jsonify({"message": "Camera not found"}), 404
 
+    current_app.logger.info("Camera deleted: camera_id=%s delete_files=%s", camera_id, delete_files)
+
+    storage_deleted = False
     if delete_files:
         try:
             _storage().delete_camera_files(camera_id)
-        except Exception as exc:  # pragma: no cover
-            current_app.logger.warning("Failed to delete storage for camera %s: %s", camera_id, exc)
+            storage_deleted = True
+        except Exception as exc:
+            current_app.logger.error("Storage deletion failed for camera %s: %s", camera_id, exc)
 
-    return jsonify({"message": "Camera deleted", "camera_id": camera_id}), 200
+    return jsonify({"message": "Camera deleted", "camera_id": camera_id, "storage_deleted": storage_deleted}), 200
 
 
 @server.route("/api/cameras/<camera_id>", methods=["PATCH"])
