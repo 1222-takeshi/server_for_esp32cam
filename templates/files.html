@@ -5,8 +5,24 @@
 <div class="page">
   <div class="page-header">
     <h1 class="page-title">Snapshots</h1>
-    <p class="page-sub">All stored images, newest first.</p>
+    <p class="page-sub">All stored images, newest first. {{ total }} total.</p>
   </div>
+
+  {% if total_pages > 1 %}
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+    {% if page > 1 %}
+    <a href="{{ url_for('server.list_files', page=page-1) }}" class="btn btn-sm">← Previous</a>
+    {% else %}
+    <span class="btn btn-sm" style="opacity:0.4;cursor:default;">← Previous</span>
+    {% endif %}
+    <span style="font-size:12px;color:var(--text-3);">Page {{ page }} / {{ total_pages }}</span>
+    {% if page < total_pages %}
+    <a href="{{ url_for('server.list_files', page=page+1) }}" class="btn btn-sm">Next →</a>
+    {% else %}
+    <span class="btn btn-sm" style="opacity:0.4;cursor:default;">Next →</span>
+    {% endif %}
+  </div>
+  {% endif %}
 
   {% if files %}
   <div class="card">
