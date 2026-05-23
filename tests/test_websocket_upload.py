@@ -83,3 +83,20 @@ def test_upload_metrics_track_frames_bytes_errors_and_disconnects(app):
     assert metrics["errors"] == 1
     assert metrics["last_error"] == "Expected binary JPEG payload"
     assert metrics["last_frame_at"] is not None
+
+
+def test_upload_rejects_oversized_payload(app):
+    max_bytes = app.config["MAX_CONTENT_LENGTH"]
+    oversized = b"\xff\xd8" + b"x" * max_bytes  # valid JPEG header but too large
+    websocket = FakeUploadWebSocket([oversized, None])
+
+    with app.app_context():
+        _handle_binary_upload_connection(websocket, camera_id="esp32cam-01")
+        metrics = app.extensions["upload_metrics"].snapshot("esp32cam-01")
+
+    import json
+    response = json.loads(websocket.sent[0])
+    assert response["type"] == "snapshot.error"
+    assert response["message"] == "Payload too large"
+    assert metrics["errors"] == 1
+    assert metrics["frames_received"] == 0

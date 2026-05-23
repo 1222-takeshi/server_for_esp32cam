@@ -9,7 +9,7 @@ from flask_sock import Sock
 from script.events import SnapshotEventPublisher
 from script.retention import apply_upload_retention
 from script.routes import _looks_like_jpeg, _serialize_snapshot, _validate_device_id
-from script.websocket_hub import WebSocketHub, WebSocketLike
+from script.websocket_hub import ConnectionLimitExceeded, WebSocketHub, WebSocketLike
 
 
 def _keep_connection_open(websocket: WebSocketLike) -> None:
@@ -69,6 +69,10 @@ def _handle_binary_upload_connection(websocket: WebSocketLike, *, camera_id: str
                 error_message = "Expected binary JPEG payload"
                 metrics.record_error(camera_id, error_message)
                 response = {"type": "snapshot.error", "message": error_message}
+            elif len(message) > current_app.config["MAX_CONTENT_LENGTH"]:
+                error_message = "Payload too large"
+                metrics.record_error(camera_id, error_message)
+                response = {"type": "snapshot.error", "message": error_message}
             else:
                 response = handle_binary_snapshot_upload(message, camera_id=camera_id)
                 if response.get("type") == "snapshot.error":
@@ -78,13 +82,19 @@ def _handle_binary_upload_connection(websocket: WebSocketLike, *, camera_id: str
         metrics.record_disconnect(camera_id)
 
 
-def register_websocket_routes(app: Flask, publisher: SnapshotEventPublisher) -> WebSocketHub:
-    hub = WebSocketHub(publisher)
+def register_websocket_routes(
+    app: Flask, publisher: SnapshotEventPublisher, *, max_connections: int = 50
+) -> WebSocketHub:
+    hub = WebSocketHub(publisher, max_connections=max_connections)
     sock = Sock(app)
 
     @sock.route("/ws/snapshots")
     def snapshots(websocket):
-        disconnect = hub.connect(websocket)
+        try:
+            disconnect = hub.connect(websocket)
+        except ConnectionLimitExceeded:
+            websocket.send(json.dumps({"type": "error", "message": "Too many connections"}))
+            return
         try:
             _keep_connection_open(websocket)
         finally:
@@ -95,7 +105,11 @@ def register_websocket_routes(app: Flask, publisher: SnapshotEventPublisher) -> 
         if _validate_device_id(camera_id):
             websocket.send(json.dumps({"type": "error", "message": "Invalid camera_id"}))
             return
-        disconnect = hub.connect(websocket, camera_id=camera_id)
+        try:
+            disconnect = hub.connect(websocket, camera_id=camera_id)
+        except ConnectionLimitExceeded:
+            websocket.send(json.dumps({"type": "error", "message": "Too many connections"}))
+            return
         try:
             _keep_connection_open(websocket)
         finally:
