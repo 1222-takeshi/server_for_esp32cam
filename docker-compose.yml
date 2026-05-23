@@ -1,0 +1,16 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - uploads:/app/uploads
+      - data:/app/data
+    env_file:
+      - path: .env
+        required: false
+    restart: unless-stopped
+
+volumes:
+  uploads:
+  data:
