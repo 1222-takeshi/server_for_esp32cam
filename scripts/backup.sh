@@ -36,6 +36,8 @@ fi
 mkdir -p "$BACKUP_DIR"
 
 DEST="${BACKUP_DIR}/esp32cam_$(date +%Y%m%d).sqlite3"
+# Restrict new file permissions to owner-only before SQLite creates the backup file.
+umask 077
 # Use printf to pass the path to .backup, avoiding shell expansion inside the dot-command.
 sqlite3 "$DB_PATH" "$(printf '.backup %s' "$DEST")"
 chmod 600 "$DEST"
