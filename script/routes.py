@@ -11,7 +11,7 @@ from script.retention import apply_upload_retention
 from script.storage import Storage
 
 DEVICE_ID_MAX_LENGTH = 128
-_DEVICE_ID_RE = re.compile(r"[A-Za-z0-9_\-]{1,128}")
+_DEVICE_ID_RE = re.compile(rf"[A-Za-z0-9_\-]{{1,{DEVICE_ID_MAX_LENGTH}}}")
 
 server = Blueprint("server", __name__)
 
@@ -188,7 +188,7 @@ def list_files():
         return render_template("files.html", files=files)
     except Exception as exc:  # pragma: no cover
         current_app.logger.error("Error listing files: %s", exc)
-        return jsonify({"message": "Error listing files", "error": str(exc)}), 500
+        return jsonify({"message": "Error listing files"}), 500
 
 
 @server.route("/files/<filename>")
@@ -203,7 +203,7 @@ def get_file(filename: str):
         return jsonify({"message": "File not found"}), 404
     except Exception as exc:  # pragma: no cover
         current_app.logger.error("Error retrieving file: %s", exc)
-        return jsonify({"message": "Error retrieving file", "error": str(exc)}), 500
+        return jsonify({"message": "Error retrieving file"}), 500
 
 
 @server.route("/cameras")
@@ -214,6 +214,8 @@ def list_cameras():
 
 @server.route("/cameras/<camera_id>")
 def camera_detail(camera_id: str):
+    if _validate_device_id(camera_id):
+        return jsonify({"message": "Camera not found"}), 404
     camera = _metadata_store().get_camera(camera_id)
     if camera is None:
         return jsonify({"message": "Camera not found"}), 404
@@ -235,6 +237,8 @@ def api_cameras():
 
 @server.route("/api/cameras/<camera_id>", methods=["DELETE"])
 def api_delete_camera(camera_id: str):
+    if _validate_device_id(camera_id):
+        return jsonify({"message": "Camera not found"}), 404
     delete_files = request.args.get("delete_files", "false").lower() == "true"
     deleted = _metadata_store().delete_camera(camera_id)
     if not deleted:
@@ -255,6 +259,8 @@ def api_delete_camera(camera_id: str):
 
 @server.route("/api/cameras/<camera_id>", methods=["PATCH"])
 def api_patch_camera(camera_id: str):
+    if _validate_device_id(camera_id):
+        return jsonify({"message": "Camera not found"}), 404
     body = request.get_json(silent=True) or {}
     display_name = body.get("display_name")
     expected_interval_seconds = body.get("expected_interval_seconds")
@@ -284,11 +290,15 @@ def api_patch_camera(camera_id: str):
 
 @server.route("/api/cameras/<camera_id>/upload-metrics")
 def api_camera_upload_metrics(camera_id: str):
+    if _validate_device_id(camera_id):
+        return jsonify({"message": "Camera not found"}), 404
     return jsonify(current_app.extensions["upload_metrics"].snapshot(camera_id))
 
 
 @server.route("/api/cameras/<camera_id>/snapshots")
 def api_camera_snapshots(camera_id: str):
+    if _validate_device_id(camera_id):
+        return jsonify({"message": "Camera not found"}), 404
     camera = _metadata_store().get_camera(camera_id)
     if camera is None:
         return jsonify({"message": "Camera not found"}), 404
@@ -361,6 +371,8 @@ def api_log_error():
 
 @server.route("/api/cameras/<camera_id>/logs")
 def api_camera_logs(camera_id: str):
+    if _validate_device_id(camera_id):
+        return jsonify({"message": "Camera not found"}), 404
     camera = _metadata_store().get_camera(camera_id)
     if camera is None:
         return jsonify({"message": "Camera not found"}), 404
