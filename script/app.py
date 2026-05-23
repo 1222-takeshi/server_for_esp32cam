@@ -11,6 +11,7 @@ from script.detector import DisabledDetector, TFLiteCpuDetector
 from script.events import SnapshotEventPublisher
 from script.inference import InferenceService
 from script.metadata import SQLiteMetadataStore
+from script.auth import validate_auth_config
 from script.routes import server
 from script.storage import LocalFilesystemStorage, StorageRetentionPolicy
 from script.upload_metrics import UploadMetricsRegistry
@@ -58,6 +59,8 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     if test_config:
         app.config.update(test_config)
+
+    validate_auth_config(app)
 
     storage_backend = app.config.get("STORAGE_BACKEND", "local")
     if storage_backend != "local":
