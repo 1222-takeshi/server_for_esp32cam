@@ -101,7 +101,22 @@ def test_upload_rejects_too_long_device_id(client):
     )
 
     assert response.status_code == 400
-    assert response.get_json()["message"] == "device_id is too long"
+    assert response.get_json()["message"] == "device_id contains invalid characters or exceeds maximum length"
+
+
+def test_upload_rejects_invalid_device_id_chars(client):
+    response = client.post(
+        "/upload",
+        data=b"\xff\xd8jpeg",
+        headers={
+            "Content-Type": "image/jpeg",
+            "X-Device-Id": "cam; DROP TABLE cameras--",
+            "X-Captured-At": "2026-03-11T12:34:56Z",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["message"] == "device_id contains invalid characters or exceeds maximum length"
 
 
 def test_upload_rejects_invalid_captured_at_metadata(client):
@@ -494,7 +509,18 @@ def test_status_update_rejects_too_long_device_id(client):
     )
 
     assert response.status_code == 400
-    assert response.get_json()["message"] == "device_id is too long"
+    assert response.get_json()["message"] == "device_id contains invalid characters or exceeds maximum length"
+
+
+def test_status_update_rejects_invalid_device_id_chars(client):
+    response = client.post(
+        "/api/status_update",
+        json={"device_id": "cam/../etc/passwd"},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["message"] == "device_id contains invalid characters or exceeds maximum length"
 
 
 def test_log_error_records_device_log(client):
@@ -559,7 +585,18 @@ def test_log_error_rejects_too_long_device_id(client):
     )
 
     assert response.status_code == 400
-    assert response.get_json()["message"] == "device_id is too long"
+    assert response.get_json()["message"] == "device_id contains invalid characters or exceeds maximum length"
+
+
+def test_log_error_rejects_invalid_device_id_chars(client):
+    response = client.post(
+        "/api/log_error",
+        json={"device_id": "cam<script>alert(1)</script>", "message": "test"},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["message"] == "device_id contains invalid characters or exceeds maximum length"
 
 
 def test_log_error_rejects_too_long_message(client):
