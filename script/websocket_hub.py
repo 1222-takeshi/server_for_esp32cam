@@ -47,7 +47,12 @@ class WebSocketHub:
                     unsubscribe()
                 raise
 
-        unsubscribe = self._publisher.subscribe(send_event, camera_id=camera_id)
+        try:
+            unsubscribe = self._publisher.subscribe(send_event, camera_id=camera_id)
+        except Exception:
+            with self._lock:
+                self._active_count -= 1
+            raise
 
         def disconnect() -> None:
             with self._lock:

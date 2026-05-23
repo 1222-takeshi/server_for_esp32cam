@@ -120,7 +120,15 @@ def register_websocket_routes(
         if _validate_device_id(camera_id):
             websocket.send(json.dumps({"type": "error", "message": "Invalid camera_id"}))
             return
-        _handle_binary_upload_connection(websocket, camera_id=camera_id)
+        try:
+            disconnect = hub.connect(websocket, camera_id=camera_id)
+        except ConnectionLimitExceeded:
+            websocket.send(json.dumps({"type": "error", "message": "Too many connections"}))
+            return
+        try:
+            _handle_binary_upload_connection(websocket, camera_id=camera_id)
+        finally:
+            disconnect()
 
     app.extensions["sock"] = sock
     app.extensions["websocket_hub"] = hub
