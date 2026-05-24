@@ -1019,3 +1019,61 @@ def test_api_detections_invalid_confidence_min_returns_400(client):
 def test_api_detections_confidence_min_out_of_range_returns_400(client):
     response = client.get("/api/detections?confidence_min=1.5")
     assert response.status_code == 400
+
+
+def test_api_camera_snapshots_export_json(client):
+    client.post(
+        "/upload",
+        data=b"\xff\xd8" + b"\x00" * 100,
+        content_type="image/jpeg",
+        headers={"X-Device-Id": "cam-export", "X-Captured-At": "2026-01-01T00:00:00Z"},
+    )
+
+    response = client.get("/api/cameras/cam-export/snapshots?export=json")
+
+    assert response.status_code == 200
+    assert response.content_type == "application/json"
+    body = response.get_json()
+    assert body["camera_id"] == "cam-export"
+    assert "count" in body
+    assert "snapshots" in body
+    assert body["count"] == len(body["snapshots"])
+    assert body["count"] >= 1
+    assert "total" not in body
+
+
+def test_api_detections_export_csv(app):
+    from script.detector import Detection
+
+    fake_det = FakePersonDetector([Detection(label="person", score=0.9, x1=0.1, y1=0.1, x2=0.5, y2=0.9)])
+    inference = app.extensions["inference_service"]
+    original_detector = inference.detector
+    inference.detector = fake_det
+
+    with app.test_client() as c:
+        c.post(
+            "/upload",
+            data=b"\xff\xd8" + b"\x00" * 100,
+            content_type="image/jpeg",
+            headers={"X-Device-Id": "cam-csv", "X-Captured-At": "2026-01-01T00:00:00Z"},
+        )
+        response = c.get("/api/detections?export=csv")
+
+    inference.detector = original_detector
+
+    assert response.status_code == 200
+    assert "text/csv" in response.content_type
+    assert "attachment" in response.headers.get("Content-Disposition", "")
+    lines = response.data.decode().splitlines()
+    assert lines[0] == "camera_id,filename,captured_at,stored_at,label,score,x1,y1,x2,y2"
+    assert len(lines) >= 2
+
+
+def test_api_detections_export_csv_empty(client):
+    response = client.get("/api/detections?export=csv")
+
+    assert response.status_code == 200
+    assert "text/csv" in response.content_type
+    lines = response.data.decode().splitlines()
+    assert lines[0] == "camera_id,filename,captured_at,stored_at,label,score,x1,y1,x2,y2"
+    assert len(lines) == 1
