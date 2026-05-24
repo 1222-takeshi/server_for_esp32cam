@@ -31,6 +31,70 @@ def test_healthz_returns_ok(client):
     assert response.get_json() == {"status": "ok"}
 
 
+def test_healthz_ready_returns_ready(client):
+    response = client.get("/healthz/ready")
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["status"] == "ready"
+    assert body["db"] == "ok"
+    assert body["storage"] == "ok"
+    assert body["disk_free_mb"] >= 0
+    assert body["inference_worker"] == "running"
+
+
+def test_healthz_ready_db_failure(app):
+    with app.test_client() as c:
+        with patch("script.routes._metadata_store") as mock_store:
+            mock_store.return_value.ping.side_effect = Exception("db error")
+            response = c.get("/healthz/ready")
+
+    assert response.status_code == 503
+    body = response.get_json()
+    assert body["status"] == "degraded"
+    assert "error:" in body["db"]
+
+
+def test_healthz_ready_storage_failure(app):
+    with app.test_client() as c:
+        with patch("script.routes.Path.write_bytes", side_effect=OSError("disk full")):
+            response = c.get("/healthz/ready")
+
+    assert response.status_code == 503
+    body = response.get_json()
+    assert body["status"] == "degraded"
+    assert "error:" in body["storage"]
+
+
+def test_healthz_ready_low_disk(client):
+    usage = type("usage", (), {"free": 100, "total": 10_000, "used": 9_900})()
+    with patch("script.routes.shutil.disk_usage", return_value=usage):
+        response = client.get("/healthz/ready")
+
+    assert response.status_code == 503
+    body = response.get_json()
+    assert body["status"] == "degraded"
+    assert body["disk_free_mb"] == 0
+
+
+def test_healthz_ready_inference_worker_stopped(app):
+    with app.test_client() as c:
+        inference_svc = app.extensions["inference_service"]
+        original_mode = inference_svc.mode
+        inference_svc.mode = "async"
+        inference_svc._worker = None
+        try:
+            response = c.get("/healthz/ready")
+        finally:
+            inference_svc.mode = original_mode
+            inference_svc._worker = None
+
+    assert response.status_code == 503
+    body = response.get_json()
+    assert body["status"] == "degraded"
+    assert body["inference_worker"] == "stopped"
+
+
 def test_upload_accepts_jpeg_and_returns_metadata(client):
     payload = b"\xff\xd8\xff\xe0fake-jpeg"
 
