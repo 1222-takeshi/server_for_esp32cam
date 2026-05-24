@@ -1126,3 +1126,58 @@ def test_api_detections_export_csv_requires_auth(tmp_path):
         )
         assert response.status_code == 200
         assert "text/csv" in response.content_type
+
+
+def test_camera_detail_includes_recent_logs(client):
+    client.post(
+        "/upload",
+        data=b"\xff\xd8\xff\xe0" + b"\x00" * 100,
+        content_type="image/jpeg",
+        headers={"X-Device-Id": "cam-log-detail", "X-Captured-At": "2026-01-01T00:00:00Z"},
+    )
+    client.post(
+        "/api/log_error",
+        json={"device_id": "cam-log-detail", "level": "error", "message": "sensor fail"},
+        content_type="application/json",
+    )
+
+    response = client.get("/cameras/cam-log-detail")
+
+    assert response.status_code == 200
+    assert b"Recent Logs" in response.data
+    assert b"sensor fail" in response.data
+    assert b"error" in response.data
+
+
+def test_camera_detail_shows_no_logs_message(client):
+    client.post(
+        "/upload",
+        data=b"\xff\xd8\xff\xe0" + b"\x00" * 100,
+        content_type="image/jpeg",
+        headers={"X-Device-Id": "cam-nologs", "X-Captured-At": "2026-01-01T00:00:00Z"},
+    )
+
+    response = client.get("/cameras/cam-nologs")
+
+    assert response.status_code == 200
+    assert b"Recent Logs" in response.data
+    assert b"No logs yet" in response.data
+
+
+def test_index_shows_error_warning_for_camera_with_recent_errors(client):
+    client.post(
+        "/upload",
+        data=b"\xff\xd8\xff\xe0" + b"\x00" * 100,
+        content_type="image/jpeg",
+        headers={"X-Device-Id": "cam-warn", "X-Captured-At": "2026-01-01T00:00:00Z"},
+    )
+    client.post(
+        "/api/log_error",
+        json={"device_id": "cam-warn", "level": "error", "message": "critical failure"},
+        content_type="application/json",
+    )
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert b"Error log in the last hour" in response.data

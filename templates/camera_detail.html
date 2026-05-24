@@ -124,6 +124,32 @@
       </div>
     </div>
   </div>
+
+  <!-- ── Recent Logs ── -->
+  <div class="card" style="margin-top:20px;">
+    <div style="padding:14px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;">
+      <span style="font-size:13px;font-weight:600;color:var(--text-1);">Recent Logs</span>
+      <span style="font-size:11px;color:var(--text-4);">last 10 entries</span>
+    </div>
+    <div style="padding:8px 0;">
+      {% if recent_logs %}
+      {% for log in recent_logs %}
+      <div style="display:flex;gap:12px;align-items:baseline;padding:7px 16px;border-bottom:1px solid var(--border);font-size:12px;">
+        <span style="
+          flex-shrink:0;width:60px;text-align:center;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:600;
+          {% if log.level == 'error' or log.level == 'critical' %}background:rgba(239,68,68,.15);color:var(--red);
+          {% elif log.level == 'warning' %}background:rgba(234,179,8,.15);color:#b45309;
+          {% else %}background:var(--bg-hover);color:var(--text-3);{% endif %}
+        ">{{ log.level }}</span>
+        <span style="flex:1;color:var(--text-2);word-break:break-word;">{{ log.message }}</span>
+        <span style="flex-shrink:0;color:var(--text-4);font-family:var(--mono);white-space:nowrap;">{{ log.logged_at | jst('%H:%M:%S JST') }}</span>
+      </div>
+      {% endfor %}
+      {% else %}
+      <div class="empty" style="padding:28px 0;font-size:13px;">No logs yet</div>
+      {% endif %}
+    </div>
+  </div>
 </div>
 
 <style>

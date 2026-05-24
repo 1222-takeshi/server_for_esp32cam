@@ -750,6 +750,17 @@ class SQLiteMetadataStore:
             logged_at=_parse_datetime(row["logged_at"]) or effective_logged_at,
         )
 
+    def camera_ids_with_recent_errors(self, *, since: datetime) -> set[str]:
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT DISTINCT camera_id FROM device_logs
+                WHERE level IN ('error', 'critical') AND logged_at >= ?
+                """,
+                (since.astimezone(timezone.utc).isoformat(),),
+            ).fetchall()
+        return {row["camera_id"] for row in rows}
+
     def list_device_logs(self, camera_id: str, *, limit: int = 50) -> list[DeviceLogRecord]:
         with self._lock:
             rows = self._connection.execute(
