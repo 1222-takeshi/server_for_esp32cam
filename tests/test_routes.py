@@ -1077,3 +1077,52 @@ def test_api_detections_export_csv_empty(client):
     lines = response.data.decode().splitlines()
     assert lines[0] == "camera_id,filename,captured_at,stored_at,label,score,x1,y1,x2,y2"
     assert len(lines) == 1
+
+
+def test_api_camera_snapshots_export_json_requires_auth(tmp_path):
+    from script.app import create_app
+
+    secure_app = create_app({
+        "TESTING": True,
+        "UPLOAD_DIR": tmp_path / "uploads",
+        "DB_PATH": tmp_path / "db.sqlite3",
+        "INFERENCE_MODE": "sync",
+        "ADMIN_TOKEN": "secret-token",
+    })
+    with secure_app.test_client() as c:
+        c.post(
+            "/upload",
+            data=b"\xff\xd8\xff\xe0" + b"\x00" * 100,
+            content_type="image/jpeg",
+            headers={"X-Device-Id": "cam1", "X-Captured-At": "2026-01-01T00:00:00Z"},
+        )
+        response = c.get("/api/cameras/cam1/snapshots?export=json")
+        assert response.status_code == 401
+
+        response = c.get(
+            "/api/cameras/cam1/snapshots?export=json",
+            headers={"Authorization": "Bearer secret-token"},
+        )
+        assert response.status_code == 200
+
+
+def test_api_detections_export_csv_requires_auth(tmp_path):
+    from script.app import create_app
+
+    secure_app = create_app({
+        "TESTING": True,
+        "UPLOAD_DIR": tmp_path / "uploads",
+        "DB_PATH": tmp_path / "db.sqlite3",
+        "INFERENCE_MODE": "sync",
+        "ADMIN_TOKEN": "secret-token",
+    })
+    with secure_app.test_client() as c:
+        response = c.get("/api/detections?export=csv")
+        assert response.status_code == 401
+
+        response = c.get(
+            "/api/detections?export=csv",
+            headers={"Authorization": "Bearer secret-token"},
+        )
+        assert response.status_code == 200
+        assert "text/csv" in response.content_type

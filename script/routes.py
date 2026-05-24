@@ -10,7 +10,7 @@ import uuid
 
 from flask import Blueprint, Response, current_app, jsonify, render_template, request, send_file
 
-from script.auth import require_admin_auth, require_device_auth
+from script.auth import check_admin_token, require_admin_auth, require_device_auth
 from script.metadata import ALLOWED_LOG_LEVELS, CameraSummary, DeviceLogRecord, SnapshotRecord
 from script.retention import apply_upload_retention
 from script.storage import Storage
@@ -432,6 +432,10 @@ def api_camera_snapshots(camera_id: str):
     store = _metadata_store()
 
     if request.args.get("export") == "json":
+        auth_header = request.headers.get("Authorization", "")
+        token = auth_header.removeprefix("Bearer ") if auth_header.startswith("Bearer ") else None
+        if not check_admin_token(token):
+            return jsonify({"message": "Unauthorized"}), 401
         all_snapshots = store.list_camera_snapshots(
             camera_id, limit=_EXPORT_ROW_LIMIT, offset=0, since=since, until=until
         )
@@ -484,6 +488,10 @@ def api_detections():
     store = _metadata_store()
 
     if request.args.get("export") == "csv":
+        auth_header = request.headers.get("Authorization", "")
+        token = auth_header.removeprefix("Bearer ") if auth_header.startswith("Bearer ") else None
+        if not check_admin_token(token):
+            return jsonify({"message": "Unauthorized"}), 401
         rows = store.list_detections(
             camera_id=camera_id,
             since=since,
@@ -494,11 +502,15 @@ def api_detections():
         buf = StringIO()
         writer = csv.writer(buf)
         writer.writerow(["camera_id", "filename", "captured_at", "stored_at", "label", "score", "x1", "y1", "x2", "y2"])
+        _csv_danger = frozenset("=+-@\t\r")
         for d in rows:
             bbox = d["bbox"]
+            label = str(d["label"] or "")
+            if label and label[0] in _csv_danger:
+                label = "'" + label
             writer.writerow([
                 d["camera_id"], d["filename"], d["captured_at"], d["stored_at"],
-                d["label"], round(d["score"], 4),
+                label, round(d["score"], 4),
                 bbox[0], bbox[1], bbox[2], bbox[3],
             ])
         return Response(
