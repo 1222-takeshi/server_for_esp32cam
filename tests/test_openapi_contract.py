@@ -92,20 +92,26 @@ def test_contract_upload_wrong_content_type_returns_4xx(client):
     assert _is_json(r)
 
 
+_TEST_DEVICE_KEY = "test-device-key-do-not-use"
+_TEST_ADMIN_TOKEN = "test-admin-token-do-not-use"
+
+
 def test_contract_upload_with_api_key_set_rejects_missing_key(app):
-    app.config["DEVICE_API_KEY"] = "secret-key"
-    client = app.test_client()
-    r = client.post(
-        "/upload",
-        data=MINIMAL_JPEG,
-        content_type="image/jpeg",
-        headers={"X-Device-Id": "contract-cam", "X-Captured-At": "2026-01-01T00:00:00Z"},
-    )
-    assert r.status_code == 401
-    assert _is_json(r)
-    body = r.get_json()
-    assert "message" in body
-    app.config.pop("DEVICE_API_KEY")
+    app.config["DEVICE_API_KEY"] = _TEST_DEVICE_KEY
+    try:
+        client = app.test_client()
+        r = client.post(
+            "/upload",
+            data=MINIMAL_JPEG,
+            content_type="image/jpeg",
+            headers={"X-Device-Id": "contract-cam", "X-Captured-At": "2026-01-01T00:00:00Z"},
+        )
+        assert r.status_code == 401
+        assert _is_json(r)
+        body = r.get_json()
+        assert "message" in body
+    finally:
+        app.config.pop("DEVICE_API_KEY", None)
 
 
 # ---------------------------------------------------------------------------
@@ -128,55 +134,63 @@ def test_contract_cameras_list_returns_list(client):
 
 
 def test_contract_delete_camera_without_auth_returns_401(app):
-    app.config["ADMIN_TOKEN"] = "admin-secret"
-    c = app.test_client()
-    r = c.delete("/api/cameras/nonexistent")
-    assert r.status_code == 401
-    assert _is_json(r)
-    body = r.get_json()
-    assert "message" in body
-    app.config.pop("ADMIN_TOKEN")
+    app.config["ADMIN_TOKEN"] = _TEST_ADMIN_TOKEN
+    try:
+        c = app.test_client()
+        r = c.delete("/api/cameras/nonexistent")
+        assert r.status_code == 401
+        assert _is_json(r)
+        body = r.get_json()
+        assert "message" in body
+    finally:
+        app.config.pop("ADMIN_TOKEN", None)
 
 
 def test_contract_delete_camera_with_auth_not_found_returns_404(app):
-    app.config["ADMIN_TOKEN"] = "admin-secret"
-    c = app.test_client()
-    r = c.delete(
-        "/api/cameras/nonexistent",
-        headers={"Authorization": "Bearer admin-secret"},
-    )
-    assert r.status_code == 404
-    assert _is_json(r)
-    body = r.get_json()
-    assert "message" in body
-    app.config.pop("ADMIN_TOKEN")
+    app.config["ADMIN_TOKEN"] = _TEST_ADMIN_TOKEN
+    try:
+        c = app.test_client()
+        r = c.delete(
+            "/api/cameras/nonexistent",
+            headers={"Authorization": f"Bearer {_TEST_ADMIN_TOKEN}"},
+        )
+        assert r.status_code == 404
+        assert _is_json(r)
+        body = r.get_json()
+        assert "message" in body
+    finally:
+        app.config.pop("ADMIN_TOKEN", None)
 
 
 def test_contract_patch_camera_without_auth_returns_401(app):
-    app.config["ADMIN_TOKEN"] = "admin-secret"
-    c = app.test_client()
-    r = c.patch(
-        "/api/cameras/nonexistent",
-        json={"display_name": "New Name"},
-    )
-    assert r.status_code == 401
-    body = r.get_json()
-    assert "message" in body
-    app.config.pop("ADMIN_TOKEN")
+    app.config["ADMIN_TOKEN"] = _TEST_ADMIN_TOKEN
+    try:
+        c = app.test_client()
+        r = c.patch(
+            "/api/cameras/nonexistent",
+            json={"display_name": "New Name"},
+        )
+        assert r.status_code == 401
+        body = r.get_json()
+        assert "message" in body
+    finally:
+        app.config.pop("ADMIN_TOKEN", None)
 
 
 def test_contract_patch_camera_with_auth_not_found_returns_404(app):
-    app.config["ADMIN_TOKEN"] = "admin-secret"
-    c = app.test_client()
-    r = c.patch(
-        "/api/cameras/nonexistent",
-        json={"display_name": "New Name"},
-        headers={"Authorization": "Bearer admin-secret"},
-    )
-    assert r.status_code == 404
-    body = r.get_json()
-    assert "message" in body
-    app.config.pop("ADMIN_TOKEN")
+    app.config["ADMIN_TOKEN"] = _TEST_ADMIN_TOKEN
+    try:
+        c = app.test_client()
+        r = c.patch(
+            "/api/cameras/nonexistent",
+            json={"display_name": "New Name"},
+            headers={"Authorization": f"Bearer {_TEST_ADMIN_TOKEN}"},
+        )
+        assert r.status_code == 404
+        body = r.get_json()
+        assert "message" in body
+    finally:
+        app.config.pop("ADMIN_TOKEN", None)
 
 
 # ---------------------------------------------------------------------------
