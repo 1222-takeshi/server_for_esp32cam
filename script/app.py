@@ -6,12 +6,16 @@ from zoneinfo import ZoneInfo
 from flask import Flask, jsonify
 from werkzeug.exceptions import RequestEntityTooLarge
 
+from flask import g, request
+
 from script.config import Config
 from script.detector import DisabledDetector, TFLiteCpuDetector
 from script.events import SnapshotEventPublisher
 from script.inference import InferenceService
+from script.logging_config import configure_logging
 from script.metadata import SQLiteMetadataStore
 from script.auth import validate_auth_config
+from script.prometheus_metrics import AppMetrics
 from script.routes import server
 from script.storage import LocalFilesystemStorage, StorageRetentionPolicy
 from script.upload_metrics import UploadMetricsRegistry
@@ -61,6 +65,7 @@ def create_app(test_config: dict | None = None) -> Flask:
     if test_config:
         app.config.update(test_config)
 
+    configure_logging(app)
     validate_auth_config(app)
 
     storage_backend = app.config.get("STORAGE_BACKEND", "local")
@@ -99,6 +104,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         max_bytes=app.config["STORAGE_RETENTION_MAX_BYTES"] or None,
     )
     upload_metrics = UploadMetricsRegistry()
+    app_metrics = AppMetrics()
 
     app.extensions["storage"] = storage
     app.extensions["metadata_store"] = metadata_store
@@ -107,7 +113,23 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.extensions["snapshot_event_publisher"] = snapshot_event_publisher
     app.extensions["storage_retention_policy"] = storage_retention_policy
     app.extensions["upload_metrics"] = upload_metrics
+    app.extensions["app_metrics"] = app_metrics
     app.register_blueprint(server)
+
+    @app.before_request
+    def _before_request():
+        metrics = app.extensions.get("app_metrics")
+        if metrics is not None:
+            g._request_start = metrics.start_request_timer()
+
+    @app.after_request
+    def _after_request(response):
+        metrics = app.extensions.get("app_metrics")
+        start = getattr(g, "_request_start", None)
+        if metrics is not None and start is not None:
+            endpoint = request.endpoint or "unknown"
+            metrics.finish_request(start, request.method, endpoint, response.status_code)
+        return response
     register_websocket_routes(
         app, snapshot_event_publisher, max_connections=app.config["MAX_WS_CONNECTIONS"]
     )

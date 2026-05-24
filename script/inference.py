@@ -59,6 +59,9 @@ class InferenceService:
             return
         self._queue.put(snapshot_id)
 
+    def queue_length(self) -> int:
+        return self._queue.qsize()
+
     def _worker_loop(self) -> None:
         while not self._stop_event.is_set():
             try:

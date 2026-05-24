@@ -30,3 +30,4 @@ class Config:
     ADMIN_TOKEN = os.getenv("ESP32CAM_ADMIN_TOKEN", "")
     WEBHOOK_URL = os.getenv("ESP32CAM_WEBHOOK_URL", "")
     WEBHOOK_MIN_SCORE = float(os.getenv("ESP32CAM_WEBHOOK_MIN_SCORE", "0.5"))
+    LOG_FORMAT = os.getenv("ESP32CAM_LOG_FORMAT", "text")
