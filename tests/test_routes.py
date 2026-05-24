@@ -52,7 +52,7 @@ def test_healthz_ready_db_failure(app):
     assert response.status_code == 503
     body = response.get_json()
     assert body["status"] == "degraded"
-    assert "error:" in body["db"]
+    assert body["db"] == "error"
 
 
 def test_healthz_ready_storage_failure(app):
@@ -63,7 +63,7 @@ def test_healthz_ready_storage_failure(app):
     assert response.status_code == 503
     body = response.get_json()
     assert body["status"] == "degraded"
-    assert "error:" in body["storage"]
+    assert body["storage"] == "error"
 
 
 def test_healthz_ready_low_disk(client):

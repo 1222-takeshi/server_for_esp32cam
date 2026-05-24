@@ -163,7 +163,8 @@ def healthz_ready():
         _metadata_store().ping()
         checks["db"] = "ok"
     except Exception as exc:
-        checks["db"] = f"error:{exc}"
+        current_app.logger.error("healthz/ready: db check failed: %s", exc)
+        checks["db"] = "error"
         degraded = True
 
     upload_dir = Path(current_app.config["UPLOAD_DIR"])
@@ -174,7 +175,8 @@ def healthz_ready():
         probe.unlink()
         checks["storage"] = "ok"
     except Exception as exc:
-        checks["storage"] = f"error:{exc}"
+        current_app.logger.error("healthz/ready: storage check failed: %s", exc)
+        checks["storage"] = "error"
         degraded = True
 
     try:
@@ -189,8 +191,7 @@ def healthz_ready():
 
     inference_svc = current_app.extensions.get("inference_service")
     if inference_svc is not None and inference_svc.mode == "async":
-        worker = inference_svc._worker
-        alive = worker is not None and worker.is_alive()
+        alive = inference_svc.worker_is_alive()
         checks["inference_worker"] = "running" if alive else "stopped"
         if not alive:
             degraded = True

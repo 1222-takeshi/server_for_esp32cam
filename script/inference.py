@@ -62,6 +62,9 @@ class InferenceService:
     def queue_length(self) -> int:
         return self._queue.qsize()
 
+    def worker_is_alive(self) -> bool:
+        return self._worker is not None and self._worker.is_alive()
+
     def _worker_loop(self) -> None:
         while not self._stop_event.is_set():
             try:
