@@ -31,6 +31,7 @@ jobs:
       - name: Pytest with coverage
         run: |
           PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest \
+            -p pytest_cov \
             --cov=script \
             --cov-report=xml \
             --cov-report=term-missing \
