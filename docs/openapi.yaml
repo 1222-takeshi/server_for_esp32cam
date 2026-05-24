@@ -1,0 +1,846 @@
+openapi: 3.1.0
+info:
+  title: server_for_esp32cam API
+  description: |
+    REST API for the ESP32-CAM snapshot server.
+
+    ## Authentication
+
+    Two token types are used:
+
+    | Header | Scope |
+    |--------|-------|
+    | `X-API-Key: <DEVICE_API_KEY>` | Device endpoints (`/upload`, `/api/status_update`, `/api/log_error`, WebSocket upload) |
+    | `Authorization: Bearer <ADMIN_TOKEN>` | Admin endpoints (`DELETE /api/cameras/*`, `PATCH /api/cameras/*`, `/api/cameras/*/logs`, `/metrics`, export endpoints) |
+
+    When the corresponding environment variable is not set, the check is skipped.
+
+  version: "1.0.0"
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+
+tags:
+  - name: health
+    description: Server health and readiness probes
+  - name: upload
+    description: JPEG snapshot upload from devices
+  - name: cameras
+    description: Camera registry and metadata
+  - name: snapshots
+    description: Snapshot query and export
+  - name: detections
+    description: Person detection results
+  - name: device
+    description: Device heartbeat and log ingestion
+  - name: files
+    description: Raw image file serving
+  - name: metrics
+    description: Prometheus metrics
+
+paths:
+  /healthz:
+    get:
+      summary: Liveness probe
+      description: Returns `{"status":"ok"}` when the server process is alive.
+      tags: [health]
+      responses:
+        "200":
+          description: Server is alive
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthzOk"
+
+  /healthz/ready:
+    get:
+      summary: Readiness probe
+      description: |
+        Checks DB connectivity, upload directory write access, disk space,
+        and async inference worker status.
+        Returns `200 ready` when all checks pass, `503 degraded` otherwise.
+      tags: [health]
+      responses:
+        "200":
+          description: All checks passed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthzReady"
+        "503":
+          description: One or more checks failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthzReady"
+
+  /upload:
+    post:
+      summary: Upload a JPEG snapshot
+      description: |
+        Accepts a raw JPEG body from a device.
+        The image is validated with Pillow, stored on disk, and queued for inference.
+        Images exceeding `UPLOAD_MAX_IMAGE_DIMENSION` (default 4096 px) are rejected.
+        Rate-limited to `UPLOAD_RATE_LIMIT` (default 10/min) per device API key.
+      tags: [upload]
+      security:
+        - deviceApiKey: []
+      parameters:
+        - in: header
+          name: X-Device-Id
+          required: true
+          schema:
+            type: string
+            maxLength: 128
+            pattern: "^[A-Za-z0-9_\\-]+$"
+          example: esp32cam-front-door
+        - in: header
+          name: X-Captured-At
+          required: true
+          schema:
+            type: string
+            format: date-time
+          example: "2026-03-11T12:34:56Z"
+      requestBody:
+        required: true
+        content:
+          image/jpeg:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: Image stored successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadSuccess"
+        "400":
+          description: Invalid request (missing data, bad headers, invalid JPEG)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          description: Missing or invalid device API key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "413":
+          description: Payload too large (exceeds MAX_CONTENT_LENGTH)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "415":
+          description: Content-Type is not image/jpeg
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "429":
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+
+  /api/cameras:
+    get:
+      summary: List all cameras
+      description: Returns all known cameras with their latest health status.
+      tags: [cameras]
+      responses:
+        "200":
+          description: Camera list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CameraList"
+
+  /api/cameras/{camera_id}:
+    delete:
+      summary: Delete a camera
+      description: |
+        Removes the camera record and all associated snapshots from the database.
+        Pass `?delete_files=true` to also remove image files from disk.
+      tags: [cameras]
+      security:
+        - adminToken: []
+      parameters:
+        - $ref: "#/components/parameters/camera_id"
+        - in: query
+          name: delete_files
+          schema:
+            type: boolean
+            default: false
+          description: Also delete stored image files
+      responses:
+        "200":
+          description: Camera deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteCameraSuccess"
+        "401":
+          description: Missing or invalid admin token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "404":
+          description: Camera not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+
+    patch:
+      summary: Update camera metadata
+      description: Updates `display_name` and/or `expected_interval_seconds` for the camera.
+      tags: [cameras]
+      security:
+        - adminToken: []
+      parameters:
+        - $ref: "#/components/parameters/camera_id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PatchCameraRequest"
+      responses:
+        "200":
+          description: Camera updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PatchCameraSuccess"
+        "400":
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          description: Missing or invalid admin token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "404":
+          description: Camera not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+
+  /api/cameras/{camera_id}/snapshots:
+    get:
+      summary: List snapshots for a camera
+      description: |
+        Returns a paginated list of snapshots for the given camera.
+        Pass `?export=json` with `Authorization: Bearer <ADMIN_TOKEN>` to export all snapshots as JSON (up to 10 000 rows).
+      tags: [snapshots]
+      parameters:
+        - $ref: "#/components/parameters/camera_id"
+        - $ref: "#/components/parameters/limit"
+        - $ref: "#/components/parameters/offset"
+        - in: query
+          name: since
+          schema:
+            type: string
+            format: date-time
+          description: Filter snapshots captured at or after this timestamp
+        - in: query
+          name: until
+          schema:
+            type: string
+            format: date-time
+          description: Filter snapshots captured before this timestamp
+        - in: query
+          name: export
+          schema:
+            type: string
+            enum: [json]
+          description: Export all matching snapshots as JSON (requires admin token)
+      responses:
+        "200":
+          description: Snapshot list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SnapshotList"
+        "400":
+          description: Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          description: Admin token required for export
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "404":
+          description: Camera not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+
+  /api/cameras/{camera_id}/upload-metrics:
+    get:
+      summary: Get upload metrics for a camera
+      description: Returns frame counts, byte totals, error counts, and connection state.
+      tags: [cameras]
+      parameters:
+        - $ref: "#/components/parameters/camera_id"
+      responses:
+        "200":
+          description: Upload metrics snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadMetrics"
+        "404":
+          description: Camera not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+
+  /api/cameras/{camera_id}/logs:
+    get:
+      summary: Get device logs for a camera
+      description: Returns the most recent device log entries for the given camera.
+      tags: [device]
+      security:
+        - adminToken: []
+      parameters:
+        - $ref: "#/components/parameters/camera_id"
+      responses:
+        "200":
+          description: Device log list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceLogList"
+        "401":
+          description: Missing or invalid admin token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "404":
+          description: Camera not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+
+  /api/detections:
+    get:
+      summary: List detections
+      description: |
+        Returns a paginated list of person-detection results across all cameras.
+        Pass `?export=csv` with `Authorization: Bearer <ADMIN_TOKEN>` to export as CSV (up to 10 000 rows).
+      tags: [detections]
+      parameters:
+        - in: query
+          name: camera_id
+          schema:
+            type: string
+          description: Filter by camera ID
+        - in: query
+          name: since
+          schema:
+            type: string
+            format: date-time
+          description: Filter detections since this timestamp
+        - in: query
+          name: confidence_min
+          schema:
+            type: number
+            minimum: 0.0
+            maximum: 1.0
+          description: Minimum detection confidence score
+        - $ref: "#/components/parameters/limit"
+        - $ref: "#/components/parameters/offset"
+        - in: query
+          name: export
+          schema:
+            type: string
+            enum: [csv]
+          description: Export matching detections as CSV (requires admin token)
+      responses:
+        "200":
+          description: Detection list or CSV file
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetectionList"
+            text/csv:
+              schema:
+                type: string
+        "400":
+          description: Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          description: Admin token required for export
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+
+  /api/status_update:
+    post:
+      summary: Device heartbeat
+      description: Records a heartbeat from a device, updating `last_seen_at`.
+      tags: [device]
+      security:
+        - deviceApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [device_id]
+              properties:
+                device_id:
+                  type: string
+                  maxLength: 128
+                  pattern: "^[A-Za-z0-9_\\-]+$"
+      responses:
+        "200":
+          description: Heartbeat recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusUpdateSuccess"
+        "400":
+          description: Invalid device_id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          description: Missing or invalid device API key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+
+  /api/log_error:
+    post:
+      summary: Ingest a device log entry
+      description: Stores a log message from a device for later review in the admin UI.
+      tags: [device]
+      security:
+        - deviceApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LogErrorRequest"
+      responses:
+        "201":
+          description: Log entry created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceLogEntry"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          description: Missing or invalid device API key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+
+  /files/{filename}:
+    get:
+      summary: Retrieve a stored image
+      description: Returns the raw JPEG bytes for the given filename.
+      tags: [files]
+      parameters:
+        - in: path
+          name: filename
+          required: true
+          schema:
+            type: string
+          example: esp32cam-front-door_20260311_123456_abc12.jpg
+      responses:
+        "200":
+          description: JPEG image
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: File not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+
+  /metrics:
+    get:
+      summary: Prometheus metrics
+      description: Returns Prometheus text-format metrics for upload totals and HTTP request counts.
+      tags: [metrics]
+      security:
+        - adminToken: []
+      responses:
+        "200":
+          description: Prometheus metrics
+          content:
+            text/plain:
+              schema:
+                type: string
+        "401":
+          description: Missing or invalid admin token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+
+components:
+  securitySchemes:
+    deviceApiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Set via `ESP32CAM_DEVICE_API_KEY`. Authentication is disabled when the variable is not set.
+    adminToken:
+      type: http
+      scheme: bearer
+      description: Set via `ESP32CAM_ADMIN_TOKEN`. Authentication is disabled when the variable is not set.
+
+  parameters:
+    camera_id:
+      in: path
+      name: camera_id
+      required: true
+      schema:
+        type: string
+        maxLength: 128
+        pattern: "^[A-Za-z0-9_\\-]+$"
+      example: esp32cam-front-door
+
+    limit:
+      in: query
+      name: limit
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+      description: Maximum number of items to return
+
+    offset:
+      in: query
+      name: offset
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+      description: Number of items to skip
+
+  schemas:
+    ErrorMessage:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+          example: "Camera not found"
+
+    HealthzOk:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+
+    HealthzReady:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ready, degraded]
+        db:
+          type: string
+          enum: [ok, error]
+        storage:
+          type: string
+          enum: [ok, error]
+        disk_free_mb:
+          type: integer
+        inference_worker:
+          type: string
+          enum: [running, stopped]
+
+    UploadSuccess:
+      type: object
+      properties:
+        message:
+          type: string
+          example: "File uploaded successfully"
+        filename:
+          type: string
+          example: "esp32cam-front-door_20260311_123456_abc12.jpg"
+        size:
+          type: integer
+          description: File size in bytes
+        device_id:
+          type: string
+          example: "esp32cam-front-door"
+        captured_at:
+          type: string
+          format: date-time
+        stored_at:
+          type: string
+          format: date-time
+
+    CameraSummary:
+      type: object
+      properties:
+        camera_id:
+          type: string
+        display_name:
+          type: string
+          nullable: true
+        last_seen_at:
+          type: string
+          format: date-time
+          nullable: true
+        snapshot_count:
+          type: integer
+        health:
+          type: string
+          enum: [healthy, stale, offline, unknown]
+        expected_interval_seconds:
+          type: integer
+
+    CameraList:
+      type: object
+      properties:
+        cameras:
+          type: array
+          items:
+            $ref: "#/components/schemas/CameraSummary"
+
+    DeleteCameraSuccess:
+      type: object
+      properties:
+        message:
+          type: string
+          example: "Camera deleted"
+        camera_id:
+          type: string
+        storage_deleted:
+          type: boolean
+
+    PatchCameraRequest:
+      type: object
+      properties:
+        display_name:
+          type: string
+          description: Human-readable name for the camera
+        expected_interval_seconds:
+          type: integer
+          minimum: 1
+          description: Expected upload interval in seconds (used for health calculation)
+
+    PatchCameraSuccess:
+      type: object
+      properties:
+        camera_id:
+          type: string
+        display_name:
+          type: string
+          nullable: true
+        expected_interval_seconds:
+          type: integer
+
+    SnapshotRecord:
+      type: object
+      properties:
+        id:
+          type: integer
+        filename:
+          type: string
+        camera_id:
+          type: string
+        size:
+          type: integer
+        captured_at:
+          type: string
+          format: date-time
+          nullable: true
+        stored_at:
+          type: string
+          format: date-time
+        inference_status:
+          type: string
+          enum: [pending, succeeded, failed, skipped]
+        inference_error:
+          type: string
+          nullable: true
+        person_detected:
+          type: boolean
+          nullable: true
+
+    SnapshotList:
+      type: object
+      properties:
+        camera_id:
+          type: string
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+        snapshots:
+          type: array
+          items:
+            $ref: "#/components/schemas/SnapshotRecord"
+
+    UploadMetrics:
+      type: object
+      properties:
+        camera_id:
+          type: string
+        connections:
+          type: integer
+        active_connections:
+          type: integer
+        disconnects:
+          type: integer
+        frames_received:
+          type: integer
+        bytes_received:
+          type: integer
+        errors:
+          type: integer
+        last_error:
+          type: string
+          nullable: true
+        last_frame_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    DetectionRecord:
+      type: object
+      properties:
+        camera_id:
+          type: string
+        filename:
+          type: string
+        captured_at:
+          type: string
+          format: date-time
+          nullable: true
+        stored_at:
+          type: string
+          format: date-time
+        label:
+          type: string
+        score:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+        bbox:
+          type: array
+          items:
+            type: number
+          minItems: 4
+          maxItems: 4
+          description: "[x1, y1, x2, y2] normalized coordinates"
+
+    DetectionList:
+      type: object
+      properties:
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+        detections:
+          type: array
+          items:
+            $ref: "#/components/schemas/DetectionRecord"
+
+    StatusUpdateSuccess:
+      type: object
+      properties:
+        message:
+          type: string
+          example: "Status updated"
+        camera_id:
+          type: string
+        last_seen_at:
+          type: string
+          format: date-time
+
+    LogErrorRequest:
+      type: object
+      required: [device_id, message]
+      properties:
+        device_id:
+          type: string
+          maxLength: 128
+          pattern: "^[A-Za-z0-9_\\-]+$"
+        level:
+          type: string
+          enum: [debug, info, warning, error, critical]
+          default: error
+        message:
+          type: string
+          maxLength: 2000
+
+    DeviceLogEntry:
+      type: object
+      properties:
+        id:
+          type: integer
+        camera_id:
+          type: string
+        level:
+          type: string
+          enum: [debug, info, warning, error, critical]
+        message:
+          type: string
+        logged_at:
+          type: string
+          format: date-time
+
+    DeviceLogList:
+      type: object
+      properties:
+        camera_id:
+          type: string
+        logs:
+          type: array
+          items:
+            $ref: "#/components/schemas/DeviceLogEntry"
