@@ -310,7 +310,7 @@ class SQLiteMetadataStore:
         return int(row["count"])
 
     def list_recent_snapshots(self, *, limit: int | None = None) -> list[SnapshotRecord]:
-        query = "SELECT * FROM snapshots ORDER BY stored_at DESC"
+        query = "SELECT * FROM snapshots ORDER BY stored_at DESC, id DESC"
         params: tuple[object, ...] = ()
         if limit is not None:
             query += " LIMIT ?"

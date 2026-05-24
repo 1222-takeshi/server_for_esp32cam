@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-import time
 
 UPLOAD_HEADERS = {
     "Content-Type": "image/jpeg",
@@ -174,7 +173,6 @@ def test_files_page_lists_latest_upload_first(client):
             "X-Captured-At": "2026-03-11T12:34:56Z",
         },
     ).get_json()
-    time.sleep(0.01)
     second = client.post(
         "/upload",
         data=b"\xff\xd8second-image",

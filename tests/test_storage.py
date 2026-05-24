@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import time
 from datetime import datetime, timezone
 
 import pytest
@@ -46,7 +45,10 @@ def test_storage_lists_latest_first(tmp_path):
         device_id="cam-a",
         captured_at=datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc),
     )
-    time.sleep(0.01)
+    # Pin mtime to a deterministic past time so ordering doesn't depend on wall-clock resolution
+    first_path = tmp_path / "uploads" / first.relative_path
+    past_ts = datetime(2026, 3, 11, 11, 59, 59, tzinfo=timezone.utc).timestamp()
+    os.utime(first_path, (past_ts, past_ts))
     second = storage.save_image(
         b"b",
         "image/jpeg",
