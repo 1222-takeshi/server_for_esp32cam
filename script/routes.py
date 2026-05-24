@@ -199,7 +199,8 @@ def upload_file():
         _check_disk_usage()
         metrics = current_app.extensions.get("app_metrics")
         if metrics is not None:
-            metrics.upload_total.labels(camera_id=stored.device_id or "unknown").inc()
+            # Use DB-derived camera_id to avoid unbounded label cardinality from headers
+            metrics.upload_total.labels(camera_id=snapshot.camera_id or "unknown").inc()
         current_app.logger.info("File uploaded successfully: %s", stored.name)
         return (
             jsonify(

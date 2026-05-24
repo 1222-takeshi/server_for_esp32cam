@@ -4,6 +4,8 @@ import time
 
 from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
 
+_KNOWN_HTTP_METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"})
+
 
 class AppMetrics:
     """Per-app Prometheus metric set using an isolated CollectorRegistry."""
@@ -51,9 +53,10 @@ class AppMetrics:
 
     def finish_request(self, start: float, method: str, endpoint: str, status: int) -> None:
         duration = time.perf_counter() - start
-        self.http_request_duration_seconds.labels(method=method, endpoint=endpoint).observe(
-            duration
-        )
+        safe_method = method if method in _KNOWN_HTTP_METHODS else "OTHER"
+        self.http_request_duration_seconds.labels(
+            method=safe_method, endpoint=endpoint
+        ).observe(duration)
         self.http_requests_total.labels(
-            method=method, endpoint=endpoint, status=str(status)
+            method=safe_method, endpoint=endpoint, status=str(status)
         ).inc()

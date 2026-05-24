@@ -68,6 +68,12 @@ def create_app(test_config: dict | None = None) -> Flask:
     configure_logging(app)
     validate_auth_config(app)
 
+    if not app.config.get("ADMIN_TOKEN", ""):
+        app.logger.warning(
+            "ESP32CAM_ADMIN_TOKEN is not set — /metrics and admin API endpoints are "
+            "accessible without authentication. Set a strong token in production."
+        )
+
     storage_backend = app.config.get("STORAGE_BACKEND", "local")
     if storage_backend != "local":
         raise ValueError(f"Unsupported storage backend: {storage_backend}")
@@ -120,12 +126,12 @@ def create_app(test_config: dict | None = None) -> Flask:
     def _before_request():
         metrics = app.extensions.get("app_metrics")
         if metrics is not None:
-            g._request_start = metrics.start_request_timer()
+            g._esp32cam_request_start = metrics.start_request_timer()
 
     @app.after_request
     def _after_request(response):
         metrics = app.extensions.get("app_metrics")
-        start = getattr(g, "_request_start", None)
+        start = getattr(g, "_esp32cam_request_start", None)
         if metrics is not None and start is not None:
             endpoint = request.endpoint or "unknown"
             metrics.finish_request(start, request.method, endpoint, response.status_code)
