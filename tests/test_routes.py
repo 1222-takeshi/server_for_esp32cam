@@ -849,6 +849,50 @@ def test_upload_logs_disk_warning_at_85_percent(client, caplog):
     assert any("Disk usage high" in r.message for r in caplog.records)
 
 
+# ---------------------------------------------------------------------------
+# Prometheus metrics endpoint
+# ---------------------------------------------------------------------------
+
+def test_metrics_endpoint_returns_prometheus_text(client):
+    client.post(
+        "/upload",
+        data=b"\xff\xd8jpeg",
+        headers={
+            "Content-Type": "image/jpeg",
+            "X-Device-Id": "cam-metrics",
+            "X-Captured-At": "2026-03-11T12:00:00Z",
+        },
+    )
+
+    response = client.get("/metrics")
+
+    assert response.status_code == 200
+    assert "text/plain" in response.content_type
+    body = response.get_data(as_text=True)
+    assert "esp32cam_upload_total" in body
+    assert 'camera_id="cam-metrics"' in body
+
+
+def test_metrics_endpoint_requires_admin_auth(app, client):
+    app.config["ADMIN_TOKEN"] = "secret-token"
+
+    response = client.get("/metrics")
+    assert response.status_code == 401
+
+    response = client.get("/metrics", headers={"Authorization": "Bearer secret-token"})
+    assert response.status_code == 200
+
+
+def test_metrics_endpoint_includes_http_request_count(client):
+    client.get("/healthz")
+    client.get("/healthz")
+
+    response = client.get("/metrics")
+    body = response.get_data(as_text=True)
+
+    assert "esp32cam_http_requests_total" in body
+
+
 def test_upload_logs_disk_error_at_95_percent(client, caplog):
     fake_usage = type("disk_usage", (), {"total": 100, "used": 96, "free": 4})()
     with patch("script.routes.shutil.disk_usage", return_value=fake_usage):

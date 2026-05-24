@@ -197,6 +197,10 @@ def upload_file():
         _snapshot_event_publisher().publish_snapshot_created(snapshot)
         apply_upload_retention(stored)
         _check_disk_usage()
+        metrics = current_app.extensions.get("app_metrics")
+        if metrics is not None:
+            # Use DB-derived camera_id to avoid unbounded label cardinality from headers
+            metrics.upload_total.labels(camera_id=snapshot.camera_id or "unknown").inc()
         current_app.logger.info("File uploaded successfully: %s", stored.name)
         return (
             jsonify(
@@ -485,3 +489,36 @@ def api_camera_logs(camera_id: str):
 
     logs = _metadata_store().list_device_logs(camera_id)
     return jsonify({"camera_id": camera_id, "logs": [_serialize_device_log(log) for log in logs]})
+
+
+@server.route("/metrics")
+@require_admin_auth
+def metrics():
+    from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+
+    app_metrics = current_app.extensions.get("app_metrics")
+    if app_metrics is None:
+        return jsonify({"message": "Metrics not available"}), 503
+
+    # Refresh gauges with current system state
+    upload_dir = current_app.config["UPLOAD_DIR"]
+    try:
+        usage = shutil.disk_usage(upload_dir)
+        app_metrics.storage_used_bytes.set(usage.used)
+    except OSError:
+        pass
+
+    inference_svc = current_app.extensions.get("inference_service")
+    if inference_svc is not None:
+        app_metrics.inference_queue_length.set(inference_svc.queue_length())
+
+    for summary in _metadata_store().list_camera_summaries():
+        cam = summary.camera
+        ts = cam.last_seen_at.timestamp() if cam.last_seen_at else 0
+        app_metrics.camera_last_seen_timestamp.labels(camera_id=cam.camera_id).set(ts)
+
+    from flask import Response
+    return Response(
+        generate_latest(app_metrics.registry),
+        mimetype=CONTENT_TYPE_LATEST,
+    )
