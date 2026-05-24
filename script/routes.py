@@ -661,3 +661,40 @@ def metrics():
         generate_latest(app_metrics.registry),
         mimetype=CONTENT_TYPE_LATEST,
     )
+
+
+@server.route("/api/openapi.yaml")
+def api_openapi_yaml():
+    spec_path = Path(__file__).resolve().parent.parent / "docs" / "openapi.yaml"
+    if not spec_path.is_file():
+        return jsonify({"message": "OpenAPI spec not found"}), 404
+    return Response(spec_path.read_text(encoding="utf-8"), mimetype="application/yaml")
+
+
+_SWAGGER_UI_HTML = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>API Docs — server_for_esp32cam</title>
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+</head>
+<body>
+<div id="swagger-ui"></div>
+<script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+<script>
+  SwaggerUIBundle({
+    url: "/api/openapi.yaml",
+    dom_id: "#swagger-ui",
+    presets: [SwaggerUIBundle.presets.apis, SwaggerUIBundle.SwaggerUIStandalonePreset],
+    layout: "BaseLayout",
+  });
+</script>
+</body>
+</html>
+"""
+
+
+@server.route("/api/docs")
+def api_docs():
+    return Response(_SWAGGER_UI_HTML, mimetype="text/html")

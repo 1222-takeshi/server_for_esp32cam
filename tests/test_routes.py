@@ -1197,3 +1197,23 @@ def test_index_shows_error_warning_for_camera_with_recent_errors(client):
 
     assert response.status_code == 200
     assert b"Error log in the last hour" in response.data
+
+
+# ---------------------------------------------------------------------------
+# OpenAPI / Swagger UI
+# ---------------------------------------------------------------------------
+
+def test_api_openapi_yaml_serves_spec(client):
+    response = client.get("/api/openapi.yaml")
+    assert response.status_code == 200
+    assert "application/yaml" in response.content_type
+    body = response.get_data(as_text=True)
+    assert "openapi:" in body
+    assert "/upload" in body
+
+
+def test_api_docs_serves_swagger_ui(client):
+    response = client.get("/api/docs")
+    assert response.status_code == 200
+    assert "text/html" in response.content_type
+    assert b"swagger-ui" in response.data
