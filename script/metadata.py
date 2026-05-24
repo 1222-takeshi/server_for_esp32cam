@@ -353,7 +353,7 @@ class SQLiteMetadataStore:
         if until is not None:
             query += " AND stored_at <= ?"
             params.append(until.astimezone(timezone.utc).isoformat())
-        query += " ORDER BY stored_at DESC"
+        query += " ORDER BY stored_at DESC, id DESC"
         if limit is not None:
             query += " LIMIT ? OFFSET ?"
             params.extend([limit, offset])
