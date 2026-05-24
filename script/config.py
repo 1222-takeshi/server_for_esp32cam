@@ -31,3 +31,6 @@ class Config:
     WEBHOOK_URL = os.getenv("ESP32CAM_WEBHOOK_URL", "")
     WEBHOOK_MIN_SCORE = float(os.getenv("ESP32CAM_WEBHOOK_MIN_SCORE", "0.5"))
     LOG_FORMAT = os.getenv("ESP32CAM_LOG_FORMAT", "text")
+    UPLOAD_RATE_LIMIT = os.getenv("ESP32CAM_UPLOAD_RATE_LIMIT", "10 per minute")
+    RATELIMIT_STORAGE_URI = os.getenv("ESP32CAM_RATELIMIT_STORAGE_URI", "memory://")
+    UPLOAD_MAX_IMAGE_DIMENSION = int(os.getenv("ESP32CAM_UPLOAD_MAX_IMAGE_DIMENSION", "4096"))

@@ -16,7 +16,7 @@ from script.logging_config import configure_logging
 from script.metadata import SQLiteMetadataStore
 from script.auth import validate_auth_config
 from script.prometheus_metrics import AppMetrics
-from script.routes import server
+from script.routes import limiter, server
 from script.storage import LocalFilesystemStorage, StorageRetentionPolicy
 from script.upload_metrics import UploadMetricsRegistry
 from script.webhook import DISABLED_NOTIFIER, WebhookNotifier
@@ -74,6 +74,12 @@ def create_app(test_config: dict | None = None) -> Flask:
             "accessible without authentication. Set a strong token in production."
         )
 
+    if not app.config.get("DEVICE_API_KEY", ""):
+        app.logger.warning(
+            "ESP32CAM_DEVICE_API_KEY is not set — /upload and device endpoints accept "
+            "requests without authentication. Set a strong key in production."
+        )
+
     storage_backend = app.config.get("STORAGE_BACKEND", "local")
     if storage_backend != "local":
         raise ValueError(f"Unsupported storage backend: {storage_backend}")
@@ -120,6 +126,7 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.extensions["storage_retention_policy"] = storage_retention_policy
     app.extensions["upload_metrics"] = upload_metrics
     app.extensions["app_metrics"] = app_metrics
+    limiter.init_app(app)
     app.register_blueprint(server)
 
     @app.before_request

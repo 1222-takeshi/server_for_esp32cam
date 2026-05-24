@@ -9,8 +9,10 @@ import shutil
 import uuid
 
 from flask import Blueprint, Response, current_app, jsonify, render_template, request, send_file
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
-from script.auth import check_admin_token, require_admin_auth, require_device_auth
+from script.auth import check_admin_token, check_device_api_key, require_admin_auth, require_device_auth
 from script.metadata import ALLOWED_LOG_LEVELS, CameraSummary, DeviceLogRecord, SnapshotRecord
 from script.retention import apply_upload_retention
 from script.storage import Storage
@@ -18,7 +20,19 @@ from script.storage import Storage
 DEVICE_ID_MAX_LENGTH = 128
 _DEVICE_ID_RE = re.compile(rf"[A-Za-z0-9_\-]{{1,{DEVICE_ID_MAX_LENGTH}}}")
 
+
+def _upload_rate_limit_key() -> str:
+    # Use the device API key as the rate limit identifier only when it is valid.
+    # An unvalidated key would allow unauthenticated clients to exhaust another
+    # device's rate limit bucket by spoofing its key header.
+    api_key = request.headers.get("X-API-Key")
+    if api_key and check_device_api_key(api_key):
+        return api_key
+    return get_remote_address()
+
+
 server = Blueprint("server", __name__)
+limiter = Limiter(key_func=_upload_rate_limit_key, default_limits=[])
 
 _PAGINATION_LIMIT_MAX = 200
 _PAGINATION_LIMIT_DEFAULT = 50
@@ -78,8 +92,21 @@ def _validate_device_id(device_id: str) -> str | None:
     return None
 
 
-def _looks_like_jpeg(data: bytes) -> bool:
-    return len(data) >= 4 and data.startswith(b"\xff\xd8")
+def _validate_jpeg_image(data: bytes) -> str | None:
+    """Returns None if the JPEG is valid, or an error message string if invalid."""
+    from PIL import Image, UnidentifiedImageError  # lazy import — Pillow is optional at import time
+
+    max_dim = current_app.config.get("UPLOAD_MAX_IMAGE_DIMENSION", 4096)
+    try:
+        with Image.open(BytesIO(data)) as img:
+            if img.width > max_dim or img.height > max_dim:
+                return f"Image dimensions exceed maximum ({img.width}x{img.height}, max {max_dim}px)"
+    except (UnidentifiedImageError, SyntaxError, ValueError, OSError):
+        return "Invalid or corrupted JPEG payload"
+    except Exception:
+        current_app.logger.warning("Unexpected error during JPEG validation")
+        return "Invalid or corrupted JPEG payload"
+    return None
 
 
 def _parse_captured_at(value: str) -> datetime:
@@ -209,6 +236,7 @@ def healthz_ready():
 
 
 @server.route("/upload", methods=["POST"])
+@limiter.limit(lambda: current_app.config.get("UPLOAD_RATE_LIMIT", "10 per minute"))
 @require_device_auth
 def upload_file():
     if not request.data:
@@ -219,9 +247,10 @@ def upload_file():
         current_app.logger.error("Unsupported content type: %s", request.content_type)
         return jsonify({"message": "Unsupported content type"}), 415
 
-    if not _looks_like_jpeg(request.data):
-        current_app.logger.error("Invalid JPEG payload received")
-        return jsonify({"message": "Invalid JPEG payload"}), 400
+    jpeg_error = _validate_jpeg_image(request.data)
+    if jpeg_error:
+        current_app.logger.error("JPEG validation failed: %s", jpeg_error)
+        return jsonify({"message": jpeg_error}), 400
 
     device_id = request.headers.get("X-Device-Id", "").strip()
     captured_at_raw = request.headers.get("X-Captured-At", "").strip()
@@ -238,7 +267,8 @@ def upload_file():
     try:
         captured_at = _parse_captured_at(captured_at_raw)
     except ValueError:
-        current_app.logger.error("Invalid captured_at metadata: %s", captured_at_raw)
+        safe_val = (captured_at_raw or "")[:64].replace("\n", "\\n").replace("\r", "\\r")
+        current_app.logger.error("Invalid captured_at metadata: %s", safe_val)
         return jsonify({"message": "Invalid captured_at metadata"}), 400
 
     try:
