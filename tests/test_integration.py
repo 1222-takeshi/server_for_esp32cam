@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 
 from script.app import create_app
+from tests.conftest import MINIMAL_JPEG
 
 
 @pytest.fixture()
@@ -14,6 +15,7 @@ def app(tmp_path):
             "UPLOAD_DIR": tmp_path / "uploads",
             "DB_PATH": tmp_path / "esp32cam.sqlite3",
             "INFERENCE_MODE": "sync",
+            "RATELIMIT_ENABLED": False,
         }
     )
 
@@ -31,7 +33,8 @@ def retention_app(tmp_path):
             "UPLOAD_DIR": tmp_path / "uploads",
             "DB_PATH": tmp_path / "esp32cam.sqlite3",
             "INFERENCE_MODE": "sync",
-            "STORAGE_RETENTION_MAX_BYTES": 200,
+            "RATELIMIT_ENABLED": False,
+            "STORAGE_RETENTION_MAX_BYTES": 1000,
         }
     )
 
@@ -41,7 +44,7 @@ def retention_client(retention_app):
     return retention_app.test_client()
 
 
-def _upload(client, *, device_id: str, captured_at: str, body: bytes = b"\xff\xd8img"):
+def _upload(client, *, device_id: str, captured_at: str, body: bytes = MINIMAL_JPEG):
     return client.post(
         "/upload",
         data=body,
@@ -141,7 +144,7 @@ def test_retention_deletes_old_images_but_protects_latest(retention_client):
         retention_client,
         device_id="cam-ret",
         captured_at="2026-01-01T00:00:00Z",
-        body=b"\xff\xd8" + b"x" * 110,
+        body=MINIMAL_JPEG,
     )
     assert resp1.status_code == 200
     snap1 = resp1.get_json()
@@ -150,7 +153,7 @@ def test_retention_deletes_old_images_but_protects_latest(retention_client):
         retention_client,
         device_id="cam-ret",
         captured_at="2026-01-01T01:00:00Z",
-        body=b"\xff\xd8" + b"y" * 110,
+        body=MINIMAL_JPEG,
     )
     assert resp2.status_code == 200
     snap2 = resp2.get_json()
@@ -168,7 +171,7 @@ def test_retention_does_not_delete_when_under_limit(retention_client):
         retention_client,
         device_id="cam-small",
         captured_at="2026-03-11T10:00:00Z",
-        body=b"\xff\xd8" + b"z" * 10,
+        body=MINIMAL_JPEG,
     )
     snap = resp.get_json()
 

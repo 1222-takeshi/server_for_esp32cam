@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from script.app import create_app
+from tests.conftest import MINIMAL_JPEG
 
 
 UPLOAD_HEADERS = {
@@ -39,7 +40,7 @@ def test_upload_rejects_non_jpeg_content_type(client):
 
 
 def test_upload_accepts_raw_jpeg_payload(client):
-    payload = b"\xff\xd8\xff\xe0fake-jpeg-data"
+    payload = MINIMAL_JPEG
 
     response = client.post("/upload", data=payload, headers=UPLOAD_HEADERS)
 
@@ -52,7 +53,7 @@ def test_upload_accepts_raw_jpeg_payload(client):
 
 
 def test_upload_marks_inference_skipped_when_detector_is_disabled(client):
-    payload = b"\xff\xd8\xff\xe0fake-jpeg-data"
+    payload = MINIMAL_JPEG
 
     response = client.post("/upload", data=payload, headers=UPLOAD_HEADERS)
 
@@ -80,7 +81,7 @@ def test_upload_marks_inference_failed_when_detector_configuration_is_invalid(tm
         }
     )
     client = app.test_client()
-    payload = b"\xff\xd8\xff\xe0fake-jpeg-data"
+    payload = MINIMAL_JPEG
 
     response = client.post("/upload", data=payload, headers=UPLOAD_HEADERS)
 
