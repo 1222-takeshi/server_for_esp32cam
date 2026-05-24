@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from io import BytesIO
 from datetime import datetime, timezone
+from pathlib import Path
 import re
 import shutil
+import uuid
 
 from flask import Blueprint, current_app, jsonify, render_template, request, send_file
 
@@ -150,6 +152,54 @@ def index():
 @server.route("/healthz")
 def healthz():
     return jsonify({"status": "ok"}), 200
+
+
+@server.route("/healthz/ready")
+def healthz_ready():
+    checks: dict[str, object] = {}
+    degraded = False
+
+    try:
+        _metadata_store().ping()
+        checks["db"] = "ok"
+    except Exception as exc:
+        current_app.logger.error("healthz/ready: db check failed: %s", exc)
+        checks["db"] = "error"
+        degraded = True
+
+    upload_dir = Path(current_app.config["UPLOAD_DIR"])
+    try:
+        probe = upload_dir / f".healthz-probe-{uuid.uuid4().hex}"
+        probe.write_bytes(b"\x00")
+        probe.read_bytes()
+        probe.unlink()
+        checks["storage"] = "ok"
+    except Exception as exc:
+        current_app.logger.error("healthz/ready: storage check failed: %s", exc)
+        checks["storage"] = "error"
+        degraded = True
+
+    try:
+        usage = shutil.disk_usage(upload_dir)
+        checks["disk_free_mb"] = usage.free // (1024 * 1024)
+        if usage.free / usage.total < 0.05:
+            degraded = True
+    except Exception as exc:
+        checks["disk_free_mb"] = -1
+        current_app.logger.warning("healthz/ready: disk_usage failed: %s", exc)
+        degraded = True
+
+    inference_svc = current_app.extensions.get("inference_service")
+    if inference_svc is not None and inference_svc.mode == "async":
+        alive = inference_svc.worker_is_alive()
+        checks["inference_worker"] = "running" if alive else "stopped"
+        if not alive:
+            degraded = True
+    else:
+        checks["inference_worker"] = "running"
+
+    status = "degraded" if degraded else "ready"
+    return jsonify({"status": status, **checks}), 503 if degraded else 200
 
 
 @server.route("/upload", methods=["POST"])
