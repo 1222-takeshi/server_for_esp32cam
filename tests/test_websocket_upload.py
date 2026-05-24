@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 from script.websocket_routes import _handle_binary_upload_connection, handle_binary_snapshot_upload
 from tests.conftest import MINIMAL_JPEG
@@ -107,7 +108,7 @@ def test_upload_ws_rate_limit_throttles_rapid_frames(app):
     app.config["UPLOAD_WS_MIN_FRAME_INTERVAL_SECONDS"] = 9999.0
     websocket = FakeUploadWebSocket([JPEG_BYTES, JPEG_BYTES, None])
 
-    with app.app_context():
+    with app.app_context(), patch("script.websocket_routes.time.monotonic", side_effect=[1.0, 2.0]):
         _handle_binary_upload_connection(websocket, camera_id="esp32cam-rate")
         metrics = app.extensions["upload_metrics"].snapshot("esp32cam-rate")
 

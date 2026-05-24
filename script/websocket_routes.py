@@ -63,7 +63,7 @@ def _handle_binary_upload_connection(websocket: WebSocketLike, *, camera_id: str
     metrics = current_app.extensions["upload_metrics"]
     metrics.record_connection(camera_id)
     min_interval = current_app.config.get("UPLOAD_WS_MIN_FRAME_INTERVAL_SECONDS", 1.0)
-    last_frame_at = 0.0
+    last_frame_at: float | None = None
     try:
         while True:
             message = receive()
@@ -80,7 +80,7 @@ def _handle_binary_upload_connection(websocket: WebSocketLike, *, camera_id: str
                 response = {"type": "snapshot.error", "message": error_message}
             else:
                 now = time.monotonic()
-                if now - last_frame_at < min_interval:
+                if last_frame_at is not None and now - last_frame_at < min_interval:
                     error_message = "Rate limit exceeded"
                     metrics.record_error(camera_id, error_message)
                     response = {"type": "snapshot.error", "message": error_message}

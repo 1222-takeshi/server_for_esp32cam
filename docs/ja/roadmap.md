@@ -9,6 +9,8 @@
 
 今後の拡張は、このスナップショット優先の本線を崩さない形で進めます。
 
+ペット監視 MVP、1週間連続稼働、Raspberry Pi Zero 候補、月額0円運用を前提にした詳細な導入判断と優先順位は [`docs/ja/business-scenarios.md`](business-scenarios.md) にまとめています。
+
 ---
 
 ## 導入シナリオと MVP KPI
@@ -98,6 +100,7 @@
 | ドキュメント | 内容 |
 |------------|------|
 | [`docs/ja/requirements.md`](requirements.md) | 機能・非機能要件と受け入れ基準 |
+| [`docs/ja/business-scenarios.md`](business-scenarios.md) | 事業・導入シナリオとKPI |
 | [`docs/ja/security.md`](security.md) | 脅威モデルと運用チェックリスト |
 | [`docs/ja/operations-runbook.md`](operations-runbook.md) | 運用 Runbook |
 | [`docs/deployment.md`](../deployment.md) | Docker デプロイガイド |
