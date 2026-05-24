@@ -306,6 +306,10 @@ class SQLiteMetadataStore:
             )
         return int(cursor.rowcount)
 
+    def ping(self) -> None:
+        with self._lock:
+            self._connection.execute("SELECT 1")
+
     def total_snapshot_count(self) -> int:
         with self._lock:
             row = self._connection.execute("SELECT COUNT(*) AS count FROM snapshots").fetchone()
