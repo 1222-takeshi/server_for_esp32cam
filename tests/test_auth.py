@@ -5,7 +5,6 @@ import logging
 import pytest
 
 from script.app import create_app
-from script.auth import validate_auth_config
 
 
 @pytest.fixture()

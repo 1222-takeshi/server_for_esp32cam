@@ -46,6 +46,7 @@
 セットアップ、使用方法、トラブルシューティング、今後の開発に関する詳細は `docs/ja` ディレクトリを参照してください。
 
 *   [要件](docs/ja/requirements.md)
+*   [事業・導入シナリオとKPI](docs/ja/business-scenarios.md) - ペット監視MVP、1週間連続稼働、Raspberry Pi Zero候補、0円運用方針を定義します。
 *   [セットアップとインストール](docs/ja/setup.md) - macOSでの `.venv` 作成、依存関係インストール、ESP32-CAM接続時の前提を含みます。
 *   [プロジェクトの実行](docs/ja/running.md) - macOSのLAN IP確認と実行手順を含みます。
 *   [使用方法](docs/ja/usage.md)

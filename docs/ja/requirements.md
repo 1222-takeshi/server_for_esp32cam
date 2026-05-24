@@ -148,6 +148,7 @@
 |------------|------|
 | [`docs/ja/setup.md`](setup.md) | 開発環境セットアップ |
 | [`docs/ja/running.md`](running.md) | サーバー起動方法 |
+| [`docs/ja/business-scenarios.md`](business-scenarios.md) | 事業・導入シナリオとKPI |
 | [`docs/ja/usage.md`](usage.md) | API 利用方法 |
 | [`docs/ja/troubleshooting.md`](troubleshooting.md) | トラブルシューティング |
 | [`docs/ja/security.md`](security.md) | 脅威モデルと運用チェックリスト |
