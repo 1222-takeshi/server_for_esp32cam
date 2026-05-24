@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime
+import shutil
+from unittest.mock import patch
 
 UPLOAD_HEADERS = {
     "Content-Type": "image/jpeg",
@@ -831,3 +833,81 @@ def test_delete_camera_removes_associated_device_logs(client):
 
     logs_response = client.get("/api/cameras/cam-delete-logs/logs")
     assert logs_response.status_code == 404
+
+
+def test_upload_logs_disk_warning_at_85_percent(client, caplog):
+    fake_usage = type("disk_usage", (), {"total": 100, "used": 86, "free": 14})()
+    with patch("script.routes.shutil.disk_usage", return_value=fake_usage):
+        import logging
+        with caplog.at_level(logging.WARNING, logger="script.routes"):
+            client.post(
+                "/upload",
+                data=b"\xff\xd8" + b"\x00" * 100,
+                content_type="image/jpeg",
+                headers={"X-Device-Id": "cam-disk", "X-Captured-At": "2026-01-01T00:00:00Z"},
+            )
+    assert any("Disk usage high" in r.message for r in caplog.records)
+
+
+def test_upload_logs_disk_error_at_95_percent(client, caplog):
+    fake_usage = type("disk_usage", (), {"total": 100, "used": 96, "free": 4})()
+    with patch("script.routes.shutil.disk_usage", return_value=fake_usage):
+        import logging
+        with caplog.at_level(logging.ERROR, logger="script.routes"):
+            client.post(
+                "/upload",
+                data=b"\xff\xd8" + b"\x00" * 100,
+                content_type="image/jpeg",
+                headers={"X-Device-Id": "cam-disk2", "X-Captured-At": "2026-01-01T00:00:00Z"},
+            )
+    assert any("Disk usage critical" in r.message for r in caplog.records)
+
+
+def test_api_camera_snapshots_returns_pagination_envelope(client):
+    client.post(
+        "/upload",
+        data=b"\xff\xd8" + b"\x00" * 100,
+        content_type="image/jpeg",
+        headers={"X-Device-Id": "cam-page", "X-Captured-At": "2026-01-01T00:00:00Z"},
+    )
+
+    response = client.get("/api/cameras/cam-page/snapshots?limit=10&offset=0")
+    assert response.status_code == 200
+    body = response.get_json()
+    assert "total" in body
+    assert "limit" in body
+    assert "offset" in body
+    assert body["limit"] == 10
+    assert body["offset"] == 0
+    assert len(body["snapshots"]) >= 1
+
+
+def test_api_camera_snapshots_invalid_limit_returns_400(client):
+    client.post(
+        "/upload",
+        data=b"\xff\xd8" + b"\x00" * 100,
+        content_type="image/jpeg",
+        headers={"X-Device-Id": "cam-page2", "X-Captured-At": "2026-01-01T00:00:00Z"},
+    )
+    response = client.get("/api/cameras/cam-page2/snapshots?limit=abc")
+    assert response.status_code == 400
+
+
+def test_api_detections_returns_pagination_envelope(client):
+    response = client.get("/api/detections?limit=20&offset=0")
+    assert response.status_code == 200
+    body = response.get_json()
+    assert "total" in body
+    assert "limit" in body
+    assert "offset" in body
+    assert body["limit"] == 20
+
+
+def test_api_detections_invalid_confidence_min_returns_400(client):
+    response = client.get("/api/detections?confidence_min=not_a_number")
+    assert response.status_code == 400
+
+
+def test_api_detections_confidence_min_out_of_range_returns_400(client):
+    response = client.get("/api/detections?confidence_min=1.5")
+    assert response.status_code == 400

@@ -6,7 +6,13 @@ on:
       - main
       - "feat/**"
       - "fix/**"
+      - "chore/**"
+      - "test/**"
+      - "perf/**"
   pull_request:
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -22,8 +28,20 @@ jobs:
           pip install -e ".[dev]"
       - name: Ruff
         run: ruff check .
-      - name: Pytest
-        run: PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest
+      - name: Pytest with coverage
+        run: |
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest \
+            --cov=script \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --cov-fail-under=80 \
+            --durations=10
+      - name: Upload coverage to GitHub Actions Summary
+        if: always()
+        run: |
+          python -m coverage report --format=markdown >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+      - name: Dependency vulnerability audit
+        run: pip-audit --desc on
 
   compile-esp32-example:
     runs-on: ubuntu-latest
@@ -32,7 +50,8 @@ jobs:
       - name: Prepare config.h for CI
         run: cp examples/esp32cam_snapshot_upload/config.h.example examples/esp32cam_snapshot_upload/config.h
       - name: Compile ESP32-CAM example
-        uses: arduino/compile-sketches@v1
+        # arduino/compile-sketches v1.1.2
+        uses: arduino/compile-sketches@25426ace8a446e747a3d3d7a9da759a6925613aa
         with:
           fqbn: esp32:esp32:esp32cam
           platforms: |
