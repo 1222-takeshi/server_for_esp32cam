@@ -16,6 +16,7 @@ ADR (Architecture Decision Record) は「なぜそう決めたか」を残す短
 | [ADR-003](003-local-filesystem-storage.md) | ローカルファイルシステムを画像ストレージとして採用 | 採用 |
 | [ADR-004](004-websocket-upload.md) | WebSocket によるリアルタイムアップロード追加 | 採用 |
 | [ADR-005](005-api-key-authentication.md) | API キー + Bearer トークンによる認証方式 | 採用 |
+| [ADR-006](006-device-polling-remote-control.md) | Device polling による ESP32-CAM 遠隔制御 | 提案 |
 
 ## 新しい ADR を追加する方法
 

@@ -42,6 +42,7 @@
 | 機能 | 対応 Issue | 理由 |
 |------|----------|------|
 | ライブビデオストリーミング | [#9](https://github.com/1222-takeshi/server_for_esp32cam/issues/9) | 電力・帯域コストが高く、スナップショットで代替可能 |
+| ESP32-CAM 遠隔制御API | [#137](https://github.com/1222-takeshi/server_for_esp32cam/issues/137) | deep sleep前提のdevice polling方式で最小設計から進める |
 | 将来の機能拡張案 | [#20](https://github.com/1222-takeshi/server_for_esp32cam/issues/20) | 優先順位未確定 |
 | 動画アップロード API | [#35](https://github.com/1222-takeshi/server_for_esp32cam/issues/35) | ストレージ設計・形式選定が必要 |
 
@@ -77,18 +78,24 @@
 *   保存先 backend 拡張時に、資産をカメラ単位に整理できるようにする
 *   UI 上で画像ソースを見分けやすくする
 
-### 4. 短い動画クリップの評価
+### 4. ESP32-CAM 遠隔制御APIの設計
+
+*   deep sleep 前提のため、サーバーpushではなく device polling で desired config を取得する
+*   まずは撮影間隔、解像度、JPEG品質、向き補正、再起動要求に限定する
+*   参照: [#137 ESP32-CAM遠隔制御APIを設計する](https://github.com/1222-takeshi/server_for_esp32cam/issues/137), [`docs/design/remote-control-api.md`](../design/remote-control-api.md)
+
+### 5. 短い動画クリップの評価
 
 *   連続動画は最初のデフォルトにしない
 *   スナップショットだけでは足りない場合に短いクリップ upload を検討する
 *   低電力運用を引き続き設計制約とする
 *   参照: [#35 動画アップロード API と保存方式の設計](https://github.com/1222-takeshi/server_for_esp32cam/issues/35)
 
-### 5. 高度機能は後回しにする
+### 6. 高度機能は後回しにする
 
 *   ML 処理
 *   アラート / 通知
-*   リモート I/O 制御
+*   モーターなど可動部を伴うリモート I/O 制御
 *   より高度な自動化パイプライン
 
 これらは、スナップショットと保存経路が安定した後に追加します。
@@ -101,6 +108,7 @@
 |------------|------|
 | [`docs/ja/requirements.md`](requirements.md) | 機能・非機能要件と受け入れ基準 |
 | [`docs/ja/business-scenarios.md`](business-scenarios.md) | 事業・導入シナリオとKPI |
+| [`docs/design/remote-control-api.md`](../design/remote-control-api.md) | ESP32-CAM 遠隔制御API設計 |
 | [`docs/ja/security.md`](security.md) | 脅威モデルと運用チェックリスト |
 | [`docs/ja/operations-runbook.md`](operations-runbook.md) | 運用 Runbook |
 | [`docs/deployment.md`](../deployment.md) | Docker デプロイガイド |
