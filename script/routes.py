@@ -20,8 +20,16 @@ from script.storage import Storage
 DEVICE_ID_MAX_LENGTH = 128
 _DEVICE_ID_RE = re.compile(rf"[A-Za-z0-9_\-]{{1,{DEVICE_ID_MAX_LENGTH}}}")
 
+
+def _upload_rate_limit_key() -> str:
+    # Use the device API key as the rate limit identifier when present; fall back to
+    # remote IP. API keys are authenticated and cannot be trivially spoofed, which
+    # makes them more reliable than X-Forwarded-For on networks with proxies.
+    return request.headers.get("X-API-Key") or get_remote_address()
+
+
 server = Blueprint("server", __name__)
-limiter = Limiter(key_func=get_remote_address, default_limits=[])
+limiter = Limiter(key_func=_upload_rate_limit_key, default_limits=[])
 
 _PAGINATION_LIMIT_MAX = 200
 _PAGINATION_LIMIT_DEFAULT = 50
@@ -85,19 +93,16 @@ def _validate_jpeg_image(data: bytes) -> str | None:
     """Returns None if the JPEG is valid, or an error message string if invalid."""
     from PIL import Image, UnidentifiedImageError  # lazy import — Pillow is optional at import time
 
-    try:
-        Image.open(BytesIO(data)).verify()
-    except (UnidentifiedImageError, Exception):
-        return "Invalid or corrupted JPEG payload"
-
+    max_dim = current_app.config.get("UPLOAD_MAX_IMAGE_DIMENSION", 4096)
     try:
         with Image.open(BytesIO(data)) as img:
-            max_dim = current_app.config.get("UPLOAD_MAX_IMAGE_DIMENSION", 4096)
             if img.width > max_dim or img.height > max_dim:
                 return f"Image dimensions exceed maximum ({img.width}x{img.height}, max {max_dim}px)"
+    except (UnidentifiedImageError, SyntaxError, ValueError, OSError):
+        return "Invalid or corrupted JPEG payload"
     except Exception:
-        return "Failed to decode JPEG dimensions"
-
+        current_app.logger.warning("Unexpected error during JPEG validation")
+        return "Invalid or corrupted JPEG payload"
     return None
 
 
@@ -259,7 +264,8 @@ def upload_file():
     try:
         captured_at = _parse_captured_at(captured_at_raw)
     except ValueError:
-        current_app.logger.error("Invalid captured_at metadata: %s", captured_at_raw)
+        safe_val = (captured_at_raw or "")[:64].replace("\n", "\\n").replace("\r", "\\r")
+        current_app.logger.error("Invalid captured_at metadata: %s", safe_val)
         return jsonify({"message": "Invalid captured_at metadata"}), 400
 
     try:

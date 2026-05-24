@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import time
 
 from flask import Flask, current_app, request
 from flask_sock import Sock
@@ -61,6 +62,8 @@ def _handle_binary_upload_connection(websocket: WebSocketLike, *, camera_id: str
 
     metrics = current_app.extensions["upload_metrics"]
     metrics.record_connection(camera_id)
+    min_interval = current_app.config.get("UPLOAD_WS_MIN_FRAME_INTERVAL_SECONDS", 1.0)
+    last_frame_at = 0.0
     try:
         while True:
             message = receive()
@@ -76,9 +79,16 @@ def _handle_binary_upload_connection(websocket: WebSocketLike, *, camera_id: str
                 metrics.record_error(camera_id, error_message)
                 response = {"type": "snapshot.error", "message": error_message}
             else:
-                response = handle_binary_snapshot_upload(message, camera_id=camera_id)
-                if response.get("type") == "snapshot.error":
-                    metrics.record_error(camera_id, str(response.get("message", "Upload failed")))
+                now = time.monotonic()
+                if now - last_frame_at < min_interval:
+                    error_message = "Rate limit exceeded"
+                    metrics.record_error(camera_id, error_message)
+                    response = {"type": "snapshot.error", "message": error_message}
+                else:
+                    last_frame_at = now
+                    response = handle_binary_snapshot_upload(message, camera_id=camera_id)
+                    if response.get("type") == "snapshot.error":
+                        metrics.record_error(camera_id, str(response.get("message", "Upload failed")))
             websocket.send(json.dumps(response))
     finally:
         metrics.record_disconnect(camera_id)

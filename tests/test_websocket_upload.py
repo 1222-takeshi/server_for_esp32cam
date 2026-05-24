@@ -101,3 +101,18 @@ def test_upload_rejects_oversized_payload(app):
     assert response["message"] == "Payload too large"
     assert metrics["errors"] == 1
     assert metrics["frames_received"] == 0
+
+
+def test_upload_ws_rate_limit_throttles_rapid_frames(app):
+    app.config["UPLOAD_WS_MIN_FRAME_INTERVAL_SECONDS"] = 9999.0
+    websocket = FakeUploadWebSocket([JPEG_BYTES, JPEG_BYTES, None])
+
+    with app.app_context():
+        _handle_binary_upload_connection(websocket, camera_id="esp32cam-rate")
+        metrics = app.extensions["upload_metrics"].snapshot("esp32cam-rate")
+
+    import json
+    assert json.loads(websocket.sent[0])["type"] == "snapshot.stored"
+    assert json.loads(websocket.sent[1]) == {"type": "snapshot.error", "message": "Rate limit exceeded"}
+    assert metrics["frames_received"] == 1
+    assert metrics["errors"] == 1
