@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import csv
 from io import BytesIO, StringIO
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import re
 import shutil
@@ -143,11 +143,15 @@ def _serialize_camera_summary(summary: CameraSummary) -> dict[str, object]:
 
 @server.route("/")
 def index():
-    camera_summaries = _metadata_store().list_camera_summaries()
+    store = _metadata_store()
+    camera_summaries = store.list_camera_summaries()
+    one_hour_ago = datetime.now(tz=timezone.utc) - timedelta(hours=1)
+    cameras_with_errors = store.camera_ids_with_recent_errors(since=one_hour_ago)
     return render_template(
         "index.html",
         camera_summaries=camera_summaries,
-        image_count=_metadata_store().total_snapshot_count(),
+        image_count=store.total_snapshot_count(),
+        cameras_with_errors=cameras_with_errors,
     )
 
 
@@ -326,13 +330,16 @@ def camera_detail(camera_id: str):
     if camera is None:
         return jsonify({"message": "Camera not found"}), 404
 
-    snapshots = _metadata_store().list_camera_snapshots(camera_id, limit=20)
+    store = _metadata_store()
+    snapshots = store.list_camera_snapshots(camera_id, limit=20)
     latest = snapshots[0] if snapshots else None
+    recent_logs = store.list_device_logs(camera_id, limit=10)
     return render_template(
         "camera_detail.html",
         camera=camera,
         snapshots=snapshots,
         latest=latest,
+        recent_logs=recent_logs,
     )
 
 

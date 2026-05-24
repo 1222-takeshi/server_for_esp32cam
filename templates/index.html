@@ -48,11 +48,18 @@
       <div class="cam-card-body">
         <div class="cam-card-name">
           <span>{{ summary.camera.display_name }}</span>
-          <span class="badge {{ summary.status }}"
-                id="cam-status-badge-{{ summary.camera.camera_id | replace(' ','_') | replace('-','_') }}"
-                data-status="{{ summary.status }}">
-            <span class="badge-dot"></span><span id="cam-status-text-{{ summary.camera.camera_id | replace(' ','_') | replace('-','_') }}">{{ summary.status }}</span>
-          </span>
+          <div style="display:flex;align-items:center;gap:6px;">
+            {% if cameras_with_errors is defined and summary.camera.camera_id in cameras_with_errors %}
+            <span title="Error log in the last hour" style="color:var(--red);display:flex;align-items:center;">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1L1 12h12L7 1z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M7 5v3M7 10v.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+            </span>
+            {% endif %}
+            <span class="badge {{ summary.status }}"
+                  id="cam-status-badge-{{ summary.camera.camera_id | replace(' ','_') | replace('-','_') }}"
+                  data-status="{{ summary.status }}">
+              <span class="badge-dot"></span><span id="cam-status-text-{{ summary.camera.camera_id | replace(' ','_') | replace('-','_') }}">{{ summary.status }}</span>
+            </span>
+          </div>
         </div>
         {% if summary.latest_snapshot %}
         <div class="cam-card-meta" id="cam-meta-{{ summary.camera.camera_id | replace(' ','_') | replace('-','_') }}">
