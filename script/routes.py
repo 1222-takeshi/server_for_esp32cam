@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-from io import BytesIO
+import csv
+from io import BytesIO, StringIO
 from datetime import datetime, timezone
 from pathlib import Path
 import re
 import shutil
 import uuid
 
-from flask import Blueprint, current_app, jsonify, render_template, request, send_file
+from flask import Blueprint, Response, current_app, jsonify, render_template, request, send_file
 
-from script.auth import require_admin_auth, require_device_auth
+from script.auth import check_admin_token, require_admin_auth, require_device_auth
 from script.metadata import ALLOWED_LOG_LEVELS, CameraSummary, DeviceLogRecord, SnapshotRecord
 from script.retention import apply_upload_retention
 from script.storage import Storage
@@ -23,6 +24,7 @@ _PAGINATION_LIMIT_MAX = 200
 _PAGINATION_LIMIT_DEFAULT = 50
 _PAGINATION_OFFSET_MAX = 10_000_000
 _FILES_PAGE_MAX = _PAGINATION_OFFSET_MAX // _PAGINATION_LIMIT_DEFAULT
+_EXPORT_ROW_LIMIT = 10_000
 
 
 def _parse_pagination() -> tuple[int, int] | tuple[None, None]:
@@ -428,6 +430,23 @@ def api_camera_snapshots(camera_id: str):
             return jsonify({"message": "Invalid until parameter"}), 400
 
     store = _metadata_store()
+
+    if request.args.get("export") == "json":
+        auth_header = request.headers.get("Authorization", "")
+        token = auth_header.removeprefix("Bearer ") if auth_header.startswith("Bearer ") else None
+        if not check_admin_token(token):
+            return jsonify({"message": "Unauthorized"}), 401
+        all_snapshots = store.list_camera_snapshots(
+            camera_id, limit=_EXPORT_ROW_LIMIT, offset=0, since=since, until=until
+        )
+        return jsonify(
+            {
+                "camera_id": camera_id,
+                "count": len(all_snapshots),
+                "snapshots": [_serialize_snapshot(s) for s in all_snapshots],
+            }
+        )
+
     total = store.count_camera_snapshots(camera_id, since=since, until=until)
     snapshots = store.list_camera_snapshots(
         camera_id, limit=limit, offset=offset, since=since, until=until
@@ -466,11 +485,44 @@ def api_detections():
         except ValueError:
             return jsonify({"message": "Invalid confidence_min parameter"}), 400
 
+    store = _metadata_store()
+
+    if request.args.get("export") == "csv":
+        auth_header = request.headers.get("Authorization", "")
+        token = auth_header.removeprefix("Bearer ") if auth_header.startswith("Bearer ") else None
+        if not check_admin_token(token):
+            return jsonify({"message": "Unauthorized"}), 401
+        rows = store.list_detections(
+            camera_id=camera_id,
+            since=since,
+            limit=_EXPORT_ROW_LIMIT,
+            offset=0,
+            confidence_min=confidence_min,
+        )
+        buf = StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(["camera_id", "filename", "captured_at", "stored_at", "label", "score", "x1", "y1", "x2", "y2"])
+        _csv_danger = frozenset("=+-@\t\r")
+        for d in rows:
+            bbox = d["bbox"]
+            label = str(d["label"] or "")
+            if label and label[0] in _csv_danger:
+                label = "'" + label
+            writer.writerow([
+                d["camera_id"], d["filename"], d["captured_at"], d["stored_at"],
+                label, round(d["score"], 4),
+                bbox[0], bbox[1], bbox[2], bbox[3],
+            ])
+        return Response(
+            buf.getvalue(),
+            mimetype="text/csv",
+            headers={"Content-Disposition": "attachment; filename=detections.csv"},
+        )
+
     limit, offset = _parse_pagination()
     if limit is None:
         return jsonify({"message": "Invalid pagination parameters"}), 400
 
-    store = _metadata_store()
     total = store.count_detections(camera_id=camera_id, since=since, confidence_min=confidence_min)
     detections = store.list_detections(
         camera_id=camera_id, since=since, limit=limit, offset=offset, confidence_min=confidence_min
