@@ -11,6 +11,8 @@ requires-python = ">=3.10"
 dependencies = [
   "Flask>=3.0,<4.0",
   "Flask-Sock>=0.7,<0.8",
+  "python-json-logger>=2.0,<4.0",
+  "prometheus-client>=0.20,<0.22",
 ]
 
 [project.optional-dependencies]
