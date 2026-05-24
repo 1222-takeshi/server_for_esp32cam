@@ -6,8 +6,6 @@ import urllib.request
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from script.detector import Detection
 from script.metadata import SnapshotRecord
 from script.webhook import DISABLED_NOTIFIER, WebhookNotifier

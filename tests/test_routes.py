@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-import shutil
 from unittest.mock import patch
 
 from tests.conftest import MINIMAL_JPEG
