@@ -12,7 +12,7 @@ from flask import Blueprint, Response, current_app, jsonify, render_template, re
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
-from script.auth import check_admin_token, require_admin_auth, require_device_auth
+from script.auth import check_admin_token, check_device_api_key, require_admin_auth, require_device_auth
 from script.metadata import ALLOWED_LOG_LEVELS, CameraSummary, DeviceLogRecord, SnapshotRecord
 from script.retention import apply_upload_retention
 from script.storage import Storage
@@ -22,10 +22,13 @@ _DEVICE_ID_RE = re.compile(rf"[A-Za-z0-9_\-]{{1,{DEVICE_ID_MAX_LENGTH}}}")
 
 
 def _upload_rate_limit_key() -> str:
-    # Use the device API key as the rate limit identifier when present; fall back to
-    # remote IP. API keys are authenticated and cannot be trivially spoofed, which
-    # makes them more reliable than X-Forwarded-For on networks with proxies.
-    return request.headers.get("X-API-Key") or get_remote_address()
+    # Use the device API key as the rate limit identifier only when it is valid.
+    # An unvalidated key would allow unauthenticated clients to exhaust another
+    # device's rate limit bucket by spoofing its key header.
+    api_key = request.headers.get("X-API-Key")
+    if api_key and check_device_api_key(api_key):
+        return api_key
+    return get_remote_address()
 
 
 server = Blueprint("server", __name__)
