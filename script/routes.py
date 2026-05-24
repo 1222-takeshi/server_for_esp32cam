@@ -9,6 +9,8 @@ import shutil
 import uuid
 
 from flask import Blueprint, Response, current_app, jsonify, render_template, request, send_file
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 from script.auth import check_admin_token, require_admin_auth, require_device_auth
 from script.metadata import ALLOWED_LOG_LEVELS, CameraSummary, DeviceLogRecord, SnapshotRecord
@@ -19,6 +21,7 @@ DEVICE_ID_MAX_LENGTH = 128
 _DEVICE_ID_RE = re.compile(rf"[A-Za-z0-9_\-]{{1,{DEVICE_ID_MAX_LENGTH}}}")
 
 server = Blueprint("server", __name__)
+limiter = Limiter(key_func=get_remote_address, default_limits=[])
 
 _PAGINATION_LIMIT_MAX = 200
 _PAGINATION_LIMIT_DEFAULT = 50
@@ -78,8 +81,24 @@ def _validate_device_id(device_id: str) -> str | None:
     return None
 
 
-def _looks_like_jpeg(data: bytes) -> bool:
-    return len(data) >= 4 and data.startswith(b"\xff\xd8")
+def _validate_jpeg_image(data: bytes) -> str | None:
+    """Returns None if the JPEG is valid, or an error message string if invalid."""
+    from PIL import Image, UnidentifiedImageError  # lazy import — Pillow is optional at import time
+
+    try:
+        Image.open(BytesIO(data)).verify()
+    except (UnidentifiedImageError, Exception):
+        return "Invalid or corrupted JPEG payload"
+
+    try:
+        with Image.open(BytesIO(data)) as img:
+            max_dim = current_app.config.get("UPLOAD_MAX_IMAGE_DIMENSION", 4096)
+            if img.width > max_dim or img.height > max_dim:
+                return f"Image dimensions exceed maximum ({img.width}x{img.height}, max {max_dim}px)"
+    except Exception:
+        return "Failed to decode JPEG dimensions"
+
+    return None
 
 
 def _parse_captured_at(value: str) -> datetime:
@@ -209,6 +228,7 @@ def healthz_ready():
 
 
 @server.route("/upload", methods=["POST"])
+@limiter.limit(lambda: current_app.config.get("UPLOAD_RATE_LIMIT", "10 per minute"))
 @require_device_auth
 def upload_file():
     if not request.data:
@@ -219,9 +239,10 @@ def upload_file():
         current_app.logger.error("Unsupported content type: %s", request.content_type)
         return jsonify({"message": "Unsupported content type"}), 415
 
-    if not _looks_like_jpeg(request.data):
-        current_app.logger.error("Invalid JPEG payload received")
-        return jsonify({"message": "Invalid JPEG payload"}), 400
+    jpeg_error = _validate_jpeg_image(request.data)
+    if jpeg_error:
+        current_app.logger.error("JPEG validation failed: %s", jpeg_error)
+        return jsonify({"message": jpeg_error}), 400
 
     device_id = request.headers.get("X-Device-Id", "").strip()
     captured_at_raw = request.headers.get("X-Captured-At", "").strip()

@@ -9,7 +9,7 @@ from flask_sock import Sock
 from script.auth import check_device_api_key
 from script.events import SnapshotEventPublisher
 from script.retention import apply_upload_retention
-from script.routes import _looks_like_jpeg, _serialize_snapshot, _validate_device_id
+from script.routes import _validate_jpeg_image, _serialize_snapshot, _validate_device_id
 from script.websocket_hub import ConnectionLimitExceeded, WebSocketHub, WebSocketLike
 
 
@@ -28,8 +28,9 @@ def handle_binary_snapshot_upload(
     camera_id: str,
     captured_at: datetime | None = None,
 ) -> dict[str, object]:
-    if not _looks_like_jpeg(data):
-        return {"type": "snapshot.error", "message": "Invalid JPEG payload"}
+    jpeg_error = _validate_jpeg_image(data)
+    if jpeg_error:
+        return {"type": "snapshot.error", "message": jpeg_error}
 
     captured_at = captured_at or datetime.now(timezone.utc)
     stored = current_app.extensions["storage"].save_image(

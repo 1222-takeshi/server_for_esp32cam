@@ -4,6 +4,8 @@ from datetime import datetime
 import shutil
 from unittest.mock import patch
 
+from tests.conftest import MINIMAL_JPEG
+
 UPLOAD_HEADERS = {
     "Content-Type": "image/jpeg",
     "X-Device-Id": "esp32cam-front-door",
@@ -96,7 +98,7 @@ def test_healthz_ready_inference_worker_stopped(app):
 
 
 def test_upload_accepts_jpeg_and_returns_metadata(client):
-    payload = b"\xff\xd8\xff\xe0fake-jpeg"
+    payload = MINIMAL_JPEG
 
     response = client.post(
         "/upload",
@@ -140,13 +142,27 @@ def test_upload_rejects_invalid_jpeg_payload(client):
     response = client.post("/upload", data=b"not-jpeg", headers=UPLOAD_HEADERS)
 
     assert response.status_code == 400
-    assert response.get_json()["message"] == "Invalid JPEG payload"
+    assert response.get_json()["message"] == "Invalid or corrupted JPEG payload"
+
+
+def test_upload_rejects_oversized_jpeg(client):
+    from io import BytesIO
+    from PIL import Image
+
+    buf = BytesIO()
+    Image.new("RGB", (4097, 1)).save(buf, format="JPEG")
+    oversized = buf.getvalue()
+
+    response = client.post("/upload", data=oversized, headers=UPLOAD_HEADERS)
+
+    assert response.status_code == 400
+    assert "dimensions exceed maximum" in response.get_json()["message"]
 
 
 def test_upload_rejects_missing_device_metadata(client):
     response = client.post(
         "/upload",
-        data=b"\xff\xd8jpeg",
+        data=MINIMAL_JPEG,
         headers={"Content-Type": "image/jpeg"},
     )
 
@@ -157,7 +173,7 @@ def test_upload_rejects_missing_device_metadata(client):
 def test_upload_rejects_too_long_device_id(client):
     response = client.post(
         "/upload",
-        data=b"\xff\xd8jpeg",
+        data=MINIMAL_JPEG,
         headers={
             "Content-Type": "image/jpeg",
             "X-Device-Id": "x" * 129,
@@ -172,7 +188,7 @@ def test_upload_rejects_too_long_device_id(client):
 def test_upload_rejects_invalid_device_id_chars(client):
     response = client.post(
         "/upload",
-        data=b"\xff\xd8jpeg",
+        data=MINIMAL_JPEG,
         headers={
             "Content-Type": "image/jpeg",
             "X-Device-Id": "cam; DROP TABLE cameras--",
@@ -187,7 +203,7 @@ def test_upload_rejects_invalid_device_id_chars(client):
 def test_upload_rejects_invalid_captured_at_metadata(client):
     response = client.post(
         "/upload",
-        data=b"\xff\xd8jpeg",
+        data=MINIMAL_JPEG,
         headers={
             "Content-Type": "image/jpeg",
             "X-Device-Id": "esp32cam-front-door",
@@ -202,7 +218,7 @@ def test_upload_rejects_invalid_captured_at_metadata(client):
 def test_upload_rejects_timezone_naive_captured_at_metadata(client):
     response = client.post(
         "/upload",
-        data=b"\xff\xd8jpeg",
+        data=MINIMAL_JPEG,
         headers={
             "Content-Type": "image/jpeg",
             "X-Device-Id": "esp32cam-front-door",
@@ -217,7 +233,7 @@ def test_upload_rejects_timezone_naive_captured_at_metadata(client):
 def test_upload_normalizes_non_utc_captured_at_metadata_to_utc(client):
     response = client.post(
         "/upload",
-        data=b"\xff\xd8jpeg",
+        data=MINIMAL_JPEG,
         headers={
             "Content-Type": "image/jpeg",
             "X-Device-Id": "esp32cam-front-door",
@@ -232,7 +248,7 @@ def test_upload_normalizes_non_utc_captured_at_metadata_to_utc(client):
 def test_files_page_lists_latest_upload_first(client):
     first = client.post(
         "/upload",
-        data=b"\xff\xd8first-image",
+        data=MINIMAL_JPEG,
         headers={
             "Content-Type": "image/jpeg",
             "X-Device-Id": "esp32cam-front-door",
@@ -241,7 +257,7 @@ def test_files_page_lists_latest_upload_first(client):
     ).get_json()
     second = client.post(
         "/upload",
-        data=b"\xff\xd8second-image",
+        data=MINIMAL_JPEG,
         headers={
             "Content-Type": "image/jpeg",
             "X-Device-Id": "esp32cam-garden",
@@ -264,12 +280,12 @@ def test_files_page_lists_latest_upload_first(client):
 def test_index_page_shows_camera_dashboard_metadata(client):
     client.post(
         "/upload",
-        data=b"\xff\xd8front-door",
+        data=MINIMAL_JPEG,
         headers=UPLOAD_HEADERS,
     )
     client.post(
         "/upload",
-        data=b"\xff\xd8garden",
+        data=MINIMAL_JPEG,
         headers={
             "Content-Type": "image/jpeg",
             "X-Device-Id": "esp32cam-garden",
@@ -289,7 +305,7 @@ def test_index_page_shows_camera_dashboard_metadata(client):
 def test_index_page_marks_snapshot_stats_for_live_updates(client):
     client.post(
         "/upload",
-        data=b"\xff\xd8front-door",
+        data=MINIMAL_JPEG,
         headers=UPLOAD_HEADERS,
     )
 
@@ -315,7 +331,7 @@ def test_index_page_marks_snapshot_stats_for_live_updates(client):
 def test_camera_detail_page_marks_snapshot_count_for_live_updates(client):
     client.post(
         "/upload",
-        data=b"\xff\xd8front-door",
+        data=MINIMAL_JPEG,
         headers=UPLOAD_HEADERS,
     )
 
@@ -338,12 +354,12 @@ def test_camera_detail_page_marks_snapshot_count_for_live_updates(client):
 def test_camera_detail_page_filters_snapshots_by_camera(client):
     front = client.post(
         "/upload",
-        data=b"\xff\xd8front",
+        data=MINIMAL_JPEG,
         headers=UPLOAD_HEADERS,
     ).get_json()
     garden = client.post(
         "/upload",
-        data=b"\xff\xd8garden",
+        data=MINIMAL_JPEG,
         headers={
             "Content-Type": "image/jpeg",
             "X-Device-Id": "esp32cam-garden",
@@ -362,7 +378,7 @@ def test_camera_detail_page_filters_snapshots_by_camera(client):
 def test_api_cameras_returns_camera_summaries(client):
     client.post(
         "/upload",
-        data=b"\xff\xd8payload",
+        data=MINIMAL_JPEG,
         headers=UPLOAD_HEADERS,
     )
 
@@ -395,12 +411,12 @@ def test_api_camera_upload_metrics_returns_diagnostics(app, client):
 def test_api_camera_snapshots_returns_camera_scoped_snapshots(client):
     client.post(
         "/upload",
-        data=b"\xff\xd8front",
+        data=MINIMAL_JPEG,
         headers=UPLOAD_HEADERS,
     )
     client.post(
         "/upload",
-        data=b"\xff\xd8garden",
+        data=MINIMAL_JPEG,
         headers={
             "Content-Type": "image/jpeg",
             "X-Device-Id": "esp32cam-garden",
@@ -420,21 +436,21 @@ def test_api_camera_snapshots_returns_camera_scoped_snapshots(client):
 def test_get_file_returns_uploaded_image_bytes(client):
     upload = client.post(
         "/upload",
-        data=b"\xff\xd8payload",
+        data=MINIMAL_JPEG,
         headers=UPLOAD_HEADERS,
     ).get_json()
 
     response = client.get(f"/files/{upload['filename']}")
 
     assert response.status_code == 200
-    assert response.data == b"\xff\xd8payload"
+    assert response.data == MINIMAL_JPEG
     assert response.mimetype == "image/jpeg"
 
 
 def test_get_file_rejects_metadata_sidecar_requests(client):
     upload = client.post(
         "/upload",
-        data=b"\xff\xd8payload",
+        data=MINIMAL_JPEG,
         headers=UPLOAD_HEADERS,
     ).get_json()
 
@@ -457,7 +473,7 @@ def test_upload_returns_500_when_storage_write_fails(app, client, monkeypatch):
 
     monkeypatch.setattr(app.extensions["storage"], "save_image", fail_save_image)
 
-    response = client.post("/upload", data=b"\xff\xd8broken", headers=UPLOAD_HEADERS)
+    response = client.post("/upload", data=MINIMAL_JPEG, headers=UPLOAD_HEADERS)
 
     assert response.status_code == 500
     assert response.get_json()["message"] == "File upload failed"
@@ -485,7 +501,7 @@ def test_upload_records_person_detection_when_detector_finds_person(app, client)
 
     client.post(
         "/upload",
-        data=b"\xff\xd8payload",
+        data=MINIMAL_JPEG,
         headers=UPLOAD_HEADERS,
     )
 
@@ -502,7 +518,7 @@ def test_upload_still_returns_200_when_detector_fails(app, client):
 
     response = client.post(
         "/upload",
-        data=b"\xff\xd8payload",
+        data=MINIMAL_JPEG,
         headers=UPLOAD_HEADERS,
     )
     snapshots = app.extensions["metadata_store"].list_camera_snapshots("esp32cam-front-door", limit=1)
@@ -518,7 +534,7 @@ def test_upload_publishes_snapshot_created_event(app, client):
 
     response = client.post(
         "/upload",
-        data=b"\xff\xd8event-payload",
+        data=MINIMAL_JPEG,
         headers=UPLOAD_HEADERS,
     )
 
@@ -850,7 +866,7 @@ def test_delete_camera_returns_404_for_unknown_camera(client):
 def test_delete_camera_removes_associated_snapshots(client):
     client.post(
         "/upload",
-        data=b"\xff\xd8jpeg",
+        data=MINIMAL_JPEG,
         headers={
             "Content-Type": "image/jpeg",
             "X-Device-Id": "cam-delete-snap",
@@ -867,7 +883,7 @@ def test_delete_camera_removes_associated_snapshots(client):
 def test_delete_camera_with_delete_files_removes_storage(client, app):
     client.post(
         "/upload",
-        data=b"\xff\xd8jpeg",
+        data=MINIMAL_JPEG,
         headers={
             "Content-Type": "image/jpeg",
             "X-Device-Id": "cam-delete-files",
@@ -906,7 +922,7 @@ def test_upload_logs_disk_warning_at_85_percent(client, caplog):
         with caplog.at_level(logging.WARNING, logger="script.routes"):
             client.post(
                 "/upload",
-                data=b"\xff\xd8" + b"\x00" * 100,
+                data=MINIMAL_JPEG,
                 content_type="image/jpeg",
                 headers={"X-Device-Id": "cam-disk", "X-Captured-At": "2026-01-01T00:00:00Z"},
             )
@@ -920,7 +936,7 @@ def test_upload_logs_disk_warning_at_85_percent(client, caplog):
 def test_metrics_endpoint_returns_prometheus_text(client):
     client.post(
         "/upload",
-        data=b"\xff\xd8jpeg",
+        data=MINIMAL_JPEG,
         headers={
             "Content-Type": "image/jpeg",
             "X-Device-Id": "cam-metrics",
@@ -964,7 +980,7 @@ def test_upload_logs_disk_error_at_95_percent(client, caplog):
         with caplog.at_level(logging.ERROR, logger="script.routes"):
             client.post(
                 "/upload",
-                data=b"\xff\xd8" + b"\x00" * 100,
+                data=MINIMAL_JPEG,
                 content_type="image/jpeg",
                 headers={"X-Device-Id": "cam-disk2", "X-Captured-At": "2026-01-01T00:00:00Z"},
             )
@@ -974,7 +990,7 @@ def test_upload_logs_disk_error_at_95_percent(client, caplog):
 def test_api_camera_snapshots_returns_pagination_envelope(client):
     client.post(
         "/upload",
-        data=b"\xff\xd8" + b"\x00" * 100,
+        data=MINIMAL_JPEG,
         content_type="image/jpeg",
         headers={"X-Device-Id": "cam-page", "X-Captured-At": "2026-01-01T00:00:00Z"},
     )
@@ -993,7 +1009,7 @@ def test_api_camera_snapshots_returns_pagination_envelope(client):
 def test_api_camera_snapshots_invalid_limit_returns_400(client):
     client.post(
         "/upload",
-        data=b"\xff\xd8" + b"\x00" * 100,
+        data=MINIMAL_JPEG,
         content_type="image/jpeg",
         headers={"X-Device-Id": "cam-page2", "X-Captured-At": "2026-01-01T00:00:00Z"},
     )
@@ -1024,7 +1040,7 @@ def test_api_detections_confidence_min_out_of_range_returns_400(client):
 def test_api_camera_snapshots_export_json(client):
     client.post(
         "/upload",
-        data=b"\xff\xd8" + b"\x00" * 100,
+        data=MINIMAL_JPEG,
         content_type="image/jpeg",
         headers={"X-Device-Id": "cam-export", "X-Captured-At": "2026-01-01T00:00:00Z"},
     )
@@ -1053,7 +1069,7 @@ def test_api_detections_export_csv(app):
     with app.test_client() as c:
         c.post(
             "/upload",
-            data=b"\xff\xd8" + b"\x00" * 100,
+            data=MINIMAL_JPEG,
             content_type="image/jpeg",
             headers={"X-Device-Id": "cam-csv", "X-Captured-At": "2026-01-01T00:00:00Z"},
         )
@@ -1092,7 +1108,7 @@ def test_api_camera_snapshots_export_json_requires_auth(tmp_path):
     with secure_app.test_client() as c:
         c.post(
             "/upload",
-            data=b"\xff\xd8\xff\xe0" + b"\x00" * 100,
+            data=MINIMAL_JPEG,
             content_type="image/jpeg",
             headers={"X-Device-Id": "cam1", "X-Captured-At": "2026-01-01T00:00:00Z"},
         )
@@ -1131,7 +1147,7 @@ def test_api_detections_export_csv_requires_auth(tmp_path):
 def test_camera_detail_includes_recent_logs(client):
     client.post(
         "/upload",
-        data=b"\xff\xd8\xff\xe0" + b"\x00" * 100,
+        data=MINIMAL_JPEG,
         content_type="image/jpeg",
         headers={"X-Device-Id": "cam-log-detail", "X-Captured-At": "2026-01-01T00:00:00Z"},
     )
@@ -1152,7 +1168,7 @@ def test_camera_detail_includes_recent_logs(client):
 def test_camera_detail_shows_no_logs_message(client):
     client.post(
         "/upload",
-        data=b"\xff\xd8\xff\xe0" + b"\x00" * 100,
+        data=MINIMAL_JPEG,
         content_type="image/jpeg",
         headers={"X-Device-Id": "cam-nologs", "X-Captured-At": "2026-01-01T00:00:00Z"},
     )
@@ -1167,7 +1183,7 @@ def test_camera_detail_shows_no_logs_message(client):
 def test_index_shows_error_warning_for_camera_with_recent_errors(client):
     client.post(
         "/upload",
-        data=b"\xff\xd8\xff\xe0" + b"\x00" * 100,
+        data=MINIMAL_JPEG,
         content_type="image/jpeg",
         headers={"X-Device-Id": "cam-warn", "X-Captured-At": "2026-01-01T00:00:00Z"},
     )
