@@ -21,6 +21,8 @@
 | 垂直反転 | `vflip` | boolean | `true` / `false` | 設置向き補正用 |
 | 水平反転 | `hmirror` | boolean | `true` / `false` | 設置向き補正用 |
 | 再起動要求 | `restart_requested` | boolean | `true` / `false` | デバイスが受理後にサーバーへackする |
+| OTA待受要求 | `ota_update_requested` | boolean | `true` / `false` | 起床時にOTA待受ウィンドウへ入る |
+| OTA待受時間 | `ota_window_seconds` | integer | 30〜600 | ArduinoOTA等の更新を受け付ける最大時間 |
 
 ### 2.2 MVPで扱わないこと
 
@@ -28,7 +30,7 @@
 - 多人数利用・詳細な権限管理
 - モーターやサーボなど可動部の制御
 - 常時WebSocket接続を前提にした低遅延コマンド配信
-- 任意コマンド実行、任意URLアクセス、任意ファームウェア更新
+- 任意コマンド実行、任意URLアクセス、任意URL/未検証バイナリからのファームウェア更新
 
 ## 3. 制約
 
@@ -69,7 +71,9 @@ Authorization: Bearer <ADMIN_TOKEN>
     "jpeg_quality": 12,
     "vflip": false,
     "hmirror": false,
-    "restart_requested": false
+    "restart_requested": false,
+    "ota_update_requested": false,
+    "ota_window_seconds": 120
   },
   "last_acknowledged_version": 2,
   "last_acknowledged_at": "2026-05-24T11:30:00Z"
@@ -93,7 +97,9 @@ Content-Type: application/json
   "jpeg_quality": 12,
   "vflip": false,
   "hmirror": false,
-  "restart_requested": false
+  "restart_requested": false,
+  "ota_update_requested": false,
+  "ota_window_seconds": 120
 }
 ```
 
@@ -119,7 +125,9 @@ X-API-Key: <DEVICE_API_KEY>
     "jpeg_quality": 12,
     "vflip": false,
     "hmirror": false,
-    "restart_requested": false
+    "restart_requested": false,
+    "ota_update_requested": true,
+    "ota_window_seconds": 120
   }
 }
 ```
@@ -184,15 +192,34 @@ CREATE TABLE camera_desired_configs (
 2. Wi-Fiへ接続する。
 3. `GET /api/devices/{device_id}/desired-config?current_version=<n>` を呼ぶ。
 4. 取得した `version` がローカル保存値より新しければ、範囲チェック後に設定を反映する。
-5. `POST /api/devices/{device_id}/desired-config/ack` で反映結果を送る。
-6. 反映後の設定で撮影・アップロードする。
-7. `capture_interval_seconds` に従ってdeep sleepへ戻る。
+5. `ota_update_requested` が `true` の場合、`ota_window_seconds` の間だけ Wi-Fi 接続と OTA サービスを維持し、ArduinoOTA などのOTA更新を受け付ける。
+6. `POST /api/devices/{device_id}/desired-config/ack` で反映結果を送る。OTA待受に入った場合は、OTA ready / timeout / failed などの状態も `message` に含める。
+7. 反映後の設定で撮影・アップロードする。
+8. `capture_interval_seconds` に従ってdeep sleepへ戻る。
+
+### 7.1 OTA更新の扱い
+
+deep sleep中のESP32-CAMはWi-FiもCPUも停止しているため、PlatformIO/ArduinoOTAから直接接続してOTAを書き込むことはできない。OTA更新は、デバイスが起床してWi-Fi接続し、`ArduinoOTA.handle()` などを処理している時間帯だけ成立する。
+
+MVPでは「任意URLからファームウェアを取得して自己更新する」方式ではなく、既存のArduinoOTA/PlatformIO OTA uploadを前提に、desired configで **次回起床時にOTA待受ウィンドウを開く** 方式とする。
+
+想定フロー:
+
+1. 管理者が `ota_update_requested=true` と `ota_window_seconds` を設定する。
+2. ESP32-CAMが次回起床時に desired config を取得する。
+3. デバイスは `OTA ready` 状態をシリアルログまたはackで通知し、指定秒数だけ `ArduinoOTA.handle()` を処理する。
+4. 運用者は同じLAN内から `pio run -e esp32cam_http_upload_ota -t upload` を実行する。
+5. OTA成功後にデバイスは再起動し、新ファームウェアで通常フローへ戻る。
+6. OTA待受がtimeoutした場合は、ackにtimeoutを記録し、通常撮影・アップロード・deep sleepへ戻る。
+
+`ota_update_requested` は一回限りの操作として扱い、OTA成功またはOTA待受timeout後にサーバー側で `false` へ戻す。二重更新や意図しない長時間起床を避けるため、`ota_window_seconds` には上限を設ける。
 
 ## 8. セキュリティ・安全性
 
 - 管理者APIとデバイスAPIの認証を分離する。
 - 設定値はサーバー側とファームウェア側の両方で範囲チェックする。
 - `restart_requested` はack後にサーバー側で自動的に `false` に戻すか、`restart_request_id` 方式へ拡張する。初期実装では二重再起動を避けるため、ack成功時のクリアを推奨する。
+- OTA更新は起床中の明示的な待受ウィンドウに限定し、任意URL・未検証バイナリ・署名なし自動更新は扱わない。
 - 任意コマンド実行・任意パス保存・任意URL取得は禁止する。
 - ログにはAPIキー、Bearer token、Wi-Fiパスワードを出力しない。
 - 将来モーター制御へ進む場合は、別Issueで可動範囲、速度制限、非常停止、物理的ストッパーを要件化する。
@@ -204,7 +231,8 @@ CREATE TABLE camera_desired_configs (
 3. Flask routesに管理者/デバイスAPIを追加する。
 4. pytestで認証、入力検証、version更新、ack記録を確認する。
 5. ESP32-CAMサンプル側に polling とackの最小実装を追加する。
-6. README/日本語docsに運用手順を追加する。
+6. ESP32-CAMサンプル側に起床時OTA待受ウィンドウを追加し、既存のArduinoOTA/PlatformIO OTA upload手順と接続する。
+7. README/日本語docsに運用手順を追加する。
 
 ## 10. 受け入れ基準
 
@@ -212,5 +240,6 @@ CREATE TABLE camera_desired_configs (
 - デバイスが起床時に desired config を取得できる。
 - デバイスが適用結果をackでき、管理者APIで最終ack状態を確認できる。
 - 不正な設定値は `400 Bad Request` で拒否される。
+- `ota_update_requested=true` の場合、デバイスが次回起床時に指定秒数だけOTA更新を受け付け、timeout後は通常運用へ戻る。
 - 認証なしでは管理者API・デバイスAPIとも利用できない。
 - 既存の画像アップロード、heartbeat、ログ収集、WebSocket uploadのテストが退行しない。
