@@ -108,6 +108,10 @@ cp include/esp32cam_config.h.example include/esp32cam_config.h
 #define UPLOAD_URL "http://YOUR_MAC_LAN_IP:8080/upload"
 #define DEVICE_ID "esp32cam-01"
 #define HTTP_UPLOAD_TIMEOUT_MS 10000
+#define DEVICE_API_BASE_URL "http://YOUR_MAC_LAN_IP:8080"
+#define DEVICE_API_KEY ""
+#define DESIRED_CONFIG_POLL_TIMEOUT_MS 10000
+#define DESIRED_CONFIG_FIRMWARE_VERSION "0.3.0"
 #define NTP_SERVER "pool.ntp.org"
 #define NTP_SYNC_TIMEOUT_MS 10000
 ```
@@ -301,6 +305,10 @@ ipconfig getifaddr en0
 #define UPLOAD_URL "http://192.168.1.23:8080/upload"
 #define DEVICE_ID "esp32cam-01"
 #define HTTP_UPLOAD_TIMEOUT_MS 10000
+#define DEVICE_API_BASE_URL "http://YOUR_MAC_LAN_IP:8080"
+#define DEVICE_API_KEY ""
+#define DESIRED_CONFIG_POLL_TIMEOUT_MS 10000
+#define DESIRED_CONFIG_FIRMWARE_VERSION "0.3.0"
 #define NTP_SERVER "pool.ntp.org"
 #define NTP_SYNC_TIMEOUT_MS 10000
 ```
@@ -354,6 +362,29 @@ alive: millis=... wifi=ok camera_init=ok jpeg_capture=ok http_upload=ok http_sta
 ```
 
 サーバー側では `uploads/<DEVICE_ID>/images/` にJPEGが保存され、`/files` や `/cameras/<DEVICE_ID>` から確認できます。
+
+## Desired config polling / ack
+
+`esp32cam_http_upload_smoke` と OTA 対応HTTP upload envでは、Wi-Fi接続後・撮影前にサーバーの device API から desired config を取得できます。
+
+ローカルの `include/esp32cam_config.h` で次を設定します。
+
+```cpp
+#define DEVICE_API_BASE_URL "http://192.168.1.23:8080"
+#define DEVICE_API_KEY "per-device-api-key"  // ESP32CAM_DEVICE_API_KEYS 未使用なら空文字でも可
+#define DESIRED_CONFIG_POLL_TIMEOUT_MS 10000
+#define DESIRED_CONFIG_FIRMWARE_VERSION "0.3.0"
+```
+
+起動時の処理:
+
+1. `GET /api/devices/<DEVICE_ID>/desired-config?current_version=<n>` を送信します。
+2. `capture_interval_seconds`, `frame_size`, `jpeg_quality`, `vflip`, `hmirror` をローカル設定へ反映します。
+3. `POST /api/devices/<DEVICE_ID>/desired-config/ack` で `version`, `applied`, `message`, `firmware_version`, `free_heap` を送信します。
+4. `ota_update_requested=true` かつ `ENABLE_ARDUINO_OTA` と非空 `OTA_PASSWORD` が設定されている場合、`ota_window_seconds` の間だけ OTA window を開きます。
+5. `restart_requested=true` の場合、ack後に `ESP.restart()` します。
+
+`DEVICE_API_KEY` は `/upload` の `X-API-Key` にも付与されます。サーバー側で `ESP32CAM_DEVICE_API_KEYS` を設定した場合は、`DEVICE_ID` に対応するキーを必ず設定してください。
 
 ## よくある問題
 

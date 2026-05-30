@@ -10,6 +10,7 @@
 #endif
 
 #ifdef HTTP_UPLOAD_SMOKE_TEST
+#include <ArduinoJson.h>
 #include <HTTPClient.h>
 #include <time.h>
 #endif
@@ -33,6 +34,10 @@
 #define UPLOAD_URL ""
 #define DEVICE_ID "esp32cam-01"
 #define HTTP_UPLOAD_TIMEOUT_MS 10000
+#define DEVICE_API_BASE_URL ""
+#define DEVICE_API_KEY ""
+#define DESIRED_CONFIG_POLL_TIMEOUT_MS 10000
+#define DESIRED_CONFIG_FIRMWARE_VERSION "0.3.0"
 #define NTP_SERVER "pool.ntp.org"
 #define NTP_SYNC_TIMEOUT_MS 10000
 #define OTA_HOSTNAME "esp32cam-01"
@@ -54,6 +59,18 @@
 #endif
 #ifndef HTTP_UPLOAD_TIMEOUT_MS
 #define HTTP_UPLOAD_TIMEOUT_MS 10000
+#endif
+#ifndef DEVICE_API_BASE_URL
+#define DEVICE_API_BASE_URL ""
+#endif
+#ifndef DEVICE_API_KEY
+#define DEVICE_API_KEY ""
+#endif
+#ifndef DESIRED_CONFIG_POLL_TIMEOUT_MS
+#define DESIRED_CONFIG_POLL_TIMEOUT_MS 10000
+#endif
+#ifndef DESIRED_CONFIG_FIRMWARE_VERSION
+#define DESIRED_CONFIG_FIRMWARE_VERSION "0.3.0"
 #endif
 #ifndef NTP_SERVER
 #define NTP_SERVER "pool.ntp.org"
@@ -94,6 +111,29 @@ constexpr uint32_t kBaudRate = 115200;
 constexpr uint32_t kLogIntervalMs = 5000;
 uint32_t lastLogMs = 0;
 uint32_t bootCount = 0;
+
+#ifdef HTTP_UPLOAD_SMOKE_TEST
+struct DesiredConfig {
+  uint32_t captureIntervalSeconds = 300;
+  framesize_t frameSize = FRAMESIZE_QVGA;
+  const char *frameSizeLabel = "QVGA";
+  int jpegQuality = 12;
+  bool vflip = false;
+  bool hmirror = false;
+  bool restartRequested = false;
+  bool otaUpdateRequested = false;
+  uint32_t otaWindowSeconds = 120;
+};
+
+RTC_DATA_ATTR uint32_t desiredConfigVersion = 0;
+DesiredConfig desiredConfig;
+bool desiredConfigPollSucceeded = false;
+bool desiredConfigAckSucceeded = false;
+String desiredConfigMessage = "not_polled";
+#ifdef ENABLE_ARDUINO_OTA
+void setupArduinoOta();
+#endif
+#endif
 
 #if defined(CAMERA_INIT_SMOKE_TEST) || defined(JPEG_CAPTURE_SMOKE_TEST) || defined(HTTP_UPLOAD_SMOKE_TEST) || defined(WEBSOCKET_UPLOAD_SMOKE_TEST)
 bool cameraInitSucceeded = false;
@@ -257,8 +297,13 @@ camera_config_t buildAiThinkerCameraConfig() {
   config.pin_reset = kCameraPinReset;
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
+#ifdef HTTP_UPLOAD_SMOKE_TEST
+  config.frame_size = desiredConfig.frameSize;
+  config.jpeg_quality = desiredConfig.jpegQuality;
+#else
   config.frame_size = psramFound() ? FRAMESIZE_QVGA : FRAMESIZE_QQVGA;
   config.jpeg_quality = 12;
+#endif
   config.fb_count = 1;
   config.fb_location = psramFound() ? CAMERA_FB_IN_PSRAM : CAMERA_FB_IN_DRAM;
   config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
@@ -306,6 +351,16 @@ bool initCamera(const char *testName, const char *frameSizeLabel, const char *ne
   cameraInitSucceeded = true;
   Serial.println("Camera init succeeded");
   printCameraSensorInfo();
+#ifdef HTTP_UPLOAD_SMOKE_TEST
+  sensor_t *sensor = esp_camera_sensor_get();
+  if (sensor != nullptr) {
+    sensor->set_vflip(sensor, desiredConfig.vflip ? 1 : 0);
+    sensor->set_hmirror(sensor, desiredConfig.hmirror ? 1 : 0);
+    Serial.printf("Desired config sensor orientation: vflip=%s hmirror=%s\n",
+                  desiredConfig.vflip ? "true" : "false",
+                  desiredConfig.hmirror ? "true" : "false");
+  }
+#endif
   Serial.printf("Free heap after camera init: %u bytes\n", ESP.getFreeHeap());
   if (psramFound()) {
     Serial.printf("Free PSRAM after camera init: %u bytes\n", ESP.getFreePsram());
@@ -445,6 +500,195 @@ bool connectWiFiForUpload(const char *testName, const bool requireHttpUploadUrl)
 #endif
 
 #ifdef HTTP_UPLOAD_SMOKE_TEST
+framesize_t parseDesiredFrameSize(const char *value, const framesize_t fallback, const char **label) {
+  if (value == nullptr) {
+    return fallback;
+  }
+  if (strcmp(value, "QVGA") == 0) { *label = "QVGA"; return FRAMESIZE_QVGA; }
+  if (strcmp(value, "VGA") == 0) { *label = "VGA"; return FRAMESIZE_VGA; }
+  if (strcmp(value, "SVGA") == 0) { *label = "SVGA"; return FRAMESIZE_SVGA; }
+  if (strcmp(value, "XGA") == 0) { *label = "XGA"; return FRAMESIZE_XGA; }
+  if (strcmp(value, "SXGA") == 0) { *label = "SXGA"; return FRAMESIZE_SXGA; }
+  if (strcmp(value, "UXGA") == 0) { *label = "UXGA"; return FRAMESIZE_UXGA; }
+  return fallback;
+}
+
+String desiredConfigUrl(const char *suffix) {
+  String base = DEVICE_API_BASE_URL;
+  if (base.endsWith("/")) {
+    base.remove(base.length() - 1);
+  }
+  return base + "/api/devices/" + DEVICE_ID + suffix;
+}
+
+bool addDeviceApiKeyHeader(HTTPClient &http) {
+  if (strlen(DEVICE_API_KEY) == 0) {
+    return false;
+  }
+  http.addHeader("X-API-Key", DEVICE_API_KEY);
+  return true;
+}
+
+bool sendDesiredConfigAck(const uint32_t version, const bool applied, const String &message) {
+  if (strlen(DEVICE_API_BASE_URL) == 0) {
+    Serial.println("Desired config ack skipped: DEVICE_API_BASE_URL is not configured.");
+    return false;
+  }
+  HTTPClient http;
+  http.setTimeout(DESIRED_CONFIG_POLL_TIMEOUT_MS);
+  const String url = desiredConfigUrl("/desired-config/ack");
+  if (!http.begin(url)) {
+    Serial.println("Desired config ack failed: HTTP client begin failed.");
+    return false;
+  }
+  http.addHeader("Content-Type", "application/json");
+  addDeviceApiKeyHeader(http);
+  JsonDocument doc;
+  doc["version"] = version;
+  doc["applied"] = applied;
+  doc["message"] = message;
+  doc["firmware_version"] = DESIRED_CONFIG_FIRMWARE_VERSION;
+  doc["free_heap"] = ESP.getFreeHeap();
+  String body;
+  serializeJson(doc, body);
+  const int status = http.POST(body);
+  const String response = http.getString();
+  http.end();
+  desiredConfigAckSucceeded = (status >= 200 && status < 300);
+  Serial.printf("Desired config ack status: %d message=%s\n", status, message.c_str());
+  if (response.length() > 0) {
+    Serial.printf("Desired config ack response: %.240s\n", response.c_str());
+  }
+  return desiredConfigAckSucceeded;
+}
+
+bool applyDesiredConfig(JsonObject config, String &message) {
+  DesiredConfig next = desiredConfig;
+  if (config["capture_interval_seconds"].is<uint32_t>()) {
+    const uint32_t value = config["capture_interval_seconds"].as<uint32_t>();
+    if (value < 60 || value > 86400) { message = "invalid capture_interval_seconds"; return false; }
+    next.captureIntervalSeconds = value;
+  }
+  if (config["frame_size"].is<const char *>()) {
+    const char *label = next.frameSizeLabel;
+    next.frameSize = parseDesiredFrameSize(config["frame_size"].as<const char *>(), next.frameSize, &label);
+    if (strcmp(label, config["frame_size"].as<const char *>()) != 0) { message = "invalid frame_size"; return false; }
+    next.frameSizeLabel = label;
+  }
+  if (config["jpeg_quality"].is<int>()) {
+    const int value = config["jpeg_quality"].as<int>();
+    if (value < 10 || value > 63) { message = "invalid jpeg_quality"; return false; }
+    next.jpegQuality = value;
+  }
+  if (config["vflip"].is<bool>()) { next.vflip = config["vflip"].as<bool>(); }
+  if (config["hmirror"].is<bool>()) { next.hmirror = config["hmirror"].as<bool>(); }
+  if (config["restart_requested"].is<bool>()) { next.restartRequested = config["restart_requested"].as<bool>(); }
+  if (config["ota_update_requested"].is<bool>()) { next.otaUpdateRequested = config["ota_update_requested"].as<bool>(); }
+  if (config["ota_window_seconds"].is<uint32_t>()) {
+    const uint32_t value = config["ota_window_seconds"].as<uint32_t>();
+    if (value < 30 || value > 600) { message = "invalid ota_window_seconds"; return false; }
+    next.otaWindowSeconds = value;
+  }
+  desiredConfig = next;
+  message = "applied";
+  return true;
+}
+
+bool pollDesiredConfig() {
+  desiredConfigPollSucceeded = false;
+  desiredConfigMessage = "not_changed";
+  if (strlen(DEVICE_API_BASE_URL) == 0 || strcmp(DEVICE_API_BASE_URL, "http://YOUR_MAC_LAN_IP:8080") == 0) {
+    Serial.println("Desired config polling skipped: DEVICE_API_BASE_URL is not configured.");
+    return false;
+  }
+  HTTPClient http;
+  http.setTimeout(DESIRED_CONFIG_POLL_TIMEOUT_MS);
+  const String suffix = String("/desired-config?current_version=") + desiredConfigVersion;
+  const String url = desiredConfigUrl(suffix.c_str());
+  Serial.printf("Desired config GET: %s\n", url.c_str());
+  if (!http.begin(url)) {
+    desiredConfigMessage = "http_begin_failed";
+    return false;
+  }
+  addDeviceApiKeyHeader(http);
+  const int status = http.GET();
+  const String response = http.getString();
+  http.end();
+  Serial.printf("Desired config GET status: %d\n", status);
+  if (response.length() > 0) {
+    Serial.printf("Desired config response: %.300s\n", response.c_str());
+  }
+  if (status < 200 || status >= 300) {
+    desiredConfigMessage = String("poll_failed_status_") + status;
+    return false;
+  }
+  JsonDocument doc;
+  const DeserializationError error = deserializeJson(doc, response);
+  if (error) {
+    desiredConfigMessage = String("json_parse_failed: ") + error.c_str();
+    return false;
+  }
+  const uint32_t version = doc["version"] | desiredConfigVersion;
+  const bool changed = doc["changed"] | (version != desiredConfigVersion);
+  if (!changed && version == desiredConfigVersion) {
+    desiredConfigPollSucceeded = true;
+    desiredConfigMessage = "unchanged";
+    return true;
+  }
+  JsonObject config = doc["config"].as<JsonObject>();
+  if (config.isNull()) {
+    desiredConfigMessage = "missing_config";
+    sendDesiredConfigAck(version, false, desiredConfigMessage);
+    return false;
+  }
+  String message;
+  const bool applied = applyDesiredConfig(config, message);
+  desiredConfigMessage = message;
+  sendDesiredConfigAck(version, applied, message);
+  if (!applied) {
+    return false;
+  }
+  desiredConfigVersion = version;
+  desiredConfigPollSucceeded = true;
+  Serial.printf("Desired config applied: version=%lu capture_interval_seconds=%lu frame_size=%s jpeg_quality=%d vflip=%s hmirror=%s restart_requested=%s ota_update_requested=%s ota_window_seconds=%lu\n",
+                static_cast<unsigned long>(desiredConfigVersion),
+                static_cast<unsigned long>(desiredConfig.captureIntervalSeconds),
+                desiredConfig.frameSizeLabel,
+                desiredConfig.jpegQuality,
+                desiredConfig.vflip ? "true" : "false",
+                desiredConfig.hmirror ? "true" : "false",
+                desiredConfig.restartRequested ? "true" : "false",
+                desiredConfig.otaUpdateRequested ? "true" : "false",
+                static_cast<unsigned long>(desiredConfig.otaWindowSeconds));
+  return true;
+}
+
+void runRequestedOtaWindow() {
+  if (!desiredConfig.otaUpdateRequested) {
+    return;
+  }
+#ifndef ENABLE_ARDUINO_OTA
+  sendDesiredConfigAck(desiredConfigVersion, false, "ota_requested_but_firmware_ota_disabled");
+  return;
+#else
+  if (strlen(OTA_PASSWORD) == 0) {
+    sendDesiredConfigAck(desiredConfigVersion, false, "ota_requested_but_ota_password_empty");
+    return;
+  }
+  setupArduinoOta();
+  sendDesiredConfigAck(desiredConfigVersion, true, "ota_ready");
+  const uint32_t windowMs = desiredConfig.otaWindowSeconds * 1000UL;
+  const uint32_t startedAt = millis();
+  Serial.printf("Desired config OTA window started: %lu seconds\n", static_cast<unsigned long>(desiredConfig.otaWindowSeconds));
+  while (millis() - startedAt < windowMs) {
+    ArduinoOTA.handle();
+    delay(10);
+  }
+  sendDesiredConfigAck(desiredConfigVersion, false, "ota_timeout");
+  Serial.println("Desired config OTA window timed out; continuing normal upload cycle.");
+#endif
+}
+
 String capturedAtIso8601Utc() {
   configTime(0, 0, NTP_SERVER);
   const uint32_t startedAt = millis();
@@ -490,11 +734,19 @@ void runHttpUploadSmokeTest() {
     return;
   }
 
+  pollDesiredConfig();
+  runRequestedOtaWindow();
+  if (desiredConfig.restartRequested) {
+    Serial.println("Desired config requested restart; restarting after ack.");
+    delay(500);
+    ESP.restart();
+  }
+
   const String capturedAt = capturedAtIso8601Utc();
   Serial.printf("Captured-At header: %s\n", capturedAt.c_str());
 
   const bool initOk = initCamera("ESP32-CAM PlatformIO HTTP upload camera step",
-                                 psramFound() ? "QVGA" : "QQVGA",
+                                 desiredConfig.frameSizeLabel,
                                  "Capturing one frame for HTTP upload...");
   if (!initOk) {
     httpUploadSucceeded = false;
@@ -539,6 +791,7 @@ void runHttpUploadSmokeTest() {
 
   http.addHeader("Content-Type", "image/jpeg");
   http.addHeader("X-Device-Id", DEVICE_ID);
+  addDeviceApiKeyHeader(http);
   http.addHeader("X-Captured-At", capturedAt);
   lastHttpStatusCode = http.POST(fb->buf, fb->len);
   Serial.printf("HTTP status code: %d\n", lastHttpStatusCode);
