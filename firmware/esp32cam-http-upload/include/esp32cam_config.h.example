@@ -17,13 +17,25 @@
 #define DEVICE_ID "esp32cam-01"
 #define HTTP_UPLOAD_TIMEOUT_MS 10000
 
+// Device API settings for desired-config polling and ack.
+// DEVICE_API_BASE_URL is the Flask server origin without a trailing slash.
+// Example: http://192.168.1.23:8080
+#define DEVICE_API_BASE_URL "http://YOUR_MAC_LAN_IP:8080"
+// Leave empty when the server does not enforce ESP32CAM_DEVICE_API_KEYS.
+// Set this to the per-device key when ESP32CAM_DEVICE_API_KEYS is configured.
+#define DEVICE_API_KEY ""
+#define DESIRED_CONFIG_POLL_TIMEOUT_MS 10000
+#define DESIRED_CONFIG_FIRMWARE_VERSION "0.3.0"
+
 // NTP is used to generate the X-Captured-At header required by the Flask server.
 #define NTP_SERVER "pool.ntp.org"
 #define NTP_SYNC_TIMEOUT_MS 10000
 
 
-// ArduinoOTA settings. Keep OTA_PASSWORD empty for no password on a private
-// development LAN, or set it only in your local ignored esp32cam_config.h.
+// ArduinoOTA settings. Keep OTA_PASSWORD empty only for local development when
+// you are not using server-requested OTA windows. If `ota_update_requested=true`
+// is delivered through desired config, this firmware rejects the OTA window
+// unless OTA_PASSWORD is non-empty in your local ignored esp32cam_config.h.
 //
 // These values configure the firmware running on the ESP32-CAM. PlatformIO OTA
 // upload still needs the host-side destination in your shell, for example:
