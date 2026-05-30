@@ -42,7 +42,6 @@
 | 機能 | 対応 Issue | 理由 |
 |------|----------|------|
 | ライブビデオストリーミング | [#9](https://github.com/1222-takeshi/server_for_esp32cam/issues/9) | 電力・帯域コストが高く、スナップショットで代替可能 |
-| ESP32-CAM 遠隔制御API | [#137](https://github.com/1222-takeshi/server_for_esp32cam/issues/137) | deep sleep前提のdevice polling方式で最小設計から進める |
 | 将来の機能拡張案 | [#20](https://github.com/1222-takeshi/server_for_esp32cam/issues/20) | 優先順位未確定 |
 | 動画アップロード API | [#35](https://github.com/1222-takeshi/server_for_esp32cam/issues/35) | ストレージ設計・形式選定が必要 |
 
@@ -81,7 +80,8 @@
 ### 4. ESP32-CAM 遠隔制御APIの設計
 
 *   deep sleep 前提のため、サーバーpushではなく device polling で desired config を取得する
-*   まずは撮影間隔、解像度、JPEG品質、向き補正、再起動要求に限定する
+*   まずは撮影間隔、解像度、JPEG品質、向き補正、再起動要求、OTA待受要求に限定する
+*   OTA待受は非空OTAパスワード必須とし、次回起床時の明示的な待受ウィンドウ内だけ受け付ける
 *   参照: [#137 ESP32-CAM遠隔制御APIを設計する](https://github.com/1222-takeshi/server_for_esp32cam/issues/137), [`docs/design/remote-control-api.md`](../design/remote-control-api.md)
 
 ### 5. 短い動画クリップの評価

@@ -13,7 +13,7 @@
 
 MVPの遠隔制御は、サーバーにカメラ単位の desired config を保存し、ESP32-CAMが起床時または周期処理時にHTTPで取得・反映・ackする **Device polling方式** とする。
 
-OTA更新についても同じ考え方を適用し、deep sleep中に直接書き込むのではなく、desired configで「次回起床時にOTA待受ウィンドウを開く」要求を出す。デバイスは起床後にWi-Fi接続し、指定秒数だけArduinoOTA等のOTAサービスを処理してから、timeout時は通常の撮影・アップロード・deep sleepへ戻る。
+OTA更新についても同じ考え方を適用し、deep sleep中に直接書き込むのではなく、desired configで「次回起床時にOTA待受ウィンドウを開く」要求を出す。デバイスは起床後にWi-Fi接続し、非空のOTAパスワードが設定されている場合のみ、指定秒数だけArduinoOTA等のOTAサービスを処理してから、成功・失敗・timeoutをackし通常の撮影・アップロード・deep sleepへ戻る。
 
 ## 理由
 
@@ -32,7 +32,7 @@ OTA更新についても同じ考え方を適用し、deep sleep中に直接書�
 | ESP32-CAM側HTTP server | デバイスIP探索、到達性、認証、sleep復帰の扱いが複雑。サーバーからデバイスへ直接到達できる前提を置きたくない |
 | MQTT broker | IoTのdesired stateには適しているが、broker運用が増え、現行Flask/SQLite構成よりMVPの運用負荷が高い |
 | 任意コマンド実行API | 実装は柔軟だが、誤操作・権限昇格・秘密情報漏洩・デバイス破損のリスクが高い |
-| 任意URLからの自己OTA更新 | 便利だが、署名検証、配布元認証、rollback、破損時復旧などの設計が必要でMVPには重い。初期は既存のArduinoOTA/PlatformIO OTA uploadをLAN内で実行する |
+| 任意URLからの自己OTA更新 | 便利だが、署名検証、配布元認証、rollback、破損時復旧などの設計が必要でMVPには重い。初期は既存のArduinoOTA/PlatformIO OTA uploadをLAN内で実行し、非空OTAパスワードを必須にする |
 
 ## 結果・影響
 
@@ -40,5 +40,5 @@ OTA更新についても同じ考え方を適用し、deep sleep中に直接書�
 - APIには、管理者向け desired config CRUD と、デバイス向け desired config 取得/ack エンドポイントが必要になる。
 - metadata storeには、config version、更新時刻、最後にackされたversion、ack結果を保存する必要がある。
 - ESP32-CAMファームウェアは、起床後に設定取得、範囲チェック、反映結果ackを行う処理を追加する必要がある。
-- OTA更新はdeep sleep中には受けられない。更新作業時は、管理者がOTA待受要求を設定し、次回起床時の待受ウィンドウ内に同じLANからPlatformIO OTA uploadを実行する必要がある。
+- OTA更新はdeep sleep中には受けられない。更新作業時は、管理者がOTA待受要求を設定し、次回起床時の待受ウィンドウ内に同じLANから非空OTAパスワード付きでPlatformIO OTA uploadを実行する必要がある。OTAパスワード未設定・認証失敗・timeoutは失敗としてackし、待受要求を解除する。
 - 将来、ライブ配信やモーター制御など低遅延制御が必要になった場合は、WebSocket command またはMQTTを別ADRで再評価する。

@@ -37,6 +37,8 @@
 - ESP32-CAMはdeep sleep運用を前提にするため、睡眠中はサーバーから直接到達できない。
 - MVPは自宅LAN内・月額0円・Raspberry Pi / Raspberry Pi Zeroでの常時稼働を優先する。
 - 認証は既存方針に合わせ、デバイス向けは `X-API-Key: <DEVICE_API_KEY>`、管理者向けは `Authorization: Bearer <ADMIN_TOKEN>` を使う。
+- デバイス向けAPIでは、`device_id` と `X-API-Key` の対応関係をサーバー側で検証し、別デバイスの desired config 取得・ack を拒否する。
+- OTA待受を有効化する場合は、API認証とは別に ArduinoOTA / PlatformIO OTA upload 側でも非空の `OTA_PASSWORD` を必須にする。パスワードなしOTAはMVPの遠隔更新フローでは禁止する。
 - 設定値はデバイスが安全に扱えるホワイトリスト制にする。自由形式のコマンド文字列は受け付けない。
 
 ## 4. 方式比較
@@ -92,18 +94,21 @@ Content-Type: application/json
 
 ```json
 {
-  "capture_interval_seconds": 300,
-  "frame_size": "SVGA",
-  "jpeg_quality": 12,
-  "vflip": false,
-  "hmirror": false,
-  "restart_requested": false,
-  "ota_update_requested": false,
-  "ota_window_seconds": 120
+  "expected_version": 2,
+  "config": {
+    "capture_interval_seconds": 300,
+    "frame_size": "SVGA",
+    "jpeg_quality": 12,
+    "vflip": false,
+    "hmirror": false,
+    "restart_requested": false,
+    "ota_update_requested": false,
+    "ota_window_seconds": 120
+  }
 }
 ```
 
-成功時は `200 OK` で更新後のconfigを返す。入力不正時は `400 Bad Request`、認証失敗時は `401 Unauthorized`、存在しない/不正な `camera_id` は `404 Not Found` または `400 Bad Request` とする。
+初期実装では直接configオブジェクトをPUTしてもよいが、競合更新を避けるため、管理UI/APIでは `expected_version` を添えた条件付き更新を推奨する。成功時は `200 OK` で更新後のconfigを返す。入力不正時は `400 Bad Request`、認証失敗時は `401 Unauthorized`、存在しない/不正な `camera_id` は `404 Not Found` または `400 Bad Request`、`expected_version` 不一致時は `409 Conflict` とする。
 
 ### 5.3 デバイス: desired config取得
 
@@ -193,9 +198,10 @@ CREATE TABLE camera_desired_configs (
 3. `GET /api/devices/{device_id}/desired-config?current_version=<n>` を呼ぶ。
 4. 取得した `version` がローカル保存値より新しければ、範囲チェック後に設定を反映する。
 5. `ota_update_requested` が `true` の場合、`ota_window_seconds` の間だけ Wi-Fi 接続と OTA サービスを維持し、ArduinoOTA などのOTA更新を受け付ける。
-6. `POST /api/devices/{device_id}/desired-config/ack` で反映結果を送る。OTA待受に入った場合は、OTA ready / timeout / failed などの状態も `message` に含める。
-7. 反映後の設定で撮影・アップロードする。
-8. `capture_interval_seconds` に従ってdeep sleepへ戻る。
+6. OTA待受に入る直前に `POST /api/devices/{device_id}/desired-config/ack` で `message: "ota_ready"` を送る。OTA成功時は再起動後の通常フローで新ファームウェア情報をackし、OTA認証失敗・転送失敗・timeout時は `failed` / `timeout` をackする。
+7. OTA待受を使わない通常設定変更では、範囲チェックと反映結果をackする。
+8. 反映後の設定で撮影・アップロードする。
+9. `capture_interval_seconds` に従ってdeep sleepへ戻る。
 
 ### 7.1 OTA更新の扱い
 
@@ -208,20 +214,22 @@ MVPでは「任意URLからファームウェアを取得して自己更新す�
 1. 管理者が `ota_update_requested=true` と `ota_window_seconds` を設定する。
 2. ESP32-CAMが次回起床時に desired config を取得する。
 3. デバイスは `OTA ready` 状態をシリアルログまたはackで通知し、指定秒数だけ `ArduinoOTA.handle()` を処理する。
-4. 運用者は同じLAN内から `pio run -e esp32cam_http_upload_ota -t upload` を実行する。
+4. 運用者は同じLAN内から、デバイスに設定済みの非空 `OTA_PASSWORD` を使って `pio run -e esp32cam_http_upload_ota -t upload` を実行する。
 5. OTA成功後にデバイスは再起動し、新ファームウェアで通常フローへ戻る。
-6. OTA待受がtimeoutした場合は、ackにtimeoutを記録し、通常撮影・アップロード・deep sleepへ戻る。
+6. OTA認証失敗・転送失敗時は `failed`、待受がtimeoutした場合は `timeout` をackに記録し、通常撮影・アップロード・deep sleepへ戻る。
 
-`ota_update_requested` は一回限りの操作として扱い、OTA成功またはOTA待受timeout後にサーバー側で `false` へ戻す。二重更新や意図しない長時間起床を避けるため、`ota_window_seconds` には上限を設ける。
+`ota_update_requested` は一回限りの操作として扱い、OTA成功・OTA失敗・OTA待受timeout後にサーバー側で `false` へ戻す。二重更新や意図しない長時間起床を避けるため、`ota_window_seconds` には上限を設ける。
 
 ## 8. セキュリティ・安全性
 
 - 管理者APIとデバイスAPIの認証を分離する。
+- デバイスAPIは `device_id` とAPIキーの対応を検証し、APIキーを知る別デバイスによるなりすまし取得・ackを拒否する。
 - 設定値はサーバー側とファームウェア側の両方で範囲チェックする。
 - `restart_requested` はack後にサーバー側で自動的に `false` に戻すか、`restart_request_id` 方式へ拡張する。初期実装では二重再起動を避けるため、ack成功時のクリアを推奨する。
 - OTA更新は起床中の明示的な待受ウィンドウに限定し、任意URL・未検証バイナリ・署名なし自動更新は扱わない。
+- OTA待受を開くデバイスは非空の `OTA_PASSWORD` を必須にし、パスワードなしのArduinoOTA待受は失敗として扱う。管理者APIのBearer tokenだけではOTA経路の認証にならないため、OTA upload時にも別途パスワードを要求する。
 - 任意コマンド実行・任意パス保存・任意URL取得は禁止する。
-- ログにはAPIキー、Bearer token、Wi-Fiパスワードを出力しない。
+- ログにはAPIキー、Bearer token、Wi-Fiパスワード、OTAパスワードを出力しない。
 - 将来モーター制御へ進む場合は、別Issueで可動範囲、速度制限、非常停止、物理的ストッパーを要件化する。
 
 ## 9. 実装ステップ案
@@ -230,16 +238,20 @@ MVPでは「任意URLからファームウェアを取得して自己更新す�
 2. SQLite storeに desired config のCRUDとack更新を追加する。
 3. Flask routesに管理者/デバイスAPIを追加する。
 4. pytestで認証、入力検証、version更新、ack記録を確認する。
-5. ESP32-CAMサンプル側に polling とackの最小実装を追加する。
-6. ESP32-CAMサンプル側に起床時OTA待受ウィンドウを追加し、既存のArduinoOTA/PlatformIO OTA upload手順と接続する。
-7. README/日本語docsに運用手順を追加する。
+5. デバイスAPIで `device_id` とAPIキーの対応検証を実装・テストする。
+6. ESP32-CAMサンプル側に polling とackの最小実装を追加する。
+7. ESP32-CAMサンプル側に起床時OTA待受ウィンドウを追加し、非空 `OTA_PASSWORD` 必須の既存ArduinoOTA/PlatformIO OTA upload手順と接続する。
+8. README/日本語docsに運用手順を追加する。
 
 ## 10. 受け入れ基準
 
 - 管理者がカメラ単位で desired config を取得・更新できる。
 - デバイスが起床時に desired config を取得できる。
+- デバイスAPIは `device_id` とAPIキーの対応が一致しない要求を拒否できる。
 - デバイスが適用結果をackでき、管理者APIで最終ack状態を確認できる。
 - 不正な設定値は `400 Bad Request` で拒否される。
 - `ota_update_requested=true` の場合、デバイスが次回起床時に指定秒数だけOTA更新を受け付け、timeout後は通常運用へ戻る。
+- OTA待受は非空 `OTA_PASSWORD` が設定されている場合のみ有効化され、パスワードなしOTAは失敗として扱われる。
+- OTA認証失敗・転送失敗・timeout時は状態がackまたは管理者APIから確認でき、`ota_update_requested` が解除される。
 - 認証なしでは管理者API・デバイスAPIとも利用できない。
 - 既存の画像アップロード、heartbeat、ログ収集、WebSocket uploadのテストが退行しない。
