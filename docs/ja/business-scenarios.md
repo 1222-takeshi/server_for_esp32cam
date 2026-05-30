@@ -117,6 +117,7 @@ MVP では以下を明確に対象外とします。
 ## 既存 Issue / 将来機能との関係
 
 - ライブ配信は #9 の領域として扱う。
+- ESP32-CAM 遠隔制御APIは #137 と [`docs/design/remote-control-api.md`](../design/remote-control-api.md) で扱う。
 - 将来機能全般は #20 と重複しないよう、本書では導入判断と優先順位に限定する。
 - 動画アップロード・保存方式は #35 と連携し、常時録画ではなく短い動画クリップを前提に評価する。
 - 非機能要件と受け入れ基準は [`docs/ja/requirements.md`](requirements.md) を参照する。
