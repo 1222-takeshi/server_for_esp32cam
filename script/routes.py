@@ -12,8 +12,14 @@ from flask import Blueprint, Response, current_app, jsonify, render_template, re
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
-from script.auth import check_admin_token, check_device_api_key, require_admin_auth, require_device_auth
-from script.metadata import ALLOWED_LOG_LEVELS, CameraSummary, DeviceLogRecord, SnapshotRecord
+from script.auth import (
+    check_admin_token,
+    check_device_api_key,
+    check_device_api_key_for_device,
+    require_admin_auth,
+    require_device_auth,
+)
+from script.metadata import ALLOWED_LOG_LEVELS, CameraSummary, DesiredConfigVersionConflict, DeviceLogRecord, SnapshotRecord
 from script.retention import apply_upload_retention
 from script.storage import Storage
 
@@ -168,6 +174,79 @@ def _serialize_camera_summary(summary: CameraSummary) -> dict[str, object]:
     }
 
 
+_DESIRED_CONFIG_DEFAULT: dict[str, object] = {
+    "capture_interval_seconds": 300,
+    "frame_size": "SVGA",
+    "jpeg_quality": 12,
+    "vflip": False,
+    "hmirror": False,
+    "restart_requested": False,
+    "ota_update_requested": False,
+    "ota_window_seconds": 120,
+}
+_ALLOWED_FRAME_SIZES = frozenset({"QVGA", "VGA", "SVGA", "XGA", "SXGA", "UXGA"})
+
+
+def _serialize_desired_config(record) -> dict[str, object]:
+    return {
+        "camera_id": record.camera_id,
+        "version": record.version,
+        "updated_at": record.updated_at.isoformat(),
+        "updated_by": record.updated_by,
+        "config": record.config,
+        "last_acknowledged_version": record.last_acknowledged_version,
+        "last_acknowledged_at": (
+            record.last_acknowledged_at.isoformat() if record.last_acknowledged_at else None
+        ),
+        "last_acknowledged_message": record.last_acknowledged_message,
+        "last_acknowledged_success": record.last_acknowledged_success,
+        "last_firmware_version": record.last_firmware_version,
+        "last_free_heap": record.last_free_heap,
+    }
+
+
+def _validate_desired_config_payload(config: object) -> tuple[dict[str, object] | None, str | None]:
+    if not isinstance(config, dict):
+        return None, "config must be an object"
+    unknown = sorted(set(config) - set(_DESIRED_CONFIG_DEFAULT))
+    if unknown:
+        return None, f"unknown desired config keys: {', '.join(unknown)}"
+    merged = {**_DESIRED_CONFIG_DEFAULT, **config}
+
+    interval = merged["capture_interval_seconds"]
+    if not isinstance(interval, int) or isinstance(interval, bool) or not 60 <= interval <= 86400:
+        return None, "capture_interval_seconds must be an integer between 60 and 86400"
+    frame_size = merged["frame_size"]
+    if not isinstance(frame_size, str) or frame_size not in _ALLOWED_FRAME_SIZES:
+        return None, f"frame_size must be one of {sorted(_ALLOWED_FRAME_SIZES)}"
+    jpeg_quality = merged["jpeg_quality"]
+    if not isinstance(jpeg_quality, int) or isinstance(jpeg_quality, bool) or not 10 <= jpeg_quality <= 63:
+        return None, "jpeg_quality must be an integer between 10 and 63"
+    for key in ("vflip", "hmirror", "restart_requested", "ota_update_requested"):
+        if not isinstance(merged[key], bool):
+            return None, f"{key} must be a boolean"
+    ota_window = merged["ota_window_seconds"]
+    if not isinstance(ota_window, int) or isinstance(ota_window, bool) or not 30 <= ota_window <= 600:
+        return None, "ota_window_seconds must be an integer between 30 and 600"
+    return merged, None
+
+
+def _get_or_create_desired_config(camera_id: str):
+    store = _metadata_store()
+    record = store.get_desired_config(camera_id)
+    if record is not None:
+        return record
+    return store.upsert_desired_config(camera_id, dict(_DESIRED_CONFIG_DEFAULT))
+
+
+def _check_device_matches_path(device_id: str):
+    if not check_device_api_key(request.headers.get("X-API-Key")):
+        return jsonify({"message": "Unauthorized"}), 401
+    if not check_device_api_key_for_device(device_id, request.headers.get("X-API-Key")):
+        return jsonify({"message": "Forbidden"}), 403
+    return None
+
+
 @server.route("/")
 def index():
     store = _metadata_store()
@@ -263,6 +342,8 @@ def upload_file():
     if device_id_error:
         current_app.logger.error("Invalid device_id in upload: %s", device_id_error)
         return jsonify({"message": device_id_error}), 400
+    if not check_device_api_key_for_device(device_id, request.headers.get("X-API-Key")):
+        return jsonify({"message": "Forbidden"}), 403
 
     try:
         captured_at = _parse_captured_at(captured_at_raw)
@@ -433,6 +514,107 @@ def api_patch_camera(camera_id: str):
     ), 200
 
 
+@server.route("/api/cameras/<camera_id>/desired-config")
+@require_admin_auth
+def api_get_camera_desired_config(camera_id: str):
+    if _validate_device_id(camera_id):
+        return jsonify({"message": "Camera not found"}), 404
+    record = _get_or_create_desired_config(camera_id)
+    return jsonify(_serialize_desired_config(record)), 200
+
+
+@server.route("/api/cameras/<camera_id>/desired-config", methods=["PUT"])
+@require_admin_auth
+def api_put_camera_desired_config(camera_id: str):
+    if _validate_device_id(camera_id):
+        return jsonify({"message": "Camera not found"}), 404
+    body = request.get_json(silent=True) or {}
+    config, error = _validate_desired_config_payload(body.get("config"))
+    if error:
+        return jsonify({"message": error}), 400
+    expected_version = body.get("expected_version")
+    if expected_version is not None and (
+        not isinstance(expected_version, int) or isinstance(expected_version, bool) or expected_version < 0
+    ):
+        return jsonify({"message": "expected_version must be a non-negative integer"}), 400
+    try:
+        record = _metadata_store().upsert_desired_config(
+            camera_id,
+            config or {},
+            expected_version=expected_version,
+        )
+    except DesiredConfigVersionConflict as exc:
+        return jsonify({"message": str(exc), "current_version": exc.current_version}), 409
+    return jsonify(_serialize_desired_config(record)), 200
+
+
+@server.route("/api/devices/<device_id>/desired-config")
+def api_get_device_desired_config(device_id: str):
+    if _validate_device_id(device_id):
+        return jsonify({"message": "Device not found"}), 404
+    auth_error = _check_device_matches_path(device_id)
+    if auth_error is not None:
+        return auth_error
+    try:
+        current_version = int(request.args.get("current_version", "0"))
+    except ValueError:
+        return jsonify({"message": "current_version must be an integer"}), 400
+    if current_version < 0:
+        return jsonify({"message": "current_version must be non-negative"}), 400
+    record = _get_or_create_desired_config(device_id)
+    response = {
+        "device_id": device_id,
+        "version": record.version,
+        "changed": current_version != record.version,
+        "config": record.config,
+    }
+    return jsonify(response), 200
+
+
+@server.route("/api/devices/<device_id>/desired-config/ack", methods=["POST"])
+def api_ack_device_desired_config(device_id: str):
+    if _validate_device_id(device_id):
+        return jsonify({"message": "Device not found"}), 404
+    auth_error = _check_device_matches_path(device_id)
+    if auth_error is not None:
+        return auth_error
+    body = request.get_json(silent=True) or {}
+    version = body.get("version")
+    applied = body.get("applied")
+    message = body.get("message")
+    firmware_version = body.get("firmware_version")
+    free_heap = body.get("free_heap")
+    if not isinstance(version, int) or isinstance(version, bool) or version < 1:
+        return jsonify({"message": "version must be a positive integer"}), 400
+    if not isinstance(applied, bool):
+        return jsonify({"message": "applied must be a boolean"}), 400
+    if message is not None and (not isinstance(message, str) or len(message) > 500):
+        return jsonify({"message": "message must be a string up to 500 characters"}), 400
+    if firmware_version is not None and (not isinstance(firmware_version, str) or len(firmware_version) > 64):
+        return jsonify({"message": "firmware_version must be a string up to 64 characters"}), 400
+    if free_heap is not None and (not isinstance(free_heap, int) or isinstance(free_heap, bool) or free_heap < 0):
+        return jsonify({"message": "free_heap must be a non-negative integer"}), 400
+    current = _metadata_store().get_desired_config(device_id)
+    if current is None:
+        return jsonify({"message": "Desired config not found"}), 404
+    if version != current.version:
+        return jsonify({"message": "version does not match current desired config", "current_version": current.version}), 409
+    try:
+        record = _metadata_store().record_desired_config_ack(
+            device_id,
+            version=version,
+            applied=applied,
+            message=message,
+            firmware_version=firmware_version,
+            free_heap=free_heap,
+        )
+    except DesiredConfigVersionConflict as exc:
+        return jsonify({"message": str(exc), "current_version": exc.current_version}), 409
+    if record is None:
+        return jsonify({"message": "Desired config not found"}), 404
+    return jsonify(_serialize_desired_config(record)), 200
+
+
 @server.route("/api/cameras/<camera_id>/upload-metrics")
 def api_camera_upload_metrics(camera_id: str):
     if _validate_device_id(camera_id):
@@ -582,6 +764,8 @@ def api_status_update():
     device_id_error = _validate_device_id(device_id)
     if device_id_error:
         return jsonify({"message": device_id_error}), 400
+    if not check_device_api_key_for_device(device_id, request.headers.get("X-API-Key")):
+        return jsonify({"message": "Forbidden"}), 403
 
     camera = _metadata_store().record_heartbeat(device_id)
     current_app.logger.info("Heartbeat from device: %s", device_id)
@@ -605,6 +789,8 @@ def api_log_error():
     device_id_error = _validate_device_id(device_id)
     if device_id_error:
         return jsonify({"message": device_id_error}), 400
+    if not check_device_api_key_for_device(device_id, request.headers.get("X-API-Key")):
+        return jsonify({"message": "Forbidden"}), 403
     if not message:
         return jsonify({"message": "message is required"}), 400
     if len(message) > 2000:

@@ -239,6 +239,156 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorMessage"
 
+  /api/cameras/{camera_id}/desired-config:
+    get:
+      summary: Get desired config for a camera
+      description: Returns the server-stored desired config and last device acknowledgement state.
+      tags: [cameras]
+      security:
+        - adminToken: []
+      parameters:
+        - $ref: "#/components/parameters/camera_id"
+      responses:
+        "200":
+          description: Desired config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DesiredConfigRecord"
+        "401":
+          description: Missing or invalid admin token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+    put:
+      summary: Update desired config for a camera
+      description: Whitelisted settings are stored with an incrementing version. `expected_version` can be used for optimistic concurrency.
+      tags: [cameras]
+      security:
+        - adminToken: []
+      parameters:
+        - $ref: "#/components/parameters/camera_id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DesiredConfigUpdateRequest"
+      responses:
+        "200":
+          description: Desired config updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DesiredConfigRecord"
+        "400":
+          description: Invalid config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          description: Missing or invalid admin token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "409":
+          description: expected_version does not match current version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+
+  /api/devices/{device_id}/desired-config:
+    get:
+      summary: Device polling endpoint for desired config
+      description: ESP32-CAM calls this when awake. Per-device API keys from `ESP32CAM_DEVICE_API_KEYS` must match the path `device_id` when configured.
+      tags: [device]
+      security:
+        - deviceApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/device_id"
+        - in: query
+          name: current_version
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        "200":
+          description: Desired config for the device
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceDesiredConfigResponse"
+        "401":
+          description: Missing or invalid device API key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "403":
+          description: API key is valid but not assigned to this device_id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+
+  /api/devices/{device_id}/desired-config/ack:
+    post:
+      summary: Acknowledge desired config application
+      description: Records whether the device applied a config version and clears one-shot restart/OTA requests.
+      tags: [device]
+      security:
+        - deviceApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/device_id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DesiredConfigAckRequest"
+      responses:
+        "200":
+          description: Ack recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DesiredConfigRecord"
+        "400":
+          description: Invalid ack body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          description: Missing or invalid device API key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "403":
+          description: API key is valid but not assigned to this device_id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "404":
+          description: Desired config not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "409":
+          description: Ack version does not match current desired config version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+
   /api/cameras/{camera_id}/snapshots:
     get:
       summary: List snapshots for a camera
@@ -679,6 +829,118 @@ components:
           nullable: true
         expected_interval_seconds:
           type: integer
+
+    DesiredConfig:
+      type: object
+      additionalProperties: false
+      properties:
+        capture_interval_seconds:
+          type: integer
+          minimum: 60
+          maximum: 86400
+          default: 300
+        frame_size:
+          type: string
+          enum: [QVGA, VGA, SVGA, XGA, SXGA, UXGA]
+          default: SVGA
+        jpeg_quality:
+          type: integer
+          minimum: 10
+          maximum: 63
+          default: 12
+        vflip:
+          type: boolean
+          default: false
+        hmirror:
+          type: boolean
+          default: false
+        restart_requested:
+          type: boolean
+          default: false
+        ota_update_requested:
+          type: boolean
+          default: false
+        ota_window_seconds:
+          type: integer
+          minimum: 30
+          maximum: 600
+          default: 120
+
+    DesiredConfigUpdateRequest:
+      type: object
+      required: [config]
+      properties:
+        expected_version:
+          type: integer
+          minimum: 0
+          description: Optional optimistic concurrency guard. Use 0 for create-if-absent.
+        config:
+          $ref: "#/components/schemas/DesiredConfig"
+
+    DesiredConfigRecord:
+      type: object
+      properties:
+        camera_id:
+          type: string
+        version:
+          type: integer
+        updated_at:
+          type: string
+          format: date-time
+        updated_by:
+          type: string
+        config:
+          $ref: "#/components/schemas/DesiredConfig"
+        last_acknowledged_version:
+          type: integer
+          nullable: true
+        last_acknowledged_at:
+          type: string
+          format: date-time
+          nullable: true
+        last_acknowledged_message:
+          type: string
+          nullable: true
+        last_acknowledged_success:
+          type: boolean
+          nullable: true
+        last_firmware_version:
+          type: string
+          nullable: true
+        last_free_heap:
+          type: integer
+          nullable: true
+
+    DeviceDesiredConfigResponse:
+      type: object
+      properties:
+        device_id:
+          type: string
+        version:
+          type: integer
+        changed:
+          type: boolean
+        config:
+          $ref: "#/components/schemas/DesiredConfig"
+
+    DesiredConfigAckRequest:
+      type: object
+      required: [version, applied]
+      properties:
+        version:
+          type: integer
+          minimum: 1
+        applied:
+          type: boolean
+        message:
+          type: string
+          maxLength: 500
+        firmware_version:
+          type: string
+          maxLength: 64
+        free_heap:
+          type: integer
+          minimum: 0
 
     SnapshotRecord:
       type: object

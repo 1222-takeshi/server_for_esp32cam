@@ -283,6 +283,9 @@ def test_contract_openapi_spec_has_required_paths(openapi_spec):
         "/upload",
         "/api/cameras",
         "/api/cameras/{camera_id}",
+        "/api/cameras/{camera_id}/desired-config",
+        "/api/devices/{device_id}/desired-config",
+        "/api/devices/{device_id}/desired-config/ack",
     }
     missing = required - paths
     assert not missing, f"OpenAPI spec missing paths: {missing}"

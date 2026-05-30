@@ -4,7 +4,7 @@ import pytest
 from datetime import datetime, timedelta, timezone
 
 from script.detector import Detection
-from script.metadata import ALLOWED_LOG_LEVELS, SQLiteMetadataStore
+from script.metadata import ALLOWED_LOG_LEVELS, DesiredConfigVersionConflict, SQLiteMetadataStore
 from script.storage import StoredImage
 
 
@@ -376,3 +376,44 @@ def test_metadata_store_enables_wal_mode(tmp_path):
     store = SQLiteMetadataStore(tmp_path / "wal.sqlite3")
     row = store._connection.execute("PRAGMA journal_mode").fetchone()
     assert row[0] == "wal"
+
+def test_desired_config_ack_rejects_stale_version_atomically(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    first = store.upsert_desired_config(
+        "cam-a",
+        {
+            "capture_interval_seconds": 300,
+            "frame_size": "SVGA",
+            "jpeg_quality": 12,
+            "vflip": False,
+            "hmirror": False,
+            "restart_requested": True,
+            "ota_update_requested": True,
+            "ota_window_seconds": 120,
+        },
+    )
+    second = store.upsert_desired_config(
+        "cam-a",
+        {
+            **first.config,
+            "frame_size": "VGA",
+            "restart_requested": True,
+            "ota_update_requested": True,
+        },
+    )
+
+    with pytest.raises(DesiredConfigVersionConflict) as exc_info:
+        store.record_desired_config_ack(
+            "cam-a",
+            version=first.version,
+            applied=True,
+            message="stale ack",
+        )
+
+    current = store.get_desired_config("cam-a")
+    assert exc_info.value.current_version == second.version
+    assert current is not None
+    assert current.version == second.version
+    assert current.last_acknowledged_version is None
+    assert current.config["restart_requested"] is True
+    assert current.config["ota_update_requested"] is True
