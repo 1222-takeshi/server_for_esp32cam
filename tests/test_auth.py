@@ -4,7 +4,9 @@ import logging
 
 import pytest
 
+from script import config as config_module
 from script.app import create_app
+from tests.conftest import MINIMAL_JPEG
 
 
 @pytest.fixture()
@@ -76,6 +78,48 @@ def test_upload_rejects_wrong_device_key(app_with_device_key):
     assert response.status_code == 401
 
 
+def test_upload_rejects_valid_key_for_different_device(tmp_path):
+    app = create_app(
+        {
+            "TESTING": True,
+            "UPLOAD_DIR": tmp_path / "uploads",
+            "DB_PATH": tmp_path / "esp32cam.sqlite3",
+            "INFERENCE_MODE": "sync",
+            "DEVICE_API_KEYS": {"cam-a": "key-a", "cam-b": "key-b"},
+            "RATELIMIT_ENABLED": False,
+        }
+    )
+    response = app.test_client().post(
+        "/upload",
+        data=MINIMAL_JPEG,
+        headers={
+            "Content-Type": "image/jpeg",
+            "X-Captured-At": "2026-01-01T00:00:00Z",
+            "X-Device-Id": "cam-a",
+            "X-API-Key": "key-b",
+        },
+    )
+    assert response.status_code == 403
+
+
+def test_device_api_keys_env_rejects_invalid_json(monkeypatch):
+    monkeypatch.setenv("ESP32CAM_DEVICE_API_KEYS", "not-json")
+    with pytest.raises(ValueError, match="ESP32CAM_DEVICE_API_KEYS"):
+        config_module._load_device_api_keys()
+
+
+def test_device_api_keys_env_rejects_non_object(monkeypatch):
+    monkeypatch.setenv("ESP32CAM_DEVICE_API_KEYS", '["key-a"]')
+    with pytest.raises(ValueError, match="JSON object"):
+        config_module._load_device_api_keys()
+
+
+def test_device_api_keys_env_rejects_empty_mapping_entries(monkeypatch):
+    monkeypatch.setenv("ESP32CAM_DEVICE_API_KEYS", '{"cam-a": ""}')
+    with pytest.raises(ValueError, match="empty"):
+        config_module._load_device_api_keys()
+
+
 def test_upload_passes_when_no_key_configured(client):
     # Default fixture has no DEVICE_API_KEY set → auth is disabled
     response = client.post(
@@ -104,12 +148,48 @@ def test_status_update_accepts_correct_device_key(app_with_device_key):
     assert response.status_code == 200
 
 
+def test_status_update_rejects_valid_key_for_different_device(tmp_path):
+    app = create_app(
+        {
+            "TESTING": True,
+            "UPLOAD_DIR": tmp_path / "uploads",
+            "DB_PATH": tmp_path / "esp32cam.sqlite3",
+            "INFERENCE_MODE": "sync",
+            "DEVICE_API_KEYS": {"cam-a": "key-a", "cam-b": "key-b"},
+        }
+    )
+    response = app.test_client().post(
+        "/api/status_update",
+        json={"device_id": "cam-a"},
+        headers={"X-API-Key": "key-b"},
+    )
+    assert response.status_code == 403
+
+
 # --- Device API key (log_error) ---
 
 def test_log_error_requires_device_key_when_configured(app_with_device_key):
     client = app_with_device_key.test_client()
     response = client.post("/api/log_error", json={"device_id": "cam-a", "message": "err"})
     assert response.status_code == 401
+
+
+def test_log_error_rejects_valid_key_for_different_device(tmp_path):
+    app = create_app(
+        {
+            "TESTING": True,
+            "UPLOAD_DIR": tmp_path / "uploads",
+            "DB_PATH": tmp_path / "esp32cam.sqlite3",
+            "INFERENCE_MODE": "sync",
+            "DEVICE_API_KEYS": {"cam-a": "key-a", "cam-b": "key-b"},
+        }
+    )
+    response = app.test_client().post(
+        "/api/log_error",
+        json={"device_id": "cam-a", "message": "err"},
+        headers={"X-API-Key": "key-b"},
+    )
+    assert response.status_code == 403
 
 
 # --- Admin token (delete camera) ---
