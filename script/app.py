@@ -74,10 +74,11 @@ def create_app(test_config: dict | None = None) -> Flask:
             "accessible without authentication. Set a strong token in production."
         )
 
-    if not app.config.get("DEVICE_API_KEY", ""):
+    if not app.config.get("DEVICE_API_KEY", "") and not app.config.get("DEVICE_API_KEYS", {}):
         app.logger.warning(
-            "ESP32CAM_DEVICE_API_KEY is not set — /upload and device endpoints accept "
-            "requests without authentication. Set a strong key in production."
+            "Neither ESP32CAM_DEVICE_API_KEY nor ESP32CAM_DEVICE_API_KEYS is set — "
+            "/upload and device endpoints accept requests without authentication. "
+            "Set a strong key in production."
         )
 
     storage_backend = app.config.get("STORAGE_BACKEND", "local")

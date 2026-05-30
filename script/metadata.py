@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import json
 import os
 from pathlib import Path
 import sqlite3
@@ -63,6 +64,28 @@ class DeviceLogRecord:
     level: str
     message: str
     logged_at: datetime
+
+
+@dataclass(frozen=True)
+class DesiredConfigRecord:
+    camera_id: str
+    version: int
+    config: dict[str, object]
+    updated_at: datetime
+    updated_by: str
+    last_acknowledged_version: int | None
+    last_acknowledged_at: datetime | None
+    last_acknowledged_message: str | None
+    last_acknowledged_success: bool | None
+    last_firmware_version: str | None
+    last_free_heap: int | None
+
+
+class DesiredConfigVersionConflict(Exception):
+    def __init__(self, current_version: int, expected_version: int):
+        self.current_version = current_version
+        self.expected_version = expected_version
+        super().__init__(f"expected_version {expected_version} does not match current version {current_version}")
 
 
 def _parse_datetime(value: str | None) -> datetime | None:
@@ -194,6 +217,21 @@ class SQLiteMetadataStore:
                     level TEXT NOT NULL,
                     message TEXT NOT NULL,
                     logged_at TEXT NOT NULL,
+                    FOREIGN KEY(camera_id) REFERENCES cameras(camera_id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS camera_desired_configs (
+                    camera_id TEXT PRIMARY KEY,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    config_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    updated_by TEXT NOT NULL DEFAULT 'admin',
+                    last_acknowledged_version INTEGER,
+                    last_acknowledged_at TEXT,
+                    last_acknowledged_message TEXT,
+                    last_acknowledged_success INTEGER,
+                    last_firmware_version TEXT,
+                    last_free_heap INTEGER,
                     FOREIGN KEY(camera_id) REFERENCES cameras(camera_id) ON DELETE CASCADE
                 );
                 """
@@ -717,6 +755,138 @@ class SQLiteMetadataStore:
             snapshot_id: tuple(records)
             for snapshot_id, records in grouped.items()
         }
+
+    def _desired_config_from_row(self, row: sqlite3.Row) -> DesiredConfigRecord:
+        success_raw = row["last_acknowledged_success"]
+        return DesiredConfigRecord(
+            camera_id=row["camera_id"],
+            version=int(row["version"]),
+            config=json.loads(row["config_json"]),
+            updated_at=_parse_datetime(row["updated_at"]) or datetime.now(tz=timezone.utc),
+            updated_by=row["updated_by"],
+            last_acknowledged_version=row["last_acknowledged_version"],
+            last_acknowledged_at=_parse_datetime(row["last_acknowledged_at"]),
+            last_acknowledged_message=row["last_acknowledged_message"],
+            last_acknowledged_success=None if success_raw is None else bool(success_raw),
+            last_firmware_version=row["last_firmware_version"],
+            last_free_heap=row["last_free_heap"],
+        )
+
+    def get_desired_config(self, camera_id: str) -> DesiredConfigRecord | None:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT * FROM camera_desired_configs WHERE camera_id = ?",
+                (camera_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._desired_config_from_row(row)
+
+    def upsert_desired_config(
+        self,
+        camera_id: str,
+        config: dict[str, object],
+        *,
+        expected_version: int | None = None,
+        updated_by: str = "admin",
+    ) -> DesiredConfigRecord:
+        now = datetime.now(tz=timezone.utc).isoformat()
+        config_json = json.dumps(config, sort_keys=True, separators=(",", ":"))
+        self.ensure_camera(camera_id)
+        with self._lock, self._connection:
+            current = self._connection.execute(
+                "SELECT version FROM camera_desired_configs WHERE camera_id = ?",
+                (camera_id,),
+            ).fetchone()
+            if current is None:
+                if expected_version is not None and expected_version != 0:
+                    raise DesiredConfigVersionConflict(0, expected_version)
+                version = 1
+                self._connection.execute(
+                    """
+                    INSERT INTO camera_desired_configs (
+                        camera_id, version, config_json, updated_at, updated_by
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (camera_id, version, config_json, now, updated_by),
+                )
+            else:
+                current_version = int(current["version"])
+                if expected_version is not None and expected_version != current_version:
+                    raise DesiredConfigVersionConflict(current_version, expected_version)
+                version = current_version + 1
+                self._connection.execute(
+                    """
+                    UPDATE camera_desired_configs
+                    SET version = ?, config_json = ?, updated_at = ?, updated_by = ?
+                    WHERE camera_id = ?
+                    """,
+                    (version, config_json, now, updated_by, camera_id),
+                )
+        record = self.get_desired_config(camera_id)
+        if record is None:  # pragma: no cover
+            raise RuntimeError("desired config upsert failed")
+        return record
+
+    def record_desired_config_ack(
+        self,
+        camera_id: str,
+        *,
+        version: int,
+        applied: bool,
+        message: str | None = None,
+        firmware_version: str | None = None,
+        free_heap: int | None = None,
+        clear_one_shot_requests: bool = True,
+    ) -> DesiredConfigRecord | None:
+        now = datetime.now(tz=timezone.utc).isoformat()
+        with self._lock, self._connection:
+            row = self._connection.execute(
+                "SELECT * FROM camera_desired_configs WHERE camera_id = ?",
+                (camera_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            current_version = int(row["version"])
+            if current_version != version:
+                raise DesiredConfigVersionConflict(current_version, version)
+            config = json.loads(row["config_json"])
+            if clear_one_shot_requests:
+                config["restart_requested"] = False
+                config["ota_update_requested"] = False
+            config_json = json.dumps(config, sort_keys=True, separators=(",", ":"))
+            cursor = self._connection.execute(
+                """
+                UPDATE camera_desired_configs
+                SET config_json = ?,
+                    last_acknowledged_version = ?,
+                    last_acknowledged_at = ?,
+                    last_acknowledged_message = ?,
+                    last_acknowledged_success = ?,
+                    last_firmware_version = ?,
+                    last_free_heap = ?
+                WHERE camera_id = ? AND version = ?
+                """,
+                (
+                    config_json,
+                    version,
+                    now,
+                    message,
+                    1 if applied else 0,
+                    firmware_version,
+                    free_heap,
+                    camera_id,
+                    version,
+                ),
+            )
+            if cursor.rowcount == 0:  # pragma: no cover - defensive against concurrent writers
+                latest = self._connection.execute(
+                    "SELECT version FROM camera_desired_configs WHERE camera_id = ?",
+                    (camera_id,),
+                ).fetchone()
+                latest_version = int(latest["version"]) if latest is not None else 0
+                raise DesiredConfigVersionConflict(latest_version, version)
+        return self.get_desired_config(camera_id)
 
     def record_heartbeat(self, camera_id: str, *, seen_at: datetime | None = None) -> CameraRecord:
         return self.ensure_camera(camera_id, seen_at=seen_at)

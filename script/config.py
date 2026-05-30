@@ -1,7 +1,28 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
+
+
+def _load_device_api_keys() -> dict[str, str]:
+    raw = os.getenv("ESP32CAM_DEVICE_API_KEYS", "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("ESP32CAM_DEVICE_API_KEYS must be a JSON object") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("ESP32CAM_DEVICE_API_KEYS must be a JSON object")
+    normalized: dict[str, str] = {}
+    for device_id, api_key in parsed.items():
+        key = str(device_id).strip()
+        value = str(api_key).strip()
+        if not key or not value:
+            raise ValueError("ESP32CAM_DEVICE_API_KEYS must not contain empty device IDs or keys")
+        normalized[key] = value
+    return normalized
 
 
 class Config:
@@ -27,6 +48,7 @@ class Config:
     STORAGE_RETENTION_MAX_BYTES = int(os.getenv("ESP32CAM_STORAGE_RETENTION_MAX_BYTES", "0"))
     MAX_WS_CONNECTIONS = int(os.getenv("ESP32CAM_MAX_WS_CONNECTIONS", "50"))
     DEVICE_API_KEY = os.getenv("ESP32CAM_DEVICE_API_KEY", "")
+    DEVICE_API_KEYS = _load_device_api_keys()
     ADMIN_TOKEN = os.getenv("ESP32CAM_ADMIN_TOKEN", "")
     WEBHOOK_URL = os.getenv("ESP32CAM_WEBHOOK_URL", "")
     WEBHOOK_MIN_SCORE = float(os.getenv("ESP32CAM_WEBHOOK_MIN_SCORE", "0.5"))
