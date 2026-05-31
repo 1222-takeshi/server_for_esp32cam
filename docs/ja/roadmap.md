@@ -89,7 +89,7 @@
 *   連続動画は最初のデフォルトにしない
 *   スナップショットだけでは足りない場合に短いクリップ upload を検討する
 *   低電力運用を引き続き設計制約とする
-*   参照: [#35 動画アップロード API と保存方式の設計](https://github.com/1222-takeshi/server_for_esp32cam/issues/35)
+*   参照: [#35 動画アップロード API と保存方式の設計](https://github.com/1222-takeshi/server_for_esp32cam/issues/35), [`docs/design/video-upload.md`](../design/video-upload.md)
 
 ### 6. 高度機能は後回しにする
 
