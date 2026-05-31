@@ -871,6 +871,11 @@ void setupWebSocketUpload() {
     return;
   }
 
+  String websocketHeaders;
+  if (strlen(DEVICE_API_KEY) > 0) {
+    websocketHeaders = String("X-API-Key: ") + DEVICE_API_KEY;
+    webSocket.setExtraHeaders(websocketHeaders.c_str());
+  }
   webSocket.begin(WS_UPLOAD_HOST, WS_UPLOAD_PORT, WS_UPLOAD_PATH);
   webSocket.onEvent(webSocketEvent);
   webSocket.setReconnectInterval(5000);
