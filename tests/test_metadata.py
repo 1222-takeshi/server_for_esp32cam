@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from script.detector import Detection
 from script.metadata import ALLOWED_LOG_LEVELS, DesiredConfigVersionConflict, SQLiteMetadataStore
-from script.storage import StoredImage
+from script.storage import StoredImage, StoredVideo
 
 
 def _stored_image(
@@ -272,10 +272,22 @@ def test_list_camera_summaries_returns_latest_snapshot_per_camera(tmp_path):
     t1 = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
     t2 = datetime(2026, 1, 1, 13, 0, tzinfo=timezone.utc)
     store.record_snapshot(
-        _stored_image(name="old.jpg", relative_path="cam-a/images/old.jpg", camera_id="cam-a", captured_at=t1, stored_at=t1)
+        _stored_image(
+            name="old.jpg",
+            relative_path="cam-a/images/old.jpg",
+            camera_id="cam-a",
+            captured_at=t1,
+            stored_at=t1,
+        )
     )
     store.record_snapshot(
-        _stored_image(name="new.jpg", relative_path="cam-a/images/new.jpg", camera_id="cam-a", captured_at=t2, stored_at=t2)
+        _stored_image(
+            name="new.jpg",
+            relative_path="cam-a/images/new.jpg",
+            camera_id="cam-a",
+            captured_at=t2,
+            stored_at=t2,
+        )
     )
 
     summaries = store.list_camera_summaries()
@@ -377,6 +389,7 @@ def test_metadata_store_enables_wal_mode(tmp_path):
     row = store._connection.execute("PRAGMA journal_mode").fetchone()
     assert row[0] == "wal"
 
+
 def test_desired_config_ack_rejects_stale_version_atomically(tmp_path):
     store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
     first = store.upsert_desired_config(
@@ -417,3 +430,137 @@ def test_desired_config_ack_rejects_stale_version_atomically(tmp_path):
     assert current.last_acknowledged_version is None
     assert current.config["restart_requested"] is True
     assert current.config["ota_update_requested"] is True
+
+
+def _stored_video(
+    *,
+    name: str,
+    relative_path: str,
+    camera_id: str,
+    captured_at: datetime | None,
+    stored_at: datetime,
+    duration_ms: int | None = 5000,
+    sha256: str = "a" * 64,
+) -> StoredVideo:
+    return StoredVideo(
+        name=name,
+        relative_path=relative_path,
+        size=456,
+        camera_id=camera_id,
+        captured_at=captured_at,
+        stored_at=stored_at,
+        duration_ms=duration_ms,
+        content_type="video/mp4",
+        sha256=sha256,
+    )
+
+
+def test_metadata_store_creates_videos_table(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+
+    row = store._connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='videos'"
+    ).fetchone()
+
+    assert row is not None
+    assert "processing_status" in row["sql"]
+    assert "ON DELETE CASCADE" in row["sql"].upper()
+
+
+def test_metadata_store_records_and_lists_videos(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    older = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+    newer = datetime(2026, 6, 1, 12, 1, tzinfo=timezone.utc)
+    old_video = store.record_video(
+        _stored_video(
+            name="video_old.mp4",
+            relative_path="cam-a/videos/video_old.mp4",
+            camera_id="cam-a",
+            captured_at=older,
+            stored_at=older,
+        )
+    )
+    new_video = store.record_video(
+        _stored_video(
+            name="video_new.mp4",
+            relative_path="cam-a/videos/video_new.mp4",
+            camera_id="cam-a",
+            captured_at=newer,
+            stored_at=newer,
+            duration_ms=None,
+        )
+    )
+
+    videos = store.list_camera_videos("cam-a")
+
+    assert [video.id for video in videos] == [new_video.id, old_video.id]
+    assert videos[0].duration_ms is None
+    assert videos[0].processing_status == "skipped"
+    assert videos[0].content_type == "video/mp4"
+    assert videos[0].sha256 == "a" * 64
+    assert store.get_camera("cam-a") is not None
+
+
+def test_metadata_store_deletes_videos_by_relative_path(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    now = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+    delete_me = store.record_video(
+        _stored_video(
+            name="delete.mp4",
+            relative_path="cam-a/videos/delete.mp4",
+            camera_id="cam-a",
+            captured_at=now,
+            stored_at=now,
+        )
+    )
+    keep_me = store.record_video(
+        _stored_video(
+            name="keep.mp4",
+            relative_path="cam-a/videos/keep.mp4",
+            camera_id="cam-a",
+            captured_at=now,
+            stored_at=now,
+        )
+    )
+
+    deleted = store.delete_videos_by_relative_paths([delete_me.relative_path])
+
+    assert deleted == 1
+    assert [video.id for video in store.list_camera_videos("cam-a")] == [keep_me.id]
+
+
+def test_delete_camera_cascades_videos(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    now = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+    store.record_video(
+        _stored_video(
+            name="video.mp4",
+            relative_path="cam-a/videos/video.mp4",
+            camera_id="cam-a",
+            captured_at=now,
+            stored_at=now,
+        )
+    )
+
+    store.delete_camera("cam-a")
+
+    assert store.get_camera("cam-a") is None
+    assert store.list_camera_videos("cam-a") == []
+
+
+def test_metadata_store_gets_video_by_id_and_camera(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    now = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+    record = store.record_video(
+        _stored_video(
+            name="video.mp4",
+            relative_path="cam-a/videos/video.mp4",
+            camera_id="cam-a",
+            captured_at=now,
+            stored_at=now,
+        )
+    )
+
+    assert store.get_video(record.id, camera_id="cam-a") == record
+    assert store.get_video(record.id, camera_id="other-cam") is None
+    assert store.get_video(record.id + 1, camera_id="cam-a") is None

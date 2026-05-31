@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import re
 import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
+
+
+_SAFE_CAMERA_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
 @dataclass(frozen=True)
@@ -17,6 +23,19 @@ class StoredImage:
     created_at: datetime
     device_id: str | None = None
     captured_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class StoredVideo:
+    name: str
+    relative_path: str
+    size: int
+    camera_id: str
+    captured_at: datetime | None
+    stored_at: datetime
+    duration_ms: int | None
+    content_type: str
+    sha256: str
 
 
 @dataclass(frozen=True)
@@ -37,12 +56,17 @@ class StorageRetentionResult:
     deleted_bytes: int
 
 
-
 def _normalize_device_id(value: str | None) -> str | None:
     if value is None:
         return None
     normalized = value.strip()
     return normalized or None
+
+
+def _validate_camera_id(value: str) -> str:
+    if not _SAFE_CAMERA_ID_RE.fullmatch(value):
+        raise ValueError(f"Invalid camera_id: {value!r}")
+    return value
 
 
 def _normalize_captured_at(value: datetime | str | None) -> datetime | None:
@@ -78,17 +102,13 @@ class Storage(Protocol):
         *,
         device_id: str,
         captured_at: datetime,
-    ) -> StoredImage:
-        ...
+    ) -> StoredImage: ...
 
-    def list_images(self) -> list[StoredImage]:
-        ...
+    def list_images(self) -> list[StoredImage]: ...
 
-    def read_image(self, name: str) -> bytes:
-        ...
+    def read_image(self, name: str) -> bytes: ...
 
-    def read_image_by_relative_path(self, relative_path: str) -> bytes:
-        ...
+    def read_image_by_relative_path(self, relative_path: str) -> bytes: ...
 
     def apply_retention(
         self,
@@ -96,11 +116,21 @@ class Storage(Protocol):
         *,
         now: datetime | None = None,
         preserve_relative_paths: set[str] | None = None,
-    ) -> StorageRetentionResult:
-        ...
+    ) -> StorageRetentionResult: ...
 
-    def delete_camera_files(self, camera_id: str) -> None:
-        ...
+    def save_video(
+        self,
+        data: bytes,
+        content_type: str,
+        *,
+        camera_id: str,
+        captured_at: datetime | str | None = None,
+        duration_ms: int | None = None,
+    ) -> StoredVideo: ...
+
+    def list_videos(self) -> list[StoredVideo]: ...
+
+    def delete_camera_files(self, camera_id: str) -> None: ...
 
 
 class LocalFilesystemStorage:
@@ -113,6 +143,9 @@ class LocalFilesystemStorage:
 
     def _camera_image_dir(self, device_id: str) -> Path:
         return self.upload_dir / device_id / "images"
+
+    def _camera_video_dir(self, camera_id: str) -> Path:
+        return self.upload_dir / camera_id / "videos"
 
     def _cleanup_empty_parents(self, path: Path) -> None:
         current = path.parent
@@ -236,6 +269,128 @@ class LocalFilesystemStorage:
             captured_at,
         )
 
+    def _write_video_metadata(self, video: StoredVideo) -> None:
+        path = self.upload_dir / video.relative_path
+        payload: dict[str, object] = {
+            "camera_id": video.camera_id,
+            "captured_at": video.captured_at.isoformat() if video.captured_at else None,
+            "stored_at": video.stored_at.isoformat(),
+            "duration_ms": video.duration_ms,
+            "content_type": video.content_type,
+            "size": video.size,
+            "sha256": video.sha256,
+        }
+        metadata_path = self._metadata_path(path)
+        temp_path = metadata_path.with_name(f".{metadata_path.name}.{uuid4().hex}.tmp")
+        try:
+            temp_path.write_text(json.dumps(payload), encoding="utf-8")
+            os.replace(temp_path, metadata_path)
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+    def _read_video_metadata(
+        self, video_path: Path
+    ) -> tuple[datetime | None, int | None, str, str | None]:
+        metadata_path = self._metadata_path(video_path)
+        if not metadata_path.exists() or not metadata_path.is_file():
+            return None, None, "video/mp4", None
+        try:
+            payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return None, None, "video/mp4", None
+        if not isinstance(payload, dict):
+            return None, None, "video/mp4", None
+        captured_at = payload.get("captured_at")
+        duration_ms = payload.get("duration_ms")
+        content_type = payload.get("content_type")
+        sha256 = payload.get("sha256")
+        return (
+            _normalize_captured_at(captured_at) if isinstance(captured_at, str) else None,
+            duration_ms if isinstance(duration_ms, int) else None,
+            content_type if isinstance(content_type, str) else "video/mp4",
+            sha256 if isinstance(sha256, str) else None,
+        )
+
+    def _validate_mp4_payload(self, data: bytes, content_type: str) -> None:
+        if content_type != "video/mp4":
+            raise ValueError(f"Unsupported content type: {content_type}")
+        if len(data) < 12 or data[4:8] != b"ftyp":
+            raise ValueError("Unsupported video payload")
+
+    def save_video(
+        self,
+        data: bytes,
+        content_type: str,
+        *,
+        camera_id: str,
+        captured_at: datetime | str | None = None,
+        duration_ms: int | None = None,
+    ) -> StoredVideo:
+        if duration_ms is not None and duration_ms < 0:
+            raise ValueError("duration_ms must be non-negative")
+        stored_camera_id = _validate_camera_id(camera_id)
+        self._validate_mp4_payload(data, content_type)
+        stored_captured_at = _normalize_captured_at(captured_at)
+        video_dir = self._camera_video_dir(stored_camera_id)
+        video_dir.mkdir(parents=True, exist_ok=True)
+        timestamp_source = stored_captured_at or datetime.now(tz=timezone.utc)
+        timestamp = timestamp_source.strftime("%Y%m%dT%H%M%S%f")
+        filename = f"video_{timestamp}_{uuid4().hex}.mp4"
+        path = video_dir / filename
+        temp_path = video_dir / f".{filename}.{uuid4().hex}.tmp"
+        try:
+            temp_path.write_bytes(data)
+            os.replace(temp_path, path)
+            stat = path.stat()
+            stored = StoredVideo(
+                name=filename,
+                relative_path=path.relative_to(self.upload_dir).as_posix(),
+                size=stat.st_size,
+                camera_id=stored_camera_id,
+                captured_at=stored_captured_at,
+                stored_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+                duration_ms=duration_ms,
+                content_type=content_type,
+                sha256=hashlib.sha256(data).hexdigest(),
+            )
+            self._write_video_metadata(stored)
+            return stored
+        except Exception:
+            temp_path.unlink(missing_ok=True)
+            path.unlink(missing_ok=True)
+            self._metadata_path(path).unlink(missing_ok=True)
+            self._cleanup_empty_parents(path)
+            raise
+
+    def list_videos(self) -> list[StoredVideo]:
+        videos = [
+            self._stored_video(path)
+            for path in self.upload_dir.rglob("*.mp4")
+            if path.is_file() and path.parent.name == "videos"
+        ]
+        return sorted(videos, key=lambda video: video.stored_at, reverse=True)
+
+    def _stored_video(self, path: Path) -> StoredVideo:
+        stat = path.stat()
+        try:
+            camera_id = path.relative_to(self.upload_dir).parts[0]
+            camera_id = _validate_camera_id(camera_id)
+        except (ValueError, IndexError):
+            camera_id = "unknown"
+        captured_at, duration_ms, content_type, sha256 = self._read_video_metadata(path)
+        data_sha256 = sha256 or hashlib.sha256(path.read_bytes()).hexdigest()
+        return StoredVideo(
+            name=path.name,
+            relative_path=path.relative_to(self.upload_dir).as_posix(),
+            size=stat.st_size,
+            camera_id=camera_id,
+            captured_at=captured_at,
+            stored_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+            duration_ms=duration_ms,
+            content_type=content_type,
+            sha256=data_sha256,
+        )
+
     def read_image(self, name: str) -> bytes:
         if not name or Path(name).name != name:
             raise FileNotFoundError(name)
@@ -293,7 +448,9 @@ class LocalFilesystemStorage:
                     deleted.append(image.relative_path)
 
         if policy.max_bytes is not None and policy.max_bytes > 0:
-            remaining = [image for image in self.list_images() if image.relative_path not in deleted]
+            remaining = [
+                image for image in self.list_images() if image.relative_path not in deleted
+            ]
             total_bytes = sum(image.size for image in remaining)
             for image in sorted(remaining, key=lambda item: item.created_at):
                 if total_bytes <= policy.max_bytes:
