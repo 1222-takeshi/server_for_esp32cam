@@ -65,6 +65,16 @@ def create_app(test_config: dict | None = None) -> Flask:
     if test_config:
         app.config.update(test_config)
 
+    snapshot_max_content_length = app.config.get(
+        "SNAPSHOT_MAX_CONTENT_LENGTH",
+        app.config.get("MAX_CONTENT_LENGTH", 1 * 1024 * 1024),
+    )
+    app.config["SNAPSHOT_MAX_CONTENT_LENGTH"] = snapshot_max_content_length
+    app.config["MAX_CONTENT_LENGTH"] = max(
+        snapshot_max_content_length,
+        app.config.get("MAX_VIDEO_CONTENT_LENGTH", snapshot_max_content_length),
+    )
+
     configure_logging(app)
     validate_auth_config(app)
 

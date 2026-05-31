@@ -114,6 +114,37 @@ def test_contract_upload_with_api_key_set_rejects_missing_key(app):
         app.config.pop("DEVICE_API_KEY", None)
 
 
+def test_contract_video_upload_success_has_video_object(app):
+    app.config["DEVICE_API_KEYS"] = {"contract-cam": "contract-video-key"}
+    c = app.test_client()
+    mp4 = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom" + b"\x00\x00\x00\x08mdat"
+
+    r = c.post(
+        "/api/cameras/contract-cam/videos",
+        data=mp4,
+        content_type="video/mp4",
+        headers={"X-API-Key": "contract-video-key", "X-Captured-At": "2026-01-01T00:00:00Z"},
+    )
+
+    assert r.status_code == 201
+    assert _is_json(r)
+    body = r.get_json()
+    assert "message" in body
+    assert "video" in body
+    assert body["video"]["camera_id"] == "contract-cam"
+
+
+def test_contract_video_upload_without_key_returns_401(app):
+    app.config["DEVICE_API_KEYS"] = {"contract-cam": "contract-video-key"}
+    c = app.test_client()
+
+    r = c.post("/api/cameras/contract-cam/videos", data=b"", content_type="video/mp4")
+
+    assert r.status_code == 401
+    assert _is_json(r)
+    assert "message" in r.get_json()
+
+
 # ---------------------------------------------------------------------------
 # Cameras list endpoint
 # ---------------------------------------------------------------------------
