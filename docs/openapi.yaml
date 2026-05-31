@@ -27,7 +27,7 @@ tags:
   - name: health
     description: Server health and readiness probes
   - name: upload
-    description: JPEG snapshot upload from devices
+    description: JPEG snapshot and MP4 video upload from devices
   - name: cameras
     description: Camera registry and metadata
   - name: snapshots
@@ -161,6 +161,103 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CameraList"
+
+  /api/cameras/{camera_id}/videos:
+    post:
+      summary: Upload an MP4 video for a camera
+      description: |
+        Accepts either a raw `video/mp4` body or `multipart/form-data` with
+        field `file` plus optional `captured_at` and `duration_ms` fields.
+        Video uploads require fail-closed per-camera API keys from
+        `ESP32CAM_DEVICE_API_KEYS`; a missing key header returns `401`, while a
+        missing camera mapping or mismatched key returns `403`. Payloads over
+        `ESP32CAM_MAX_VIDEO_CONTENT_LENGTH` return `413`. The server validates
+        the MP4 `ftyp` signature and does not trust only Content-Type or client
+        filenames. TLS/HTTPS termination is required for production deployments.
+      tags: [upload]
+      security:
+        - deviceApiKey: []
+      parameters:
+        - $ref: "#/components/parameters/camera_id"
+        - in: header
+          name: X-Captured-At
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: Capture timestamp for raw `video/mp4` uploads.
+        - in: header
+          name: X-Duration-Ms
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+          description: Video duration in milliseconds for raw `video/mp4` uploads.
+      requestBody:
+        required: true
+        content:
+          video/mp4:
+            schema:
+              type: string
+              format: binary
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: MP4 video file. Field content type must be `video/mp4`.
+                captured_at:
+                  type: string
+                  format: date-time
+                duration_ms:
+                  type: integer
+                  minimum: 0
+      responses:
+        "201":
+          description: Video stored successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VideoUploadSuccess"
+        "400":
+          description: Invalid request (empty body, invalid metadata, invalid duration)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          description: Missing API key header
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "403":
+          description: Missing per-camera key mapping or mismatched API key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "404":
+          description: Invalid camera ID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "413":
+          description: Payload too large (exceeds ESP32CAM_MAX_VIDEO_CONTENT_LENGTH)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "415":
+          description: Unsupported media type or invalid MP4 payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
 
   /api/cameras/{camera_id}:
     delete:
@@ -677,7 +774,11 @@ components:
       type: apiKey
       in: header
       name: X-API-Key
-      description: Set via `ESP32CAM_DEVICE_API_KEY`. Authentication is disabled when the variable is not set.
+      description: |
+        Device API key header. Legacy endpoints use `ESP32CAM_DEVICE_API_KEY`
+        when configured. Video upload requires per-camera keys from
+        `ESP32CAM_DEVICE_API_KEYS` and fails closed when a camera mapping is
+        missing.
     adminToken:
       type: http
       scheme: bearer
@@ -768,6 +869,59 @@ components:
         stored_at:
           type: string
           format: date-time
+
+    VideoUploadSuccess:
+      type: object
+      required: [message, video]
+      properties:
+        message:
+          type: string
+          example: "Video uploaded successfully"
+        video:
+          $ref: "#/components/schemas/VideoRecord"
+
+    VideoRecord:
+      type: object
+      properties:
+        id:
+          type: integer
+        filename:
+          type: string
+          example: "video_20260311T123456000000_abcd.mp4"
+        relative_path:
+          type: string
+          example: "esp32cam-front-door/videos/video_20260311T123456000000_abcd.mp4"
+        size:
+          type: integer
+          description: File size in bytes
+        camera_id:
+          type: string
+          maxLength: 64
+          pattern: "^[A-Za-z0-9_\\-]+$"
+        captured_at:
+          type: string
+          format: date-time
+          nullable: true
+        stored_at:
+          type: string
+          format: date-time
+        duration_ms:
+          type: integer
+          minimum: 0
+          nullable: true
+        content_type:
+          type: string
+          enum: [video/mp4]
+        sha256:
+          type: string
+          pattern: "^[a-f0-9]{64}$"
+          nullable: true
+        processing_status:
+          type: string
+          enum: [pending, succeeded, failed, skipped]
+        processing_error:
+          type: string
+          nullable: true
 
     CameraSummary:
       type: object

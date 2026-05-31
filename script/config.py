@@ -42,6 +42,9 @@ class Config:
     )
     PORT = int(os.getenv("PORT", "8080"))
     MAX_CONTENT_LENGTH = int(os.getenv("ESP32CAM_MAX_CONTENT_LENGTH", str(1 * 1024 * 1024)))
+    MAX_VIDEO_CONTENT_LENGTH = int(
+        os.getenv("ESP32CAM_MAX_VIDEO_CONTENT_LENGTH", str(10 * 1024 * 1024))
+    )
     STORAGE_RETENTION_MAX_AGE_SECONDS = int(
         os.getenv("ESP32CAM_STORAGE_RETENTION_MAX_AGE_SECONDS", "2592000")
     )

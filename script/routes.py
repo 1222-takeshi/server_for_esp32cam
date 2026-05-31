@@ -19,12 +19,21 @@ from script.auth import (
     require_admin_auth,
     require_device_auth,
 )
-from script.metadata import ALLOWED_LOG_LEVELS, CameraSummary, DesiredConfigVersionConflict, DeviceLogRecord, SnapshotRecord
+from script.metadata import (
+    ALLOWED_LOG_LEVELS,
+    CameraSummary,
+    DesiredConfigVersionConflict,
+    DeviceLogRecord,
+    SnapshotRecord,
+    VideoRecord,
+)
 from script.retention import apply_upload_retention
 from script.storage import Storage
 
 DEVICE_ID_MAX_LENGTH = 128
+_CAMERA_ID_MAX_LENGTH = 64
 _DEVICE_ID_RE = re.compile(rf"[A-Za-z0-9_\-]{{1,{DEVICE_ID_MAX_LENGTH}}}")
+_CAMERA_ID_RE = re.compile(rf"[A-Za-z0-9_\-]{{1,{_CAMERA_ID_MAX_LENGTH}}}")
 
 
 def _upload_rate_limit_key() -> str:
@@ -98,6 +107,15 @@ def _validate_device_id(device_id: str) -> str | None:
     return None
 
 
+def _validate_camera_id(camera_id: str) -> str | None:
+    """Returns an error message string if invalid, None if valid."""
+    if not camera_id:
+        return "camera_id is required"
+    if not _CAMERA_ID_RE.fullmatch(camera_id):
+        return "camera_id contains invalid characters or exceeds maximum length"
+    return None
+
+
 def _validate_jpeg_image(data: bytes) -> str | None:
     """Returns None if the JPEG is valid, or an error message string if invalid."""
     from PIL import Image, UnidentifiedImageError  # lazy import — Pillow is optional at import time
@@ -146,6 +164,23 @@ def _serialize_snapshot(snapshot: SnapshotRecord) -> dict[str, object]:
         "inference_status": snapshot.inference_status,
         "inference_error": snapshot.inference_error,
         "detections": [_serialize_detection(detection) for detection in snapshot.detections],
+    }
+
+
+def _serialize_video(video: VideoRecord) -> dict[str, object]:
+    return {
+        "id": video.id,
+        "filename": video.filename,
+        "relative_path": video.relative_path,
+        "size": video.size,
+        "camera_id": video.camera_id,
+        "captured_at": video.captured_at.isoformat() if video.captured_at else None,
+        "stored_at": video.stored_at.isoformat(),
+        "duration_ms": video.duration_ms,
+        "content_type": video.content_type,
+        "sha256": video.sha256,
+        "processing_status": video.processing_status,
+        "processing_error": video.processing_error,
     }
 
 
@@ -245,6 +280,78 @@ def _check_device_matches_path(device_id: str):
     if not check_device_api_key_for_device(device_id, request.headers.get("X-API-Key")):
         return jsonify({"message": "Forbidden"}), 403
     return None
+
+
+def _check_video_upload_auth(camera_id: str):
+    api_key = request.headers.get("X-API-Key")
+    if not api_key:
+        return jsonify({"message": "Unauthorized"}), 401
+    per_device = current_app.config.get("DEVICE_API_KEYS", {}) or {}
+    # Video uploads intentionally require per-camera keys. This is fail-closed:
+    # a missing mapping or a camera without a key is Forbidden instead of
+    # falling back to the legacy global DEVICE_API_KEY behavior.
+    if not per_device or camera_id not in per_device:
+        return jsonify({"message": "Forbidden"}), 403
+    if not check_device_api_key_for_device(camera_id, api_key):
+        return jsonify({"message": "Forbidden"}), 403
+    return None
+
+
+def _parse_video_duration_ms(value: str | None) -> tuple[int | None, str | None]:
+    if value is None or value.strip() == "":
+        return None, None
+    try:
+        duration_ms = int(value)
+    except ValueError:
+        return None, "duration_ms must be a non-negative integer"
+    if duration_ms < 0:
+        return None, "duration_ms must be a non-negative integer"
+    return duration_ms, None
+
+
+def _parse_optional_captured_at(value: str | None) -> tuple[datetime | None, str | None]:
+    if value is None or value.strip() == "":
+        return None, None
+    try:
+        return _parse_captured_at(value), None
+    except ValueError:
+        safe_val = (value or "")[:64].replace("\n", "\\n").replace("\r", "\\r")
+        current_app.logger.error("Invalid video captured_at metadata: %s", safe_val)
+        return None, "Invalid captured_at metadata"
+
+
+def _read_video_upload_payload() -> tuple[bytes | None, str | None, datetime | None, int | None, tuple[Response, int] | None]:
+    max_bytes = current_app.config.get("MAX_VIDEO_CONTENT_LENGTH", 10 * 1024 * 1024)
+    if request.content_length is not None and request.content_length > max_bytes:
+        return None, None, None, None, (jsonify({"message": "Payload too large"}), 413)
+
+    if request.mimetype == "video/mp4":
+        data = request.get_data(cache=False)
+        content_type = request.mimetype
+        captured_at, captured_error = _parse_optional_captured_at(request.headers.get("X-Captured-At"))
+        duration_ms, duration_error = _parse_video_duration_ms(request.headers.get("X-Duration-Ms"))
+    elif request.mimetype == "multipart/form-data":
+        upload = request.files.get("file")
+        if upload is None:
+            return None, None, None, None, (jsonify({"message": "file field is required"}), 400)
+        content_type = upload.mimetype or ""
+        if content_type != "video/mp4":
+            return None, None, None, None, (jsonify({"message": "Unsupported content type"}), 415)
+        data = upload.read()
+        captured_at, captured_error = _parse_optional_captured_at(request.form.get("captured_at"))
+        duration_ms, duration_error = _parse_video_duration_ms(request.form.get("duration_ms"))
+    else:
+        return None, None, None, None, (jsonify({"message": "Unsupported content type"}), 415)
+
+    if captured_error:
+        return None, None, None, None, (jsonify({"message": captured_error}), 400)
+    if duration_error:
+        return None, None, None, None, (jsonify({"message": duration_error}), 400)
+    if not data:
+        return None, None, None, None, (jsonify({"message": "No data received"}), 400)
+    if len(data) > max_bytes:
+        return None, None, None, None, (jsonify({"message": "Payload too large"}), 413)
+    return data, content_type, captured_at, duration_ms, None
 
 
 @server.route("/")
@@ -457,6 +564,43 @@ def camera_detail(camera_id: str):
 @server.route("/api/cameras")
 def api_cameras():
     return jsonify({"cameras": [_serialize_camera_summary(item) for item in _metadata_store().list_camera_summaries()]})
+
+
+@server.route("/api/cameras/<camera_id>/videos", methods=["POST"])
+def api_upload_video(camera_id: str):
+    if _validate_camera_id(camera_id):
+        return jsonify({"message": "Camera not found"}), 404
+
+    auth_error = _check_video_upload_auth(camera_id)
+    if auth_error is not None:
+        return auth_error
+
+    data, content_type, captured_at, duration_ms, payload_error = _read_video_upload_payload()
+    if payload_error is not None:
+        return payload_error
+
+    try:
+        stored = _storage().save_video(
+            data or b"",
+            content_type or "",
+            camera_id=camera_id,
+            captured_at=captured_at,
+            duration_ms=duration_ms,
+        )
+        video = _metadata_store().record_video(stored)
+        _check_disk_usage()
+        current_app.logger.info("Video uploaded successfully: %s", stored.name)
+        return jsonify({"message": "Video uploaded successfully", "video": _serialize_video(video)}), 201
+    except ValueError as exc:
+        message = str(exc)
+        status = 415 if message.startswith("Unsupported") else 400
+        if message == "Unsupported video payload":
+            status = 415
+        current_app.logger.error("Video upload validation failed: %s", message)
+        return jsonify({"message": message}), status
+    except Exception as exc:  # pragma: no cover
+        current_app.logger.error("Video upload failed: %s", exc)
+        return jsonify({"message": "Video upload failed"}), 500
 
 
 @server.route("/api/cameras/<camera_id>", methods=["DELETE"])
