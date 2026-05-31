@@ -42,6 +42,7 @@ class Config:
     )
     PORT = int(os.getenv("PORT", "8080"))
     MAX_CONTENT_LENGTH = int(os.getenv("ESP32CAM_MAX_CONTENT_LENGTH", str(1 * 1024 * 1024)))
+    SNAPSHOT_MAX_CONTENT_LENGTH = MAX_CONTENT_LENGTH
     MAX_VIDEO_CONTENT_LENGTH = int(
         os.getenv("ESP32CAM_MAX_VIDEO_CONTENT_LENGTH", str(10 * 1024 * 1024))
     )

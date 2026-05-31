@@ -425,9 +425,19 @@ def healthz_ready():
 @limiter.limit(lambda: current_app.config.get("UPLOAD_RATE_LIMIT", "10 per minute"))
 @require_device_auth
 def upload_file():
+    snapshot_max_bytes = current_app.config.get(
+        "SNAPSHOT_MAX_CONTENT_LENGTH",
+        current_app.config.get("MAX_CONTENT_LENGTH", 1 * 1024 * 1024),
+    )
+    if request.content_length is not None and request.content_length > snapshot_max_bytes:
+        return jsonify({"message": "Payload too large"}), 413
+
     if not request.data:
         current_app.logger.error("No data received")
         return jsonify({"message": "No data received"}), 400
+
+    if len(request.data) > snapshot_max_bytes:
+        return jsonify({"message": "Payload too large"}), 413
 
     if request.mimetype != "image/jpeg":
         current_app.logger.error("Unsupported content type: %s", request.content_type)
@@ -579,6 +589,7 @@ def api_upload_video(camera_id: str):
     if payload_error is not None:
         return payload_error
 
+    stored = None
     try:
         stored = _storage().save_video(
             data or b"",
@@ -599,6 +610,11 @@ def api_upload_video(camera_id: str):
         current_app.logger.error("Video upload validation failed: %s", message)
         return jsonify({"message": message}), status
     except Exception as exc:  # pragma: no cover
+        if stored is not None:
+            try:
+                _storage().delete_video(stored)
+            except Exception as cleanup_exc:
+                current_app.logger.error("Video cleanup failed after upload error: %s", cleanup_exc)
         current_app.logger.error("Video upload failed: %s", exc)
         return jsonify({"message": "Video upload failed"}), 500
 

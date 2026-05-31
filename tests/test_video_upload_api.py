@@ -61,6 +61,34 @@ def test_video_upload_raw_mp4_returns_201_and_records_metadata(tmp_path):
     assert stored.relative_path == video["relative_path"]
 
 
+def test_video_upload_can_exceed_legacy_snapshot_limit_when_within_video_limit(tmp_path):
+    app = _video_app(tmp_path, MAX_CONTENT_LENGTH=64, MAX_VIDEO_CONTENT_LENGTH=256)
+    client = app.test_client()
+    payload = _minimal_mp4() + (b"\x00" * 96)
+
+    response = client.post("/api/cameras/cam-a/videos", data=payload, headers=_headers())
+
+    assert response.status_code == 201
+    assert response.get_json()["video"]["size"] == len(payload)
+
+
+def test_video_upload_removes_saved_file_when_metadata_recording_fails(tmp_path, monkeypatch):
+    app = _video_app(tmp_path)
+    client = app.test_client()
+
+    def fail_record_video(_stored):
+        raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr(app.extensions["metadata_store"], "record_video", fail_record_video)
+
+    response = client.post("/api/cameras/cam-a/videos", data=_minimal_mp4(), headers=_headers())
+
+    assert response.status_code == 500
+    assert response.get_json()["message"] == "Video upload failed"
+    assert list((app.config["UPLOAD_DIR"] / "cam-a" / "videos").glob("*.mp4")) == []
+    assert list((app.config["UPLOAD_DIR"] / "cam-a" / "videos").glob("*.json")) == []
+
+
 def test_video_upload_multipart_accepts_file_and_metadata_fields(tmp_path):
     app = _video_app(tmp_path)
     client = app.test_client()
