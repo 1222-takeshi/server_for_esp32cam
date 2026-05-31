@@ -185,8 +185,12 @@ def test_storage_reads_image_by_relative_path(tmp_path):
 def test_apply_retention_deletes_images_older_than_max_age(tmp_path):
     storage = LocalFilesystemStorage(tmp_path / "uploads")
     captured_at = datetime(2026, 5, 9, 12, 0, tzinfo=timezone.utc)
-    old = storage.save_image(b"\xff\xd8old", "image/jpeg", device_id="cam-a", captured_at=captured_at)
-    keep = storage.save_image(b"\xff\xd8keep", "image/jpeg", device_id="cam-a", captured_at=captured_at)
+    old = storage.save_image(
+        b"\xff\xd8old", "image/jpeg", device_id="cam-a", captured_at=captured_at
+    )
+    keep = storage.save_image(
+        b"\xff\xd8keep", "image/jpeg", device_id="cam-a", captured_at=captured_at
+    )
 
     old_path = storage.upload_dir / old.relative_path
     keep_path = storage.upload_dir / keep.relative_path
@@ -209,7 +213,9 @@ def test_apply_retention_deletes_images_older_than_max_age(tmp_path):
 def test_apply_retention_ignores_stale_candidates_that_were_already_deleted(tmp_path, monkeypatch):
     storage = LocalFilesystemStorage(tmp_path / "uploads")
     captured_at = datetime(2026, 5, 9, 12, 0, tzinfo=timezone.utc)
-    stale = storage.save_image(b"\xff\xd8old", "image/jpeg", device_id="cam-a", captured_at=captured_at)
+    stale = storage.save_image(
+        b"\xff\xd8old", "image/jpeg", device_id="cam-a", captured_at=captured_at
+    )
     stale_path = storage.upload_dir / stale.relative_path
     storage._metadata_path(stale_path).unlink()
     stale_path.unlink()
@@ -280,3 +286,129 @@ def test_apply_retention_deletes_oldest_images_until_under_max_bytes(tmp_path):
     assert not (storage.upload_dir / oldest.relative_path).exists()
     assert (storage.upload_dir / middle.relative_path).exists()
     assert (storage.upload_dir / newest.relative_path).exists()
+
+
+def test_save_video_persists_mp4_in_camera_video_directory_with_sidecar(tmp_path):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+    captured_at = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+    payload = b"\x00\x00\x00 ftypisom" + b"video-bytes"
+
+    stored = storage.save_video(
+        payload,
+        "video/mp4",
+        camera_id="esp32cam-01",
+        captured_at=captured_at,
+        duration_ms=5000,
+    )
+
+    video_path = storage.upload_dir / stored.relative_path
+    sidecar_path = video_path.with_suffix(".mp4.json")
+    sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+
+    assert stored.name.startswith("video_20260601T120000000000_")
+    assert stored.name.endswith(".mp4")
+    assert stored.relative_path.startswith("esp32cam-01/videos/")
+    assert stored.size == len(payload)
+    assert stored.camera_id == "esp32cam-01"
+    assert stored.captured_at == captured_at
+    assert stored.duration_ms == 5000
+    assert stored.content_type == "video/mp4"
+    assert len(stored.sha256) == 64
+    assert video_path.read_bytes() == payload
+    assert sidecar == {
+        "camera_id": "esp32cam-01",
+        "captured_at": "2026-06-01T12:00:00+00:00",
+        "stored_at": stored.stored_at.isoformat(),
+        "duration_ms": 5000,
+        "content_type": "video/mp4",
+        "size": len(payload),
+        "sha256": stored.sha256,
+    }
+
+
+def test_save_video_rejects_unsafe_camera_id_before_creating_paths(tmp_path):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+
+    for camera_id in ["", "../cam", "cam/one", "cam one", "cam%2Fone", "cam\none"]:
+        with pytest.raises(ValueError, match="Invalid camera_id"):
+            storage.save_video(
+                b"\x00\x00\x00 ftypisom",
+                "video/mp4",
+                camera_id=camera_id,
+                captured_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+            )
+
+    assert list(storage.upload_dir.rglob("*")) == []
+
+
+def test_save_video_rejects_non_mp4_payload_and_cleans_temporary_file(tmp_path):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+
+    with pytest.raises(ValueError, match="Unsupported video payload"):
+        storage.save_video(
+            b"not an mp4",
+            "video/mp4",
+            camera_id="esp32cam-01",
+            captured_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+        )
+
+    assert list(storage.upload_dir.rglob("*")) == []
+
+
+def test_list_videos_returns_latest_first(tmp_path):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+    first = storage.save_video(
+        b"\x00\x00\x00 ftypisom" + b"first",
+        "video/mp4",
+        camera_id="cam-a",
+        captured_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+    )
+    first_path = storage.upload_dir / first.relative_path
+    os.utime(first_path, (1_700_000_000, 1_700_000_000))
+    second = storage.save_video(
+        b"\x00\x00\x00 ftypisom" + b"second",
+        "video/mp4",
+        camera_id="cam-b",
+        captured_at=datetime(2026, 6, 1, 12, 1, tzinfo=timezone.utc),
+    )
+
+    videos = storage.list_videos()
+
+    assert [video.name for video in videos] == [second.name, first.name]
+    assert videos[0].camera_id == "cam-b"
+
+
+def test_delete_camera_files_removes_images_and_videos(tmp_path):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+    storage.save_image(
+        b"\xff\xd8jpeg",
+        "image/jpeg",
+        device_id="cam-to-delete",
+        captured_at=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc),
+    )
+    storage.save_video(
+        b"\x00\x00\x00 ftypisom" + b"video",
+        "video/mp4",
+        camera_id="cam-to-delete",
+        captured_at=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc),
+    )
+    camera_dir = tmp_path / "uploads" / "cam-to-delete"
+
+    storage.delete_camera_files("cam-to-delete")
+
+    assert not camera_dir.exists()
+
+
+def test_save_video_rejects_negative_duration(tmp_path):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+
+    with pytest.raises(ValueError, match="duration_ms must be non-negative"):
+        storage.save_video(
+            b"\x00\x00\x00 ftypisom",
+            "video/mp4",
+            camera_id="esp32cam-01",
+            captured_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+            duration_ms=-1,
+        )
+
+    assert list(storage.upload_dir.rglob("*")) == []
