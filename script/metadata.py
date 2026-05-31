@@ -9,7 +9,7 @@ import sqlite3
 import threading
 
 from script.detector import Detection
-from script.storage import StoredImage
+from script.storage import StoredImage, StoredVideo
 
 
 @dataclass(frozen=True)
@@ -34,6 +34,22 @@ class SnapshotRecord:
     inference_status: str
     inference_error: str | None
     detections: tuple[DetectionRecord, ...] = ()
+
+
+@dataclass(frozen=True)
+class VideoRecord:
+    id: int
+    filename: str
+    relative_path: str
+    size: int
+    camera_id: str
+    captured_at: datetime | None
+    stored_at: datetime
+    duration_ms: int | None
+    content_type: str
+    sha256: str | None
+    processing_status: str
+    processing_error: str | None
 
 
 @dataclass(frozen=True)
@@ -85,7 +101,9 @@ class DesiredConfigVersionConflict(Exception):
     def __init__(self, current_version: int, expected_version: int):
         self.current_version = current_version
         self.expected_version = expected_version
-        super().__init__(f"expected_version {expected_version} does not match current version {current_version}")
+        super().__init__(
+            f"expected_version {expected_version} does not match current version {current_version}"
+        )
 
 
 def _parse_datetime(value: str | None) -> datetime | None:
@@ -165,13 +183,9 @@ class SQLiteMetadataStore:
                 )
                 """
             )
-            self._connection.execute(
-                "INSERT INTO snapshots_new SELECT * FROM snapshots"
-            )
+            self._connection.execute("INSERT INTO snapshots_new SELECT * FROM snapshots")
             self._connection.execute("DROP TABLE snapshots")
-            self._connection.execute(
-                "ALTER TABLE snapshots_new RENAME TO snapshots"
-            )
+            self._connection.execute("ALTER TABLE snapshots_new RENAME TO snapshots")
 
     def _initialize_schema(self) -> None:
         with self._lock, self._connection:
@@ -198,6 +212,29 @@ class SQLiteMetadataStore:
                     inference_error TEXT,
                     FOREIGN KEY(camera_id) REFERENCES cameras(camera_id) ON DELETE CASCADE
                 );
+
+
+
+                CREATE TABLE IF NOT EXISTS videos (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    filename TEXT NOT NULL UNIQUE,
+                    relative_path TEXT NOT NULL UNIQUE,
+                    size INTEGER NOT NULL,
+                    camera_id TEXT NOT NULL,
+                    captured_at TEXT,
+                    stored_at TEXT NOT NULL,
+                    duration_ms INTEGER,
+                    content_type TEXT NOT NULL,
+                    sha256 TEXT,
+                    processing_status TEXT NOT NULL DEFAULT 'skipped',
+                    processing_error TEXT,
+                    FOREIGN KEY(camera_id) REFERENCES cameras(camera_id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_videos_camera_stored_at
+                    ON videos(camera_id, stored_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_videos_stored_at
+                    ON videos(stored_at DESC);
 
                 CREATE TABLE IF NOT EXISTS detections (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -237,7 +274,9 @@ class SQLiteMetadataStore:
                 """
             )
 
-    def _snapshot_from_row(self, row: sqlite3.Row, detections: tuple[DetectionRecord, ...] = ()) -> SnapshotRecord:
+    def _snapshot_from_row(
+        self, row: sqlite3.Row, detections: tuple[DetectionRecord, ...] = ()
+    ) -> SnapshotRecord:
         return SnapshotRecord(
             id=row["id"],
             filename=row["filename"],
@@ -249,6 +288,22 @@ class SQLiteMetadataStore:
             inference_status=row["inference_status"],
             inference_error=row["inference_error"],
             detections=detections,
+        )
+
+    def _video_from_row(self, row: sqlite3.Row) -> VideoRecord:
+        return VideoRecord(
+            id=row["id"],
+            filename=row["filename"],
+            relative_path=row["relative_path"],
+            size=row["size"],
+            camera_id=row["camera_id"],
+            captured_at=_parse_datetime(row["captured_at"]),
+            stored_at=_parse_datetime(row["stored_at"]) or datetime.now(tz=timezone.utc),
+            duration_ms=row["duration_ms"],
+            content_type=row["content_type"],
+            sha256=row["sha256"],
+            processing_status=row["processing_status"],
+            processing_error=row["processing_error"],
         )
 
     def _camera_from_row(self, row: sqlite3.Row) -> CameraRecord:
@@ -295,7 +350,9 @@ class SQLiteMetadataStore:
             ).fetchone()
         return self._camera_from_row(row)
 
-    def record_snapshot(self, stored: StoredImage, *, default_pending: bool = True) -> SnapshotRecord:
+    def record_snapshot(
+        self, stored: StoredImage, *, default_pending: bool = True
+    ) -> SnapshotRecord:
         if stored.device_id is not None:
             self.ensure_camera(stored.device_id, seen_at=stored.created_at)
 
@@ -328,6 +385,85 @@ class SQLiteMetadataStore:
                 (stored.name,),
             ).fetchone()
         return self._snapshot_from_row(row)
+
+    def record_video(self, stored: StoredVideo) -> VideoRecord:
+        self.ensure_camera(stored.camera_id, seen_at=stored.stored_at)
+        with self._lock, self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO videos (
+                    filename, relative_path, size, camera_id, captured_at, stored_at,
+                    duration_ms, content_type, sha256, processing_status, processing_error
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'skipped', NULL)
+                ON CONFLICT(filename) DO UPDATE SET
+                    relative_path=excluded.relative_path,
+                    size=excluded.size,
+                    camera_id=excluded.camera_id,
+                    captured_at=excluded.captured_at,
+                    stored_at=excluded.stored_at,
+                    duration_ms=excluded.duration_ms,
+                    content_type=excluded.content_type,
+                    sha256=excluded.sha256
+                """,
+                (
+                    stored.name,
+                    stored.relative_path,
+                    stored.size,
+                    stored.camera_id,
+                    stored.captured_at.isoformat() if stored.captured_at else None,
+                    stored.stored_at.isoformat(),
+                    stored.duration_ms,
+                    stored.content_type,
+                    stored.sha256,
+                ),
+            )
+            row = self._connection.execute(
+                "SELECT * FROM videos WHERE filename = ?",
+                (stored.name,),
+            ).fetchone()
+        return self._video_from_row(row)
+
+    def get_video(self, video_id: int, *, camera_id: str | None = None) -> VideoRecord | None:
+        query = "SELECT * FROM videos WHERE id = ?"
+        params: list[object] = [video_id]
+        if camera_id is not None:
+            query += " AND camera_id = ?"
+            params.append(camera_id)
+        with self._lock:
+            row = self._connection.execute(query, tuple(params)).fetchone()
+        if row is None:
+            return None
+        return self._video_from_row(row)
+
+    def list_camera_videos(
+        self,
+        camera_id: str,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[VideoRecord]:
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT * FROM videos
+                WHERE camera_id = ?
+                ORDER BY stored_at DESC, id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (camera_id, limit, offset),
+            ).fetchall()
+        return [self._video_from_row(row) for row in rows]
+
+    def delete_videos_by_relative_paths(self, relative_paths: list[str]) -> int:
+        if not relative_paths:
+            return 0
+        placeholders = ",".join("?" for _ in relative_paths)
+        with self._lock, self._connection:
+            cursor = self._connection.execute(
+                f"DELETE FROM videos WHERE relative_path IN ({placeholders})",
+                tuple(relative_paths),
+            )
+        return int(cursor.rowcount)
 
     def sync_storage_index(self, images: list[StoredImage]) -> None:
         for image in images:
@@ -425,7 +561,11 @@ class SQLiteMetadataStore:
         if camera is None:
             return None
         new_display_name = display_name if display_name is not None else camera.display_name
-        new_interval = expected_interval_seconds if expected_interval_seconds is not None else camera.expected_interval_seconds
+        new_interval = (
+            expected_interval_seconds
+            if expected_interval_seconds is not None
+            else camera.expected_interval_seconds
+        )
         with self._lock, self._connection:
             self._connection.execute(
                 "UPDATE cameras SET display_name = ?, expected_interval_seconds = ? WHERE camera_id = ?",
@@ -739,7 +879,9 @@ class SQLiteMetadataStore:
         with self._lock:
             rows = self._connection.execute(query, tuple(snapshot_ids)).fetchall()
 
-        grouped: dict[int, list[DetectionRecord]] = {snapshot_id: [] for snapshot_id in snapshot_ids}
+        grouped: dict[int, list[DetectionRecord]] = {
+            snapshot_id: [] for snapshot_id in snapshot_ids
+        }
         for row in rows:
             grouped[row["snapshot_id"]].append(
                 DetectionRecord(
@@ -751,10 +893,7 @@ class SQLiteMetadataStore:
                     y2=row["y2"],
                 )
             )
-        return {
-            snapshot_id: tuple(records)
-            for snapshot_id, records in grouped.items()
-        }
+        return {snapshot_id: tuple(records) for snapshot_id, records in grouped.items()}
 
     def _desired_config_from_row(self, row: sqlite3.Row) -> DesiredConfigRecord:
         success_raw = row["last_acknowledged_success"]
@@ -900,7 +1039,9 @@ class SQLiteMetadataStore:
         logged_at: datetime | None = None,
     ) -> DeviceLogRecord:
         if level not in ALLOWED_LOG_LEVELS:
-            raise ValueError(f"Invalid log level: {level!r}. Must be one of {sorted(ALLOWED_LOG_LEVELS)}")
+            raise ValueError(
+                f"Invalid log level: {level!r}. Must be one of {sorted(ALLOWED_LOG_LEVELS)}"
+            )
         self.ensure_camera(camera_id)
         effective_logged_at = (logged_at or datetime.now(tz=timezone.utc)).astimezone(timezone.utc)
         with self._lock, self._connection:

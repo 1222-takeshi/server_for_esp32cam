@@ -33,7 +33,9 @@ def test_healthz_returns_ok(client):
 
 
 def test_healthz_ready_returns_ready(client):
-    response = client.get("/healthz/ready")
+    usage = type("usage", (), {"free": 9_000, "total": 10_000, "used": 1_000})()
+    with patch("script.routes.shutil.disk_usage", return_value=usage):
+        response = client.get("/healthz/ready")
 
     assert response.status_code == 200
     body = response.get_json()
@@ -181,7 +183,10 @@ def test_upload_rejects_too_long_device_id(client):
     )
 
     assert response.status_code == 400
-    assert response.get_json()["message"] == "device_id contains invalid characters or exceeds maximum length"
+    assert (
+        response.get_json()["message"]
+        == "device_id contains invalid characters or exceeds maximum length"
+    )
 
 
 def test_upload_rejects_invalid_device_id_chars(client):
@@ -196,7 +201,10 @@ def test_upload_rejects_invalid_device_id_chars(client):
     )
 
     assert response.status_code == 400
-    assert response.get_json()["message"] == "device_id contains invalid characters or exceeds maximum length"
+    assert (
+        response.get_json()["message"]
+        == "device_id contains invalid characters or exceeds maximum length"
+    )
 
 
 def test_upload_rejects_invalid_captured_at_metadata(client):
@@ -520,7 +528,9 @@ def test_upload_still_returns_200_when_detector_fails(app, client):
         data=MINIMAL_JPEG,
         headers=UPLOAD_HEADERS,
     )
-    snapshots = app.extensions["metadata_store"].list_camera_snapshots("esp32cam-front-door", limit=1)
+    snapshots = app.extensions["metadata_store"].list_camera_snapshots(
+        "esp32cam-front-door", limit=1
+    )
 
     assert response.status_code == 200
     assert snapshots[0].inference_status == "failed"
@@ -588,7 +598,10 @@ def test_status_update_rejects_too_long_device_id(client):
     )
 
     assert response.status_code == 400
-    assert response.get_json()["message"] == "device_id contains invalid characters or exceeds maximum length"
+    assert (
+        response.get_json()["message"]
+        == "device_id contains invalid characters or exceeds maximum length"
+    )
 
 
 def test_status_update_rejects_invalid_device_id_chars(client):
@@ -599,7 +612,10 @@ def test_status_update_rejects_invalid_device_id_chars(client):
     )
 
     assert response.status_code == 400
-    assert response.get_json()["message"] == "device_id contains invalid characters or exceeds maximum length"
+    assert (
+        response.get_json()["message"]
+        == "device_id contains invalid characters or exceeds maximum length"
+    )
 
 
 def test_log_error_records_device_log(client):
@@ -623,7 +639,9 @@ def test_log_error_records_device_log(client):
 
 
 def test_log_error_uses_error_level_by_default(client):
-    client.post("/api/status_update", json={"device_id": "cam-default"}, content_type="application/json")
+    client.post(
+        "/api/status_update", json={"device_id": "cam-default"}, content_type="application/json"
+    )
     response = client.post(
         "/api/log_error",
         json={"device_id": "cam-default", "message": "unexpected reboot"},
@@ -664,7 +682,10 @@ def test_log_error_rejects_too_long_device_id(client):
     )
 
     assert response.status_code == 400
-    assert response.get_json()["message"] == "device_id contains invalid characters or exceeds maximum length"
+    assert (
+        response.get_json()["message"]
+        == "device_id contains invalid characters or exceeds maximum length"
+    )
 
 
 def test_log_error_rejects_invalid_device_id_chars(client):
@@ -675,7 +696,10 @@ def test_log_error_rejects_invalid_device_id_chars(client):
     )
 
     assert response.status_code == 400
-    assert response.get_json()["message"] == "device_id contains invalid characters or exceeds maximum length"
+    assert (
+        response.get_json()["message"]
+        == "device_id contains invalid characters or exceeds maximum length"
+    )
 
 
 def test_log_error_rejects_too_long_message(client):
@@ -702,7 +726,9 @@ def test_log_error_rejects_invalid_level(client):
 
 
 def test_api_camera_logs_returns_logs_for_camera(client):
-    client.post("/api/status_update", json={"device_id": "cam-logs"}, content_type="application/json")
+    client.post(
+        "/api/status_update", json={"device_id": "cam-logs"}, content_type="application/json"
+    )
     client.post(
         "/api/log_error",
         json={"device_id": "cam-logs", "level": "warning", "message": "low memory"},
@@ -730,7 +756,9 @@ def test_api_camera_logs_returns_404_for_unknown_camera(client):
 
 
 def test_patch_camera_updates_display_name(client):
-    client.post("/api/status_update", json={"device_id": "cam-patch"}, content_type="application/json")
+    client.post(
+        "/api/status_update", json={"device_id": "cam-patch"}, content_type="application/json"
+    )
 
     response = client.patch(
         "/api/cameras/cam-patch",
@@ -745,7 +773,9 @@ def test_patch_camera_updates_display_name(client):
 
 
 def test_patch_camera_updates_interval(client):
-    client.post("/api/status_update", json={"device_id": "cam-patch"}, content_type="application/json")
+    client.post(
+        "/api/status_update", json={"device_id": "cam-patch"}, content_type="application/json"
+    )
 
     response = client.patch(
         "/api/cameras/cam-patch",
@@ -768,7 +798,9 @@ def test_patch_camera_returns_404_for_unknown_camera(client):
 
 
 def test_patch_camera_rejects_empty_display_name(client):
-    client.post("/api/status_update", json={"device_id": "cam-patch"}, content_type="application/json")
+    client.post(
+        "/api/status_update", json={"device_id": "cam-patch"}, content_type="application/json"
+    )
 
     response = client.patch(
         "/api/cameras/cam-patch",
@@ -781,7 +813,9 @@ def test_patch_camera_rejects_empty_display_name(client):
 
 
 def test_patch_camera_rejects_invalid_interval(client):
-    client.post("/api/status_update", json={"device_id": "cam-patch"}, content_type="application/json")
+    client.post(
+        "/api/status_update", json={"device_id": "cam-patch"}, content_type="application/json"
+    )
 
     response = client.patch(
         "/api/cameras/cam-patch",
@@ -794,7 +828,9 @@ def test_patch_camera_rejects_invalid_interval(client):
 
 
 def test_patch_camera_rejects_boolean_interval(client):
-    client.post("/api/status_update", json={"device_id": "cam-patch"}, content_type="application/json")
+    client.post(
+        "/api/status_update", json={"device_id": "cam-patch"}, content_type="application/json"
+    )
 
     response = client.patch(
         "/api/cameras/cam-patch",
@@ -807,8 +843,12 @@ def test_patch_camera_rejects_boolean_interval(client):
 
 
 def test_patch_camera_with_no_fields_is_idempotent(client):
-    client.post("/api/status_update", json={"device_id": "cam-patch"}, content_type="application/json")
-    client.patch("/api/cameras/cam-patch", json={"display_name": "元の名前"}, content_type="application/json")
+    client.post(
+        "/api/status_update", json={"device_id": "cam-patch"}, content_type="application/json"
+    )
+    client.patch(
+        "/api/cameras/cam-patch", json={"display_name": "元の名前"}, content_type="application/json"
+    )
 
     response = client.patch("/api/cameras/cam-patch", json={}, content_type="application/json")
 
@@ -817,7 +857,9 @@ def test_patch_camera_with_no_fields_is_idempotent(client):
 
 
 def test_patch_camera_updates_both_fields(client):
-    client.post("/api/status_update", json={"device_id": "cam-patch"}, content_type="application/json")
+    client.post(
+        "/api/status_update", json={"device_id": "cam-patch"}, content_type="application/json"
+    )
 
     response = client.patch(
         "/api/cameras/cam-patch",
@@ -832,7 +874,9 @@ def test_patch_camera_updates_both_fields(client):
 
 
 def test_patch_camera_rejects_whitespace_only_display_name(client):
-    client.post("/api/status_update", json={"device_id": "cam-patch"}, content_type="application/json")
+    client.post(
+        "/api/status_update", json={"device_id": "cam-patch"}, content_type="application/json"
+    )
 
     response = client.patch(
         "/api/cameras/cam-patch",
@@ -845,7 +889,9 @@ def test_patch_camera_rejects_whitespace_only_display_name(client):
 
 
 def test_delete_camera_removes_camera(client):
-    client.post("/api/status_update", json={"device_id": "cam-delete"}, content_type="application/json")
+    client.post(
+        "/api/status_update", json={"device_id": "cam-delete"}, content_type="application/json"
+    )
 
     response = client.delete("/api/cameras/cam-delete")
 
@@ -918,6 +964,7 @@ def test_upload_logs_disk_warning_at_85_percent(client, caplog):
     fake_usage = type("disk_usage", (), {"total": 100, "used": 86, "free": 14})()
     with patch("script.routes.shutil.disk_usage", return_value=fake_usage):
         import logging
+
         with caplog.at_level(logging.WARNING, logger="script.routes"):
             client.post(
                 "/upload",
@@ -931,6 +978,7 @@ def test_upload_logs_disk_warning_at_85_percent(client, caplog):
 # ---------------------------------------------------------------------------
 # Prometheus metrics endpoint
 # ---------------------------------------------------------------------------
+
 
 def test_metrics_endpoint_returns_prometheus_text(client):
     client.post(
@@ -976,6 +1024,7 @@ def test_upload_logs_disk_error_at_95_percent(client, caplog):
     fake_usage = type("disk_usage", (), {"total": 100, "used": 96, "free": 4})()
     with patch("script.routes.shutil.disk_usage", return_value=fake_usage):
         import logging
+
         with caplog.at_level(logging.ERROR, logger="script.routes"):
             client.post(
                 "/upload",
@@ -1060,7 +1109,9 @@ def test_api_camera_snapshots_export_json(client):
 def test_api_detections_export_csv(app):
     from script.detector import Detection
 
-    fake_det = FakePersonDetector([Detection(label="person", score=0.9, x1=0.1, y1=0.1, x2=0.5, y2=0.9)])
+    fake_det = FakePersonDetector(
+        [Detection(label="person", score=0.9, x1=0.1, y1=0.1, x2=0.5, y2=0.9)]
+    )
     inference = app.extensions["inference_service"]
     original_detector = inference.detector
     inference.detector = fake_det
@@ -1097,13 +1148,15 @@ def test_api_detections_export_csv_empty(client):
 def test_api_camera_snapshots_export_json_requires_auth(tmp_path):
     from script.app import create_app
 
-    secure_app = create_app({
-        "TESTING": True,
-        "UPLOAD_DIR": tmp_path / "uploads",
-        "DB_PATH": tmp_path / "db.sqlite3",
-        "INFERENCE_MODE": "sync",
-        "ADMIN_TOKEN": "secret-token",
-    })
+    secure_app = create_app(
+        {
+            "TESTING": True,
+            "UPLOAD_DIR": tmp_path / "uploads",
+            "DB_PATH": tmp_path / "db.sqlite3",
+            "INFERENCE_MODE": "sync",
+            "ADMIN_TOKEN": "secret-token",
+        }
+    )
     with secure_app.test_client() as c:
         c.post(
             "/upload",
@@ -1124,13 +1177,15 @@ def test_api_camera_snapshots_export_json_requires_auth(tmp_path):
 def test_api_detections_export_csv_requires_auth(tmp_path):
     from script.app import create_app
 
-    secure_app = create_app({
-        "TESTING": True,
-        "UPLOAD_DIR": tmp_path / "uploads",
-        "DB_PATH": tmp_path / "db.sqlite3",
-        "INFERENCE_MODE": "sync",
-        "ADMIN_TOKEN": "secret-token",
-    })
+    secure_app = create_app(
+        {
+            "TESTING": True,
+            "UPLOAD_DIR": tmp_path / "uploads",
+            "DB_PATH": tmp_path / "db.sqlite3",
+            "INFERENCE_MODE": "sync",
+            "ADMIN_TOKEN": "secret-token",
+        }
+    )
     with secure_app.test_client() as c:
         response = c.get("/api/detections?export=csv")
         assert response.status_code == 401
@@ -1201,6 +1256,7 @@ def test_index_shows_error_warning_for_camera_with_recent_errors(client):
 # ---------------------------------------------------------------------------
 # OpenAPI / Swagger UI
 # ---------------------------------------------------------------------------
+
 
 def test_api_openapi_yaml_serves_spec(client):
     response = client.get("/api/openapi.yaml")
