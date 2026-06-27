@@ -27,7 +27,6 @@ dev = [
 ]
 ml = [
   "numpy>=1.26,<3.0",
-  "Pillow>=12.2,<13.0",
   "tflite-runtime>=2.14,<3.0",
 ]
 
