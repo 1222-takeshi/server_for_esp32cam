@@ -236,6 +236,13 @@ class SQLiteMetadataStore:
                 CREATE INDEX IF NOT EXISTS idx_videos_stored_at
                     ON videos(stored_at DESC);
 
+                CREATE INDEX IF NOT EXISTS idx_snapshots_camera_stored_at
+                    ON snapshots(camera_id, stored_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_snapshots_stored_at
+                    ON snapshots(stored_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_snapshots_inference_status
+                    ON snapshots(inference_status);
+
                 CREATE TABLE IF NOT EXISTS detections (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     snapshot_id INTEGER NOT NULL,
@@ -248,6 +255,9 @@ class SQLiteMetadataStore:
                     FOREIGN KEY(snapshot_id) REFERENCES snapshots(id) ON DELETE CASCADE
                 );
 
+                CREATE INDEX IF NOT EXISTS idx_detections_snapshot_id
+                    ON detections(snapshot_id);
+
                 CREATE TABLE IF NOT EXISTS device_logs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     camera_id TEXT NOT NULL,
@@ -256,6 +266,9 @@ class SQLiteMetadataStore:
                     logged_at TEXT NOT NULL,
                     FOREIGN KEY(camera_id) REFERENCES cameras(camera_id) ON DELETE CASCADE
                 );
+
+                CREATE INDEX IF NOT EXISTS idx_device_logs_camera_logged_at
+                    ON device_logs(camera_id, logged_at DESC);
 
                 CREATE TABLE IF NOT EXISTS camera_desired_configs (
                     camera_id TEXT PRIMARY KEY,
