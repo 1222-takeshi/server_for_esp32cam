@@ -1088,3 +1088,5 @@ class SQLiteMetadataStore:
             )
             for row in rows
         ]
+
+# TODO: add indexes (see issue #1)
