@@ -376,7 +376,7 @@ def test_migrate_schema_adds_cascade_to_existing_db(tmp_path):
 
     store = SQLiteMetadataStore(db_path)
 
-    row = store._connection.execute(
+    row = store._get_connection().execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='snapshots'"
     ).fetchone()
     assert "ON DELETE CASCADE" in row["sql"].upper()
@@ -386,7 +386,7 @@ def test_migrate_schema_adds_cascade_to_existing_db(tmp_path):
 
 def test_metadata_store_enables_wal_mode(tmp_path):
     store = SQLiteMetadataStore(tmp_path / "wal.sqlite3")
-    row = store._connection.execute("PRAGMA journal_mode").fetchone()
+    row = store._get_connection().execute("PRAGMA journal_mode").fetchone()
     assert row[0] == "wal"
 
 
@@ -458,7 +458,7 @@ def _stored_video(
 def test_metadata_store_creates_videos_table(tmp_path):
     store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
 
-    row = store._connection.execute(
+    row = store._get_connection().execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='videos'"
     ).fetchone()
 
