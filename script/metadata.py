@@ -470,17 +470,38 @@ class SQLiteMetadataStore:
         *,
         limit: int = 20,
         offset: int = 0,
+        before: int | None = None,
     ) -> list[VideoRecord]:
+        query = "SELECT * FROM videos WHERE camera_id = ?"
+        params: list[object] = [camera_id]
+        if before is not None:
+            query += " AND id < ?"
+            params.append(before)
+        query += " ORDER BY stored_at DESC, id DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
         conn = self._get_connection()
-        rows = conn.execute(
-            """
-            SELECT * FROM videos
-            WHERE camera_id = ?
-            ORDER BY stored_at DESC, id DESC
-            LIMIT ? OFFSET ?
-            """,
-            (camera_id, limit, offset),
-        ).fetchall()
+        rows = conn.execute(query, tuple(params)).fetchall()
+        return [self._video_from_row(row) for row in rows]
+
+    def list_videos(
+        self,
+        *,
+        camera_id: str | None = None,
+        limit: int = 50,
+        before: int | None = None,
+    ) -> list[VideoRecord]:
+        query = "SELECT * FROM videos WHERE 1=1"
+        params: list[object] = []
+        if camera_id is not None:
+            query += " AND camera_id = ?"
+            params.append(camera_id)
+        if before is not None:
+            query += " AND id < ?"
+            params.append(before)
+        query += " ORDER BY stored_at DESC, id DESC LIMIT ?"
+        params.append(limit)
+        conn = self._get_connection()
+        rows = conn.execute(query, tuple(params)).fetchall()
         return [self._video_from_row(row) for row in rows]
 
     def delete_videos_by_relative_paths(self, relative_paths: list[str]) -> int:
@@ -867,11 +888,11 @@ class SQLiteMetadataStore:
         return self._snapshot_from_row(row, detections.get(snapshot_id, ()))
 
     def get_snapshot_by_filename(self, filename: str) -> SnapshotRecord | None:
-        with self._lock:
-            row = self._connection.execute(
-                "SELECT * FROM snapshots WHERE filename = ?",
-                (filename,),
-            ).fetchone()
+        conn = self._get_connection()
+        row = conn.execute(
+            "SELECT * FROM snapshots WHERE filename = ?",
+            (filename,),
+        ).fetchone()
         if row is None:
             return None
         return self._snapshot_from_row(row)
