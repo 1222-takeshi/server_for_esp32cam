@@ -50,10 +50,14 @@ All variables are optional unless marked **required for production**.
 | `ESP32CAM_DB_PATH` | `./esp32cam.sqlite3` | Path to the SQLite database. |
 | `PORT` | `8080` | TCP port the server listens on. |
 | `ESP32CAM_MAX_CONTENT_LENGTH` | `1048576` (1 MiB) | Maximum JPEG payload size in bytes. |
+| `ESP32CAM_MAX_VIDEO_CONTENT_LENGTH` | `10485760` (10 MiB) | Maximum video payload size in bytes. |
 | `ESP32CAM_UPLOAD_MAX_IMAGE_DIMENSION` | `4096` | Maximum image dimension in pixels (width or height). |
 | `ESP32CAM_UPLOAD_RATE_LIMIT` | `10 per minute` | Upload rate limit per device API key. Flask-Limiter format. |
+| `ESP32CAM_VIDEO_UPLOAD_RATE_LIMIT` | `5 per minute` | Video upload rate limit per device API key. Flask-Limiter format. |
 | `ESP32CAM_STORAGE_RETENTION_MAX_AGE_SECONDS` | `2592000` (30 days) | Delete images older than this. Set `0` to disable. |
 | `ESP32CAM_STORAGE_RETENTION_MAX_BYTES` | `0` (disabled) | Delete oldest images when total exceeds this size. |
+| `ESP32CAM_VIDEO_RETENTION_MAX_AGE_SECONDS` | `0` (disabled) | Delete videos older than this many seconds. Set `0` to disable. |
+| `ESP32CAM_VIDEO_RETENTION_MAX_BYTES` | `0` (disabled) | Delete oldest videos when total video storage exceeds this size. |
 | `ESP32CAM_DETECTOR` | `disabled` | Object detector. Options: `disabled`, `tflite_cpu`. |
 | `ESP32CAM_MODEL_PATH` | _(empty)_ | Path to TFLite model file. Required when `DETECTOR=tflite_cpu`. |
 | `ESP32CAM_LABELS_PATH` | _(empty)_ | Path to labels text file (optional). |
