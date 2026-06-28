@@ -27,7 +27,7 @@ from script.metadata import (
     SnapshotRecord,
     VideoRecord,
 )
-from script.retention import apply_upload_retention
+from script.retention import apply_upload_retention, apply_video_upload_retention
 from script.storage import Storage
 
 DEVICE_ID_MAX_LENGTH = 128
@@ -582,6 +582,7 @@ def api_cameras():
 
 
 @server.route("/api/cameras/<camera_id>/videos", methods=["POST"])
+@limiter.limit(lambda: current_app.config.get("VIDEO_UPLOAD_RATE_LIMIT", "5 per minute"))
 def api_upload_video(camera_id: str):
     if _validate_camera_id(camera_id):
         return jsonify({"message": "Camera not found"}), 404
@@ -604,6 +605,7 @@ def api_upload_video(camera_id: str):
             duration_ms=duration_ms,
         )
         video = _metadata_store().record_video(stored)
+        apply_video_upload_retention(stored)
         _check_disk_usage()
         current_app.logger.info("Video uploaded successfully: %s", stored.name)
         return jsonify({"message": "Video uploaded successfully", "video": _serialize_video(video)}), 201
