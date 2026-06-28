@@ -797,6 +797,16 @@ class SQLiteMetadataStore:
         detections = self._detections_by_snapshot_id([snapshot_id])
         return self._snapshot_from_row(row, detections.get(snapshot_id, ()))
 
+    def get_snapshot_by_filename(self, filename: str) -> SnapshotRecord | None:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT * FROM snapshots WHERE filename = ?",
+                (filename,),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._snapshot_from_row(row)
+
     def mark_snapshot_processing(self, snapshot_id: int) -> None:
         with self._lock, self._connection:
             self._connection.execute(

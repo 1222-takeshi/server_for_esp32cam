@@ -532,8 +532,11 @@ def list_files():
 @server.route("/files/<filename>")
 def get_file(filename: str):
     try:
+        snapshot = _metadata_store().get_snapshot_by_filename(filename)
+        if snapshot is None:
+            return jsonify({"message": "File not found"}), 404
         return send_file(
-            BytesIO(_storage().read_image(filename)),
+            BytesIO(_storage().read_image_by_relative_path(snapshot.relative_path)),
             mimetype="image/jpeg",
             download_name=filename,
         )
