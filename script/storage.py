@@ -130,6 +130,8 @@ class Storage(Protocol):
 
     def list_videos(self) -> list[StoredVideo]: ...
 
+    def read_video_by_relative_path(self, relative_path: str) -> tuple[bytes, str]: ...
+
     def delete_video(self, stored: StoredVideo) -> None: ...
 
     def delete_camera_files(self, camera_id: str) -> None: ...
@@ -371,6 +373,19 @@ class LocalFilesystemStorage:
             if path.is_file() and path.parent.name == "videos"
         ]
         return sorted(videos, key=lambda video: video.stored_at, reverse=True)
+
+    def read_video_by_relative_path(self, relative_path: str) -> tuple[bytes, str]:
+        normalized = Path(relative_path)
+        if normalized.is_absolute() or ".." in normalized.parts:
+            raise FileNotFoundError(relative_path)
+        path = (self.upload_dir / normalized).resolve()
+        if self.upload_dir != path and self.upload_dir not in path.parents:
+            raise FileNotFoundError(relative_path)
+        if not path.exists() or not path.is_file():
+            raise FileNotFoundError(relative_path)
+        if path.suffix.lower() != ".mp4":
+            raise FileNotFoundError(relative_path)
+        return path.read_bytes(), "video/mp4"
 
     def delete_video(self, stored: StoredVideo) -> None:
         path = (self.upload_dir / stored.relative_path).resolve()
