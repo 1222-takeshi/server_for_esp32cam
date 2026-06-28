@@ -118,6 +118,14 @@ class Storage(Protocol):
         preserve_relative_paths: set[str] | None = None,
     ) -> StorageRetentionResult: ...
 
+    def apply_video_retention(
+        self,
+        policy: StorageRetentionPolicy,
+        *,
+        now: datetime | None = None,
+        preserve_relative_paths: set[str] | None = None,
+    ) -> StorageRetentionResult: ...
+
     def save_video(
         self,
         data: bytes,
@@ -491,5 +499,53 @@ class LocalFilesystemStorage:
                     continue
                 deleted.append(image.relative_path)
                 total_bytes -= image.size
+
+        return StorageRetentionResult(deleted_relative_paths=deleted, deleted_bytes=deleted_bytes)
+
+    def apply_video_retention(
+        self,
+        policy: StorageRetentionPolicy,
+        *,
+        now: datetime | None = None,
+        preserve_relative_paths: set[str] | None = None,
+    ) -> StorageRetentionResult:
+        if not policy.enabled:
+            return StorageRetentionResult(deleted_relative_paths=[], deleted_bytes=0)
+
+        preserved = preserve_relative_paths or set()
+        reference = now or datetime.now(tz=timezone.utc)
+        videos = self.list_videos()
+        candidates = [v for v in videos if v.relative_path not in preserved]
+        deleted: list[str] = []
+        deleted_bytes = 0
+
+        if policy.max_age_seconds is not None and policy.max_age_seconds > 0:
+            for v in sorted(candidates, key=lambda item: item.stored_at):
+                if (reference - v.stored_at).total_seconds() > policy.max_age_seconds:
+                    try:
+                        size = (self.upload_dir / v.relative_path).stat().st_size
+                        self.delete_video(v)
+                        deleted_bytes += size
+                    except (FileNotFoundError, OSError):
+                        continue
+                    deleted.append(v.relative_path)
+
+        if policy.max_bytes is not None and policy.max_bytes > 0:
+            remaining = [v for v in videos if v.relative_path not in deleted]
+            total_bytes = sum(v.size for v in remaining)
+            for v in sorted(remaining, key=lambda item: item.stored_at):
+                if total_bytes <= policy.max_bytes:
+                    break
+                if v.relative_path in preserved:
+                    continue
+                try:
+                    size = (self.upload_dir / v.relative_path).stat().st_size
+                    self.delete_video(v)
+                    deleted_bytes += size
+                except (FileNotFoundError, OSError):
+                    total_bytes -= v.size
+                    continue
+                deleted.append(v.relative_path)
+                total_bytes -= v.size
 
         return StorageRetentionResult(deleted_relative_paths=deleted, deleted_bytes=deleted_bytes)

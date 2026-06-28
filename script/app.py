@@ -126,6 +126,10 @@ def create_app(test_config: dict | None = None) -> Flask:
         max_age_seconds=app.config["STORAGE_RETENTION_MAX_AGE_SECONDS"] or None,
         max_bytes=app.config["STORAGE_RETENTION_MAX_BYTES"] or None,
     )
+    video_retention_policy = StorageRetentionPolicy(
+        max_age_seconds=app.config.get("VIDEO_RETENTION_MAX_AGE_SECONDS") or None,
+        max_bytes=app.config.get("VIDEO_RETENTION_MAX_BYTES") or None,
+    )
     upload_metrics = UploadMetricsRegistry()
     app_metrics = AppMetrics()
 
@@ -135,6 +139,7 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.extensions["inference_service"] = inference_service
     app.extensions["snapshot_event_publisher"] = snapshot_event_publisher
     app.extensions["storage_retention_policy"] = storage_retention_policy
+    app.extensions["video_retention_policy"] = video_retention_policy
     app.extensions["upload_metrics"] = upload_metrics
     app.extensions["app_metrics"] = app_metrics
     limiter.init_app(app)
