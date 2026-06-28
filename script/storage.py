@@ -461,7 +461,7 @@ class LocalFilesystemStorage:
 
         if policy.max_bytes is not None and policy.max_bytes > 0:
             remaining = [
-                image for image in self.list_images() if image.relative_path not in deleted
+                image for image in images if image.relative_path not in deleted
             ]
             total_bytes = sum(image.size for image in remaining)
             for image in sorted(remaining, key=lambda item: item.created_at):
