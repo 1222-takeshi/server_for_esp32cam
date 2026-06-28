@@ -89,9 +89,13 @@ def test_notifier_logs_warning_on_delivery_failure(caplog):
     notifier = WebhookNotifier("http://example.com/hook", min_score=0.5)
 
     import logging
+    import threading
     with caplog.at_level(logging.WARNING, logger="script.webhook"):
         with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("conn refused")):
             notifier.notify(_snapshot(), [_detection(0.9)])
+            for t in threading.enumerate():
+                if t.daemon and t is not threading.main_thread():
+                    t.join(timeout=5.0)
 
     assert any("Webhook delivery failed" in r.message for r in caplog.records)
 
