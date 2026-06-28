@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import urllib.error
 import urllib.request
 from datetime import timezone
@@ -53,11 +54,15 @@ class WebhookNotifier:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        try:
-            with urllib.request.urlopen(req, timeout=10):
-                pass
-        except (urllib.error.URLError, OSError) as exc:
-            _logger.warning("Webhook delivery failed: %s", exc)
+
+        def _send():
+            try:
+                with urllib.request.urlopen(req, timeout=10):
+                    pass
+            except (urllib.error.URLError, OSError) as exc:
+                _logger.warning("Webhook delivery failed: %s", exc)
+
+        threading.Thread(target=_send, daemon=True).start()
 
 
 class _DisabledNotifier:

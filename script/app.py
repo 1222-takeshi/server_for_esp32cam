@@ -153,6 +153,9 @@ def create_app(test_config: dict | None = None) -> Flask:
         if metrics is not None and start is not None:
             endpoint = request.endpoint or "unknown"
             metrics.finish_request(start, request.method, endpoint, response.status_code)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
         return response
     register_websocket_routes(
         app, snapshot_event_publisher, max_connections=app.config["MAX_WS_CONNECTIONS"]
