@@ -257,6 +257,19 @@ class SQLiteMetadataStore:
                     FOREIGN KEY(camera_id) REFERENCES cameras(camera_id) ON DELETE CASCADE
                 );
 
+                CREATE INDEX IF NOT EXISTS idx_snapshots_camera_stored_at
+                    ON snapshots(camera_id, stored_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_snapshots_stored_at
+                    ON snapshots(stored_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_snapshots_inference_status
+                    ON snapshots(inference_status);
+
+                CREATE INDEX IF NOT EXISTS idx_detections_snapshot_id
+                    ON detections(snapshot_id);
+
+                CREATE INDEX IF NOT EXISTS idx_device_logs_camera_logged_at
+                    ON device_logs(camera_id, logged_at DESC);
+
                 CREATE TABLE IF NOT EXISTS camera_desired_configs (
                     camera_id TEXT PRIMARY KEY,
                     version INTEGER NOT NULL DEFAULT 1,
