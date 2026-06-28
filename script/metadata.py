@@ -479,8 +479,42 @@ class SQLiteMetadataStore:
         return int(cursor.rowcount)
 
     def sync_storage_index(self, images: list[StoredImage]) -> None:
-        for image in images:
-            self.record_snapshot(image)
+        if not images:
+            return
+        with self._lock:
+            existing = {
+                row[0]
+                for row in self._connection.execute(
+                    "SELECT filename FROM snapshots"
+                ).fetchall()
+            }
+        new_images = [img for img in images if img.name not in existing]
+        if not new_images:
+            return
+        for img in new_images:
+            if img.device_id is not None:
+                self.ensure_camera(img.device_id, seen_at=img.created_at)
+        rows = [
+            (
+                img.name,
+                img.relative_path,
+                img.size,
+                img.device_id,
+                img.captured_at.isoformat() if img.captured_at else None,
+                img.created_at.isoformat(),
+                "succeeded",
+            )
+            for img in new_images
+        ]
+        with self._lock, self._connection:
+            self._connection.executemany(
+                """
+                INSERT OR IGNORE INTO snapshots
+                    (filename, relative_path, size, camera_id, captured_at, stored_at, inference_status, inference_error)
+                VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+                """,
+                rows,
+            )
 
     def delete_snapshots_by_relative_paths(self, relative_paths: list[str]) -> int:
         if not relative_paths:
