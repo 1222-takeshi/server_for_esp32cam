@@ -150,6 +150,31 @@
       {% endif %}
     </div>
   </div>
+
+  <!-- ── Recent Videos ── -->
+  <div class="card" style="margin-top:20px;">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--border);">
+      <span style="font-size:13px;font-weight:600;color:var(--text-1);">Recent Videos</span>
+    </div>
+    <div style="padding:20px;" id="video-section">
+      {% if recent_videos %}
+      <video id="latest-video" controls style="width:100%;border-radius:6px;background:#000;"
+             src="{{ url_for('server.api_video_content', camera_id=camera.camera_id, video_id=recent_videos[0].id) }}">
+      </video>
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
+        {% for v in recent_videos %}
+        <a href="{{ url_for('server.api_video_content', camera_id=camera.camera_id, video_id=v.id) }}"
+           style="font-size:11px;color:var(--text-4);font-family:var(--mono);text-decoration:none;padding:4px 8px;border:1px solid var(--border);border-radius:4px;"
+           onclick="document.getElementById('latest-video').src=this.href;return false;">
+          {{ v.filename }} ({{ '%.1f'|format(v.size/1024) }}KB{% if v.duration_ms %} · {{ (v.duration_ms//1000) }}s{% endif %})
+        </a>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p style="font-size:13px;color:var(--text-4);margin:0;">No videos uploaded yet.</p>
+      {% endif %}
+    </div>
+  </div>
 </div>
 
 <style>
