@@ -565,12 +565,14 @@ def camera_detail(camera_id: str):
     snapshots = store.list_camera_snapshots(camera_id, limit=20)
     latest = snapshots[0] if snapshots else None
     recent_logs = store.list_device_logs(camera_id, limit=10)
+    recent_videos = store.list_camera_videos(camera_id, limit=5)
     return render_template(
         "camera_detail.html",
         camera=camera,
         snapshots=snapshots,
         latest=latest,
         recent_logs=recent_logs,
+        recent_videos=recent_videos,
     )
 
 
@@ -620,6 +622,71 @@ def api_upload_video(camera_id: str):
                 current_app.logger.error("Video cleanup failed after upload error: %s", cleanup_exc)
         current_app.logger.error("Video upload failed: %s", exc)
         return jsonify({"message": "Video upload failed"}), 500
+
+
+@server.route("/api/cameras/<camera_id>/videos", methods=["GET"])
+def api_list_camera_videos(camera_id: str):
+    if _validate_camera_id(camera_id):
+        return jsonify({"message": "Camera not found"}), 404
+    camera = _metadata_store().get_camera(camera_id)
+    if camera is None:
+        return jsonify({"message": "Camera not found"}), 404
+    try:
+        limit = min(int(request.args.get("limit", 50)), 100)
+    except (TypeError, ValueError):
+        limit = 50
+    before_str = request.args.get("before")
+    before = None
+    if before_str is not None:
+        try:
+            before = int(before_str)
+        except (TypeError, ValueError):
+            return jsonify({"message": "Invalid before parameter"}), 400
+    videos = _metadata_store().list_camera_videos(camera_id, limit=limit, before=before)
+    return jsonify({"videos": [_serialize_video(v) for v in videos], "camera_id": camera_id})
+
+
+@server.route("/api/videos", methods=["GET"])
+def api_list_videos():
+    camera_id = request.args.get("camera_id")
+    if camera_id is not None and _validate_camera_id(camera_id):
+        return jsonify({"message": "Invalid camera_id parameter"}), 400
+    try:
+        limit = min(int(request.args.get("limit", 50)), 100)
+    except (TypeError, ValueError):
+        limit = 50
+    before_str = request.args.get("before")
+    before = None
+    if before_str is not None:
+        try:
+            before = int(before_str)
+        except (TypeError, ValueError):
+            return jsonify({"message": "Invalid before parameter"}), 400
+    videos = _metadata_store().list_videos(camera_id=camera_id, limit=limit, before=before)
+    return jsonify({"videos": [_serialize_video(v) for v in videos]})
+
+
+@server.route("/api/cameras/<camera_id>/videos/<int:video_id>/content", methods=["GET"])
+def api_video_content(camera_id: str, video_id: int):
+    if _validate_camera_id(camera_id):
+        return jsonify({"message": "Camera not found"}), 404
+    camera = _metadata_store().get_camera(camera_id)
+    if camera is None:
+        return jsonify({"message": "Camera not found"}), 404
+    video = _metadata_store().get_video(video_id, camera_id=camera_id)
+    if video is None:
+        return jsonify({"message": "Video not found"}), 404
+    try:
+        data, content_type = _storage().read_video_by_relative_path(video.relative_path)
+    except FileNotFoundError:
+        return jsonify({"message": "Video not found"}), 404
+    from io import BytesIO
+    return send_file(
+        BytesIO(data),
+        mimetype=content_type,
+        download_name=video.filename,
+        conditional=True,
+    )
 
 
 @server.route("/api/cameras/<camera_id>", methods=["DELETE"])
