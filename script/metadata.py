@@ -139,35 +139,49 @@ class SQLiteMetadataStore:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._default_expected_interval_seconds = default_expected_interval_seconds
-        self._lock = threading.RLock()
+        self._local = threading.local()
+
         old_mask = os.umask(0o177)
         try:
-            self._connection = sqlite3.connect(self.db_path, check_same_thread=False)
+            init_conn = sqlite3.connect(self.db_path, check_same_thread=True)
         finally:
             os.umask(old_mask)
         os.chmod(self.db_path, 0o600)
-        self._connection.row_factory = sqlite3.Row
-        self._connection.execute("PRAGMA journal_mode = WAL")
-        self._connection.execute("PRAGMA synchronous = NORMAL")
-        with self._connection:
-            self._connection.execute("PRAGMA foreign_keys = ON")
-        self._initialize_schema()
-        self._migrate_schema()
-        # Re-apply after _initialize_schema's executescript implicitly commits
-        with self._connection:
-            self._connection.execute("PRAGMA foreign_keys = ON")
+        try:
+            init_conn.row_factory = sqlite3.Row
+            init_conn.execute("PRAGMA journal_mode = WAL")
+            init_conn.execute("PRAGMA synchronous = NORMAL")
+            with init_conn:
+                init_conn.execute("PRAGMA foreign_keys = ON")
+            self._initialize_schema(init_conn)
+            self._migrate_schema(init_conn)
+            with init_conn:
+                init_conn.execute("PRAGMA foreign_keys = ON")
+        finally:
+            init_conn.close()
 
-    def _migrate_schema(self) -> None:
+    def _get_connection(self) -> sqlite3.Connection:
+        conn = getattr(self._local, "connection", None)
+        if conn is None:
+            conn = sqlite3.connect(self.db_path, check_same_thread=True)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute("PRAGMA synchronous = NORMAL")
+            conn.execute("PRAGMA foreign_keys = ON")
+            self._local.connection = conn
+        return conn
+
+    def _migrate_schema(self, conn: sqlite3.Connection) -> None:
         # device_logs was introduced with ON DELETE CASCADE from the start, so only
         # snapshots needs a migration for databases created before this change.
-        row = self._connection.execute(
+        row = conn.execute(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='snapshots'"
         ).fetchone()
         if row is None or "ON DELETE CASCADE" in row["sql"].upper():
             return
 
-        with self._lock, self._connection:
-            self._connection.execute(
+        with conn:
+            conn.execute(
                 """
                 CREATE TABLE snapshots_new (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -183,13 +197,12 @@ class SQLiteMetadataStore:
                 )
                 """
             )
-            self._connection.execute("INSERT INTO snapshots_new SELECT * FROM snapshots")
-            self._connection.execute("DROP TABLE snapshots")
-            self._connection.execute("ALTER TABLE snapshots_new RENAME TO snapshots")
+            conn.execute("INSERT INTO snapshots_new SELECT * FROM snapshots")
+            conn.execute("DROP TABLE snapshots")
+            conn.execute("ALTER TABLE snapshots_new RENAME TO snapshots")
 
-    def _initialize_schema(self) -> None:
-        with self._lock, self._connection:
-            self._connection.executescript(
+    def _initialize_schema(self, conn: sqlite3.Connection) -> None:
+        conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS cameras (
                     camera_id TEXT PRIMARY KEY,
@@ -285,7 +298,7 @@ class SQLiteMetadataStore:
                     FOREIGN KEY(camera_id) REFERENCES cameras(camera_id) ON DELETE CASCADE
                 );
                 """
-            )
+        )
 
     def _snapshot_from_row(
         self, row: sqlite3.Row, detections: tuple[DetectionRecord, ...] = ()
@@ -332,8 +345,9 @@ class SQLiteMetadataStore:
     def ensure_camera(self, camera_id: str, *, seen_at: datetime | None = None) -> CameraRecord:
         effective_seen_at = (seen_at or datetime.now(tz=timezone.utc)).astimezone(timezone.utc)
         seen_iso = effective_seen_at.isoformat()
-        with self._lock, self._connection:
-            self._connection.execute(
+        conn = self._get_connection()
+        with conn:
+            conn.execute(
                 """
                 INSERT INTO cameras (
                     camera_id, display_name, expected_interval_seconds, first_seen_at, last_seen_at, is_active
@@ -357,7 +371,7 @@ class SQLiteMetadataStore:
                     seen_iso,
                 ),
             )
-            row = self._connection.execute(
+            row = conn.execute(
                 "SELECT * FROM cameras WHERE camera_id = ?",
                 (camera_id,),
             ).fetchone()
@@ -370,8 +384,9 @@ class SQLiteMetadataStore:
             self.ensure_camera(stored.device_id, seen_at=stored.created_at)
 
         inference_status = "pending" if default_pending and stored.device_id else "succeeded"
-        with self._lock, self._connection:
-            self._connection.execute(
+        conn = self._get_connection()
+        with conn:
+            conn.execute(
                 """
                 INSERT INTO snapshots (
                     filename, relative_path, size, camera_id, captured_at, stored_at, inference_status, inference_error
@@ -393,7 +408,7 @@ class SQLiteMetadataStore:
                     inference_status,
                 ),
             )
-            row = self._connection.execute(
+            row = conn.execute(
                 "SELECT * FROM snapshots WHERE filename = ?",
                 (stored.name,),
             ).fetchone()
@@ -401,8 +416,9 @@ class SQLiteMetadataStore:
 
     def record_video(self, stored: StoredVideo) -> VideoRecord:
         self.ensure_camera(stored.camera_id, seen_at=stored.stored_at)
-        with self._lock, self._connection:
-            self._connection.execute(
+        conn = self._get_connection()
+        with conn:
+            conn.execute(
                 """
                 INSERT INTO videos (
                     filename, relative_path, size, camera_id, captured_at, stored_at,
@@ -430,7 +446,7 @@ class SQLiteMetadataStore:
                     stored.sha256,
                 ),
             )
-            row = self._connection.execute(
+            row = conn.execute(
                 "SELECT * FROM videos WHERE filename = ?",
                 (stored.name,),
             ).fetchone()
@@ -442,8 +458,8 @@ class SQLiteMetadataStore:
         if camera_id is not None:
             query += " AND camera_id = ?"
             params.append(camera_id)
-        with self._lock:
-            row = self._connection.execute(query, tuple(params)).fetchone()
+        conn = self._get_connection()
+        row = conn.execute(query, tuple(params)).fetchone()
         if row is None:
             return None
         return self._video_from_row(row)
@@ -455,24 +471,25 @@ class SQLiteMetadataStore:
         limit: int = 20,
         offset: int = 0,
     ) -> list[VideoRecord]:
-        with self._lock:
-            rows = self._connection.execute(
-                """
-                SELECT * FROM videos
-                WHERE camera_id = ?
-                ORDER BY stored_at DESC, id DESC
-                LIMIT ? OFFSET ?
-                """,
-                (camera_id, limit, offset),
-            ).fetchall()
+        conn = self._get_connection()
+        rows = conn.execute(
+            """
+            SELECT * FROM videos
+            WHERE camera_id = ?
+            ORDER BY stored_at DESC, id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (camera_id, limit, offset),
+        ).fetchall()
         return [self._video_from_row(row) for row in rows]
 
     def delete_videos_by_relative_paths(self, relative_paths: list[str]) -> int:
         if not relative_paths:
             return 0
         placeholders = ",".join("?" for _ in relative_paths)
-        with self._lock, self._connection:
-            cursor = self._connection.execute(
+        conn = self._get_connection()
+        with conn:
+            cursor = conn.execute(
                 f"DELETE FROM videos WHERE relative_path IN ({placeholders})",
                 tuple(relative_paths),
             )
@@ -481,13 +498,13 @@ class SQLiteMetadataStore:
     def sync_storage_index(self, images: list[StoredImage]) -> None:
         if not images:
             return
-        with self._lock:
-            existing = {
-                row[0]
-                for row in self._connection.execute(
-                    "SELECT filename FROM snapshots"
-                ).fetchall()
-            }
+        conn = self._get_connection()
+        existing = {
+            row[0]
+            for row in conn.execute(
+                "SELECT filename FROM snapshots"
+            ).fetchall()
+        }
         new_images = [img for img in images if img.name not in existing]
         if not new_images:
             return
@@ -506,8 +523,9 @@ class SQLiteMetadataStore:
             )
             for img in new_images
         ]
-        with self._lock, self._connection:
-            self._connection.executemany(
+        conn = self._get_connection()
+        with conn:
+            conn.executemany(
                 """
                 INSERT OR IGNORE INTO snapshots
                     (filename, relative_path, size, camera_id, captured_at, stored_at, inference_status, inference_error)
@@ -520,20 +538,21 @@ class SQLiteMetadataStore:
         if not relative_paths:
             return 0
         placeholders = ",".join("?" for _ in relative_paths)
-        with self._lock, self._connection:
-            cursor = self._connection.execute(
+        conn = self._get_connection()
+        with conn:
+            cursor = conn.execute(
                 f"DELETE FROM snapshots WHERE relative_path IN ({placeholders})",
                 tuple(relative_paths),
             )
         return int(cursor.rowcount)
 
     def ping(self) -> None:
-        with self._lock:
-            self._connection.execute("SELECT 1")
+        conn = self._get_connection()
+        conn.execute("SELECT 1")
 
     def total_snapshot_count(self) -> int:
-        with self._lock:
-            row = self._connection.execute("SELECT COUNT(*) AS count FROM snapshots").fetchone()
+        conn = self._get_connection()
+        row = conn.execute("SELECT COUNT(*) AS count FROM snapshots").fetchone()
         return int(row["count"])
 
     def count_snapshots(
@@ -554,8 +573,8 @@ class SQLiteMetadataStore:
         if until is not None:
             query += " AND stored_at <= ?"
             params.append(until.astimezone(timezone.utc).isoformat())
-        with self._lock:
-            row = self._connection.execute(query, tuple(params)).fetchone()
+        conn = self._get_connection()
+        row = conn.execute(query, tuple(params)).fetchone()
         return int(row["count"])
 
     def list_recent_snapshots(
@@ -582,17 +601,17 @@ class SQLiteMetadataStore:
         if limit is not None:
             query += " LIMIT ? OFFSET ?"
             params.extend([limit, offset])
-        with self._lock:
-            rows = self._connection.execute(query, tuple(params)).fetchall()
+        conn = self._get_connection()
+        rows = conn.execute(query, tuple(params)).fetchall()
         detections = self._detections_by_snapshot_id([row["id"] for row in rows])
         return [self._snapshot_from_row(row, detections.get(row["id"], ())) for row in rows]
 
     def get_camera(self, camera_id: str) -> CameraRecord | None:
-        with self._lock:
-            row = self._connection.execute(
-                "SELECT * FROM cameras WHERE camera_id = ?",
-                (camera_id,),
-            ).fetchone()
+        conn = self._get_connection()
+        row = conn.execute(
+            "SELECT * FROM cameras WHERE camera_id = ?",
+            (camera_id,),
+        ).fetchone()
         if row is None:
             return None
         return self._camera_from_row(row)
@@ -613,26 +632,28 @@ class SQLiteMetadataStore:
             if expected_interval_seconds is not None
             else camera.expected_interval_seconds
         )
-        with self._lock, self._connection:
-            self._connection.execute(
+        conn = self._get_connection()
+        with conn:
+            conn.execute(
                 "UPDATE cameras SET display_name = ?, expected_interval_seconds = ? WHERE camera_id = ?",
                 (new_display_name, new_interval, camera_id),
             )
         return self.get_camera(camera_id)
 
     def delete_camera(self, camera_id: str) -> bool:
-        with self._lock, self._connection:
-            cursor = self._connection.execute(
+        conn = self._get_connection()
+        with conn:
+            cursor = conn.execute(
                 "DELETE FROM cameras WHERE camera_id = ?",
                 (camera_id,),
             )
         return cursor.rowcount > 0
 
     def list_camera_summaries(self) -> list[CameraSummary]:
-        with self._lock:
-            camera_rows = self._connection.execute(
-                "SELECT * FROM cameras ORDER BY last_seen_at DESC, camera_id ASC"
-            ).fetchall()
+        conn = self._get_connection()
+        camera_rows = conn.execute(
+            "SELECT * FROM cameras ORDER BY last_seen_at DESC, camera_id ASC"
+        ).fetchall()
 
         if not camera_rows:
             return []
@@ -640,30 +661,30 @@ class SQLiteMetadataStore:
         camera_ids = [row["camera_id"] for row in camera_rows]
         placeholders = ",".join("?" for _ in camera_ids)
 
-        with self._lock:
-            snapshot_rows = self._connection.execute(
-                f"""
-                SELECT *
-                FROM (
-                    SELECT *, ROW_NUMBER() OVER (PARTITION BY camera_id ORDER BY stored_at DESC) AS rn
-                    FROM snapshots
-                    WHERE camera_id IN ({placeholders})
-                ) ranked
-                WHERE rn = 1
-                """,
-                camera_ids,
-            ).fetchall()
+        conn = self._get_connection()
+        snapshot_rows = conn.execute(
+            f"""
+            SELECT *
+            FROM (
+                SELECT *, ROW_NUMBER() OVER (PARTITION BY camera_id ORDER BY stored_at DESC) AS rn
+                FROM snapshots
+                WHERE camera_id IN ({placeholders})
+            ) ranked
+            WHERE rn = 1
+            """,
+            camera_ids,
+        ).fetchall()
 
-            detection_rows = self._connection.execute(
-                f"""
-                SELECT snapshots.camera_id, MAX(snapshots.stored_at) AS latest_detection_at
-                FROM detections
-                JOIN snapshots ON snapshots.id = detections.snapshot_id
-                WHERE snapshots.camera_id IN ({placeholders})
-                GROUP BY snapshots.camera_id
-                """,
-                camera_ids,
-            ).fetchall()
+        detection_rows = conn.execute(
+            f"""
+            SELECT snapshots.camera_id, MAX(snapshots.stored_at) AS latest_detection_at
+            FROM detections
+            JOIN snapshots ON snapshots.id = detections.snapshot_id
+            WHERE snapshots.camera_id IN ({placeholders})
+            GROUP BY snapshots.camera_id
+            """,
+            camera_ids,
+        ).fetchall()
 
         detections_by_id = self._detections_by_snapshot_id([row["id"] for row in snapshot_rows])
         latest_snapshot_by_camera: dict[str, SnapshotRecord] = {
@@ -717,8 +738,8 @@ class SQLiteMetadataStore:
             params.append(until.astimezone(timezone.utc).isoformat())
         query += " ORDER BY stored_at DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
-        with self._lock:
-            rows = self._connection.execute(query, tuple(params)).fetchall()
+        conn = self._get_connection()
+        rows = conn.execute(query, tuple(params)).fetchall()
         detections = self._detections_by_snapshot_id([row["id"] for row in rows])
         return [self._snapshot_from_row(row, detections.get(row["id"], ())) for row in rows]
 
@@ -758,8 +779,8 @@ class SQLiteMetadataStore:
             JOIN snapshots ON snapshots.id = detections.snapshot_id
             {where}
         """
-        with self._lock:
-            row = self._connection.execute(query, tuple(params)).fetchone()
+        conn = self._get_connection()
+        row = conn.execute(query, tuple(params)).fetchone()
         return int(row["count"])
 
     def list_detections(
@@ -793,8 +814,8 @@ class SQLiteMetadataStore:
         """
         params.extend([limit, offset])
 
-        with self._lock:
-            rows = self._connection.execute(query, tuple(params)).fetchall()
+        conn = self._get_connection()
+        rows = conn.execute(query, tuple(params)).fetchall()
 
         return [
             {
@@ -810,22 +831,23 @@ class SQLiteMetadataStore:
         ]
 
     def list_pending_snapshot_ids(self, *, limit: int = 100) -> list[int]:
-        with self._lock:
-            rows = self._connection.execute(
-                """
-                SELECT id
-                FROM snapshots
-                WHERE inference_status = 'pending'
-                ORDER BY stored_at ASC
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
+        conn = self._get_connection()
+        rows = conn.execute(
+            """
+            SELECT id
+            FROM snapshots
+            WHERE inference_status = 'pending'
+            ORDER BY stored_at ASC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
         return [int(row["id"]) for row in rows]
 
     def reset_processing_snapshots(self) -> None:
-        with self._lock, self._connection:
-            self._connection.execute(
+        conn = self._get_connection()
+        with conn:
+            conn.execute(
                 """
                 UPDATE snapshots
                 SET inference_status = 'pending', inference_error = NULL
@@ -834,19 +856,20 @@ class SQLiteMetadataStore:
             )
 
     def get_snapshot(self, snapshot_id: int) -> SnapshotRecord | None:
-        with self._lock:
-            row = self._connection.execute(
-                "SELECT * FROM snapshots WHERE id = ?",
-                (snapshot_id,),
-            ).fetchone()
+        conn = self._get_connection()
+        row = conn.execute(
+            "SELECT * FROM snapshots WHERE id = ?",
+            (snapshot_id,),
+        ).fetchone()
         if row is None:
             return None
         detections = self._detections_by_snapshot_id([snapshot_id])
         return self._snapshot_from_row(row, detections.get(snapshot_id, ()))
 
     def mark_snapshot_processing(self, snapshot_id: int) -> None:
-        with self._lock, self._connection:
-            self._connection.execute(
+        conn = self._get_connection()
+        with conn:
+            conn.execute(
                 """
                 UPDATE snapshots
                 SET inference_status = 'processing', inference_error = NULL
@@ -856,8 +879,9 @@ class SQLiteMetadataStore:
             )
 
     def mark_snapshot_skipped(self, snapshot_id: int, *, reason: str | None = None) -> None:
-        with self._lock, self._connection:
-            self._connection.execute(
+        conn = self._get_connection()
+        with conn:
+            conn.execute(
                 """
                 UPDATE snapshots
                 SET inference_status = 'skipped', inference_error = ?
@@ -865,7 +889,7 @@ class SQLiteMetadataStore:
                 """,
                 (reason, snapshot_id),
             )
-            self._connection.execute(
+            conn.execute(
                 "DELETE FROM detections WHERE snapshot_id = ?",
                 (snapshot_id,),
             )
@@ -878,8 +902,9 @@ class SQLiteMetadataStore:
         error: str | None = None,
     ) -> None:
         status = "failed" if error else "succeeded"
-        with self._lock, self._connection:
-            self._connection.execute(
+        conn = self._get_connection()
+        with conn:
+            conn.execute(
                 """
                 UPDATE snapshots
                 SET inference_status = ?, inference_error = ?
@@ -887,12 +912,12 @@ class SQLiteMetadataStore:
                 """,
                 (status, error, snapshot_id),
             )
-            self._connection.execute(
+            conn.execute(
                 "DELETE FROM detections WHERE snapshot_id = ?",
                 (snapshot_id,),
             )
             for detection in detections:
-                self._connection.execute(
+                conn.execute(
                     """
                     INSERT INTO detections (
                         snapshot_id, label, score, x1, y1, x2, y2
@@ -923,8 +948,8 @@ class SQLiteMetadataStore:
             WHERE snapshot_id IN ({placeholders})
             ORDER BY id ASC
         """
-        with self._lock:
-            rows = self._connection.execute(query, tuple(snapshot_ids)).fetchall()
+        conn = self._get_connection()
+        rows = conn.execute(query, tuple(snapshot_ids)).fetchall()
 
         grouped: dict[int, list[DetectionRecord]] = {
             snapshot_id: [] for snapshot_id in snapshot_ids
@@ -959,11 +984,11 @@ class SQLiteMetadataStore:
         )
 
     def get_desired_config(self, camera_id: str) -> DesiredConfigRecord | None:
-        with self._lock:
-            row = self._connection.execute(
-                "SELECT * FROM camera_desired_configs WHERE camera_id = ?",
-                (camera_id,),
-            ).fetchone()
+        conn = self._get_connection()
+        row = conn.execute(
+            "SELECT * FROM camera_desired_configs WHERE camera_id = ?",
+            (camera_id,),
+        ).fetchone()
         if row is None:
             return None
         return self._desired_config_from_row(row)
@@ -979,8 +1004,9 @@ class SQLiteMetadataStore:
         now = datetime.now(tz=timezone.utc).isoformat()
         config_json = json.dumps(config, sort_keys=True, separators=(",", ":"))
         self.ensure_camera(camera_id)
-        with self._lock, self._connection:
-            current = self._connection.execute(
+        conn = self._get_connection()
+        with conn:
+            current = conn.execute(
                 "SELECT version FROM camera_desired_configs WHERE camera_id = ?",
                 (camera_id,),
             ).fetchone()
@@ -988,7 +1014,7 @@ class SQLiteMetadataStore:
                 if expected_version is not None and expected_version != 0:
                     raise DesiredConfigVersionConflict(0, expected_version)
                 version = 1
-                self._connection.execute(
+                conn.execute(
                     """
                     INSERT INTO camera_desired_configs (
                         camera_id, version, config_json, updated_at, updated_by
@@ -1001,7 +1027,7 @@ class SQLiteMetadataStore:
                 if expected_version is not None and expected_version != current_version:
                     raise DesiredConfigVersionConflict(current_version, expected_version)
                 version = current_version + 1
-                self._connection.execute(
+                conn.execute(
                     """
                     UPDATE camera_desired_configs
                     SET version = ?, config_json = ?, updated_at = ?, updated_by = ?
@@ -1026,8 +1052,9 @@ class SQLiteMetadataStore:
         clear_one_shot_requests: bool = True,
     ) -> DesiredConfigRecord | None:
         now = datetime.now(tz=timezone.utc).isoformat()
-        with self._lock, self._connection:
-            row = self._connection.execute(
+        conn = self._get_connection()
+        with conn:
+            row = conn.execute(
                 "SELECT * FROM camera_desired_configs WHERE camera_id = ?",
                 (camera_id,),
             ).fetchone()
@@ -1041,7 +1068,7 @@ class SQLiteMetadataStore:
                 config["restart_requested"] = False
                 config["ota_update_requested"] = False
             config_json = json.dumps(config, sort_keys=True, separators=(",", ":"))
-            cursor = self._connection.execute(
+            cursor = conn.execute(
                 """
                 UPDATE camera_desired_configs
                 SET config_json = ?,
@@ -1066,7 +1093,7 @@ class SQLiteMetadataStore:
                 ),
             )
             if cursor.rowcount == 0:  # pragma: no cover - defensive against concurrent writers
-                latest = self._connection.execute(
+                latest = conn.execute(
                     "SELECT version FROM camera_desired_configs WHERE camera_id = ?",
                     (camera_id,),
                 ).fetchone()
@@ -1091,12 +1118,13 @@ class SQLiteMetadataStore:
             )
         self.ensure_camera(camera_id)
         effective_logged_at = (logged_at or datetime.now(tz=timezone.utc)).astimezone(timezone.utc)
-        with self._lock, self._connection:
-            cursor = self._connection.execute(
+        conn = self._get_connection()
+        with conn:
+            cursor = conn.execute(
                 "INSERT INTO device_logs (camera_id, level, message, logged_at) VALUES (?, ?, ?, ?)",
                 (camera_id, level, message, effective_logged_at.isoformat()),
             )
-            row = self._connection.execute(
+            row = conn.execute(
                 "SELECT * FROM device_logs WHERE id = ?",
                 (cursor.lastrowid,),
             ).fetchone()
@@ -1109,22 +1137,22 @@ class SQLiteMetadataStore:
         )
 
     def camera_ids_with_recent_errors(self, *, since: datetime) -> set[str]:
-        with self._lock:
-            rows = self._connection.execute(
-                """
-                SELECT DISTINCT camera_id FROM device_logs
-                WHERE level IN ('error', 'critical') AND logged_at >= ?
-                """,
-                (since.astimezone(timezone.utc).isoformat(),),
-            ).fetchall()
+        conn = self._get_connection()
+        rows = conn.execute(
+            """
+            SELECT DISTINCT camera_id FROM device_logs
+            WHERE level IN ('error', 'critical') AND logged_at >= ?
+            """,
+            (since.astimezone(timezone.utc).isoformat(),),
+        ).fetchall()
         return {row["camera_id"] for row in rows}
 
     def list_device_logs(self, camera_id: str, *, limit: int = 50) -> list[DeviceLogRecord]:
-        with self._lock:
-            rows = self._connection.execute(
-                "SELECT * FROM device_logs WHERE camera_id = ? ORDER BY logged_at DESC LIMIT ?",
-                (camera_id, limit),
-            ).fetchall()
+        conn = self._get_connection()
+        rows = conn.execute(
+            "SELECT * FROM device_logs WHERE camera_id = ? ORDER BY logged_at DESC LIMIT ?",
+            (camera_id, limit),
+        ).fetchall()
         return [
             DeviceLogRecord(
                 id=row["id"],
