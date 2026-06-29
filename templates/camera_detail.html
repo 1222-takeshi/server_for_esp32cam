@@ -53,7 +53,10 @@
     <!-- ── Latest snapshot ── -->
     <div class="card" style="overflow:visible;">
       <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;">
-        <span style="font-size:13px;font-weight:600;color:var(--text-1);">Latest Snapshot</span>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="font-size:13px;font-weight:600;color:var(--text-1);">Latest Snapshot</span>
+          <button id="stream-toggle-btn" class="btn" style="padding:4px 10px;font-size:12px;" onclick="toggleStream()">&#9654; Live Stream</button>
+        </div>
         {% if latest %}
         <span id="latest-badge" class="badge {{ latest.inference_status }}">
           <span class="badge-dot"></span>{{ latest.inference_status }}
@@ -348,5 +351,20 @@
   connect();
   scheduleHealthChecks();
 })();
+
+function toggleStream() {
+  const img = document.getElementById('latest-img');
+  const btn = document.getElementById('stream-toggle-btn');
+  if (!img || !btn) return;
+  const streamUrl = '/stream/cameras/' + encodeURIComponent(CAMERA_ID);
+  if (img.src.includes('/stream/')) {
+    img.src = img.dataset.snapshotSrc || '';
+    btn.textContent = '▶ Live Stream';
+  } else {
+    img.dataset.snapshotSrc = img.src;
+    img.src = streamUrl;
+    btn.textContent = '⏹ Stop Stream';
+  }
+}
 </script>
 {% endblock %}

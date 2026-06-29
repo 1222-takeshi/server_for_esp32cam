@@ -4,11 +4,13 @@ import csv
 from io import BytesIO, StringIO
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from queue import Empty, Queue
 import re
 import shutil
+import threading
 import uuid
 
-from flask import Blueprint, Response, current_app, jsonify, render_template, request, send_file
+from flask import Blueprint, Response, current_app, jsonify, render_template, request, send_file, stream_with_context
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
@@ -48,6 +50,9 @@ def _upload_rate_limit_key() -> str:
 
 server = Blueprint("server", __name__)
 limiter = Limiter(key_func=_upload_rate_limit_key, default_limits=[])
+
+_mjpeg_stream_count = 0
+_mjpeg_stream_lock = threading.Lock()
 
 _PAGINATION_LIMIT_MAX = 200
 _PAGINATION_LIMIT_DEFAULT = 50
@@ -545,6 +550,77 @@ def get_file(filename: str):
     except Exception as exc:  # pragma: no cover
         current_app.logger.error("Error retrieving file: %s", exc)
         return jsonify({"message": "Error retrieving file"}), 500
+
+
+@server.route("/stream/cameras/<camera_id>")
+def mjpeg_stream(camera_id: str):
+    global _mjpeg_stream_count
+    if _validate_camera_id(camera_id):
+        return jsonify({"message": "Camera not found"}), 404
+
+    max_streams = current_app.config.get("MAX_MJPEG_STREAMS", 10)
+    with _mjpeg_stream_lock:
+        if _mjpeg_stream_count >= max_streams:
+            return jsonify({"message": "Too many active streams"}), 503
+        _mjpeg_stream_count += 1
+
+    publisher = current_app.extensions["snapshot_event_publisher"]
+    storage = _storage()
+    frame_queue: Queue[bytes] = Queue(maxsize=1)
+
+    def on_event(event: dict) -> None:
+        if event.get("type") != "snapshot.created":
+            return
+        relative_path = (event.get("snapshot") or {}).get("relative_path")
+        if not relative_path:
+            return
+        try:
+            data = storage.read_image_by_relative_path(relative_path)
+        except FileNotFoundError:
+            return
+        try:
+            frame_queue.get_nowait()
+        except Empty:
+            pass
+        try:
+            frame_queue.put_nowait(data)
+        except Exception:
+            pass
+
+    unsubscribe = publisher.subscribe(on_event, camera_id=camera_id)
+
+    latest = _metadata_store().list_recent_snapshots(camera_id=camera_id, limit=1)
+    initial_frame: bytes | None = None
+    if latest:
+        try:
+            initial_frame = storage.read_image_by_relative_path(latest[0].relative_path)
+        except FileNotFoundError:
+            pass
+
+    def generate():
+        global _mjpeg_stream_count
+        try:
+            if initial_frame:
+                yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + initial_frame + b"\r\n"
+            while True:
+                try:
+                    data = frame_queue.get(timeout=30.0)
+                except Empty:
+                    break
+                yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + data + b"\r\n"
+        finally:
+            unsubscribe()
+            with _mjpeg_stream_lock:
+                _mjpeg_stream_count -= 1
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @server.route("/cameras")

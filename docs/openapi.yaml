@@ -42,6 +42,8 @@ tags:
     description: Prometheus metrics
   - name: videos
     description: Video query and file delivery
+  - name: streaming
+    description: MJPEG live video streaming
 
 paths:
   /healthz:
@@ -840,6 +842,37 @@ paths:
                 format: binary
         "404":
           description: File not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+
+  /stream/cameras/{camera_id}:
+    get:
+      summary: MJPEG live stream for a camera
+      description: |
+        Opens a `multipart/x-mixed-replace` stream that pushes JPEG frames as new
+        snapshots arrive. The latest stored snapshot is sent immediately on connect.
+        The stream closes automatically after 30 seconds of inactivity.
+      tags: [streaming]
+      parameters:
+        - $ref: "#/components/parameters/camera_id"
+      responses:
+        "200":
+          description: MJPEG stream (binary, unbounded)
+          content:
+            multipart/x-mixed-replace:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: Camera not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "503":
+          description: Too many active streams
           content:
             application/json:
               schema:
