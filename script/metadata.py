@@ -289,8 +289,8 @@ class SQLiteMetadataStore:
                 CREATE INDEX IF NOT EXISTS idx_device_logs_level_logged_at
                     ON device_logs(level, logged_at DESC);
 
-                CREATE INDEX IF NOT EXISTS idx_snapshots_pending_inference
-                    ON snapshots(stored_at DESC)
+                CREATE INDEX IF NOT EXISTS idx_snapshots_inference_pending
+                    ON snapshots(stored_at ASC)
                     WHERE inference_status = 'pending';
 
                 CREATE TABLE IF NOT EXISTS camera_desired_configs (
