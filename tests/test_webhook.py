@@ -40,7 +40,9 @@ def test_notifier_posts_when_detection_above_threshold():
     mock_response.__exit__ = MagicMock(return_value=False)
 
     with patch("urllib.request.urlopen", return_value=mock_response) as mock_open:
-        notifier.notify(snapshot, detections)
+        future = notifier.notify(snapshot, detections)
+        if future is not None:
+            future.result(timeout=5.0)
 
     mock_open.assert_called_once()
     req = mock_open.call_args[0][0]
@@ -60,7 +62,9 @@ def test_notifier_uses_stored_at_when_no_captured_at():
     mock_response.__exit__ = MagicMock(return_value=False)
 
     with patch("urllib.request.urlopen", return_value=mock_response) as mock_open:
-        notifier.notify(snapshot, [_detection(0.8)])
+        future = notifier.notify(snapshot, [_detection(0.8)])
+        if future is not None:
+            future.result(timeout=5.0)
 
     req = mock_open.call_args[0][0]
     payload = json.loads(req.data)
@@ -89,13 +93,11 @@ def test_notifier_logs_warning_on_delivery_failure(caplog):
     notifier = WebhookNotifier("http://example.com/hook", min_score=0.5)
 
     import logging
-    import threading
     with caplog.at_level(logging.WARNING, logger="script.webhook"):
         with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("conn refused")):
-            notifier.notify(_snapshot(), [_detection(0.9)])
-            for t in threading.enumerate():
-                if t.daemon and t is not threading.main_thread():
-                    t.join(timeout=5.0)
+            future = notifier.notify(_snapshot(), [_detection(0.9)])
+            if future is not None:
+                future.result(timeout=5.0)
 
     assert any("Webhook delivery failed" in r.message for r in caplog.records)
 
