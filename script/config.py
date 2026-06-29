@@ -65,3 +65,4 @@ class Config:
         os.getenv("ESP32CAM_VIDEO_RETENTION_MAX_AGE_SECONDS", "0")
     )
     VIDEO_RETENTION_MAX_BYTES = int(os.getenv("ESP32CAM_VIDEO_RETENTION_MAX_BYTES", "0"))
+    MAX_MJPEG_STREAMS = int(os.getenv("ESP32CAM_MAX_MJPEG_STREAMS", "10"))
