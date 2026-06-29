@@ -40,6 +40,8 @@ tags:
     description: Raw image file serving
   - name: metrics
     description: Prometheus metrics
+  - name: videos
+    description: Video query and file delivery
 
 paths:
   /healthz:
@@ -254,6 +256,70 @@ paths:
                 $ref: "#/components/schemas/ErrorMessage"
         "415":
           description: Unsupported media type or invalid MP4 payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+
+    get:
+      summary: List videos for a camera
+      description: Returns videos for the given camera, newest first, using cursor-based pagination.
+      tags: [videos]
+      parameters:
+        - $ref: "#/components/parameters/camera_id"
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+          description: Maximum number of videos to return
+        - in: query
+          name: before
+          schema:
+            type: integer
+          description: Return videos with id less than this value (cursor)
+      responses:
+        "200":
+          description: Video list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VideoList"
+        "404":
+          description: Camera not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+
+  /api/cameras/{camera_id}/videos/{video_id}/content:
+    get:
+      summary: Serve video file for a camera
+      description: |
+        Streams the MP4 file for the given video. Returns 404 when the camera
+        does not exist, when the video does not belong to the camera, or when
+        the file has been removed from storage.
+      tags: [videos]
+      parameters:
+        - $ref: "#/components/parameters/camera_id"
+        - in: path
+          name: video_id
+          required: true
+          schema:
+            type: integer
+          description: Numeric video identifier
+      responses:
+        "200":
+          description: MP4 video binary
+          content:
+            video/mp4:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: Camera not found, video not found, or video does not belong to this camera
           content:
             application/json:
               schema:
@@ -485,6 +551,38 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorMessage"
+
+  /api/videos:
+    get:
+      summary: List videos across all cameras
+      description: Returns videos from all cameras, newest first, using cursor-based pagination.
+      tags: [videos]
+      parameters:
+        - in: query
+          name: camera_id
+          schema:
+            type: string
+          description: Filter by camera ID
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+          description: Maximum number of videos to return
+        - in: query
+          name: before
+          schema:
+            type: integer
+          description: Return videos with id less than this value (cursor)
+      responses:
+        "200":
+          description: Video list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GlobalVideoList"
 
   /api/cameras/{camera_id}/snapshots:
     get:
@@ -879,6 +977,26 @@ components:
           example: "Video uploaded successfully"
         video:
           $ref: "#/components/schemas/VideoRecord"
+
+    VideoList:
+      type: object
+      required: [videos, camera_id]
+      properties:
+        videos:
+          type: array
+          items:
+            $ref: "#/components/schemas/VideoRecord"
+        camera_id:
+          type: string
+
+    GlobalVideoList:
+      type: object
+      required: [videos]
+      properties:
+        videos:
+          type: array
+          items:
+            $ref: "#/components/schemas/VideoRecord"
 
     VideoRecord:
       type: object
