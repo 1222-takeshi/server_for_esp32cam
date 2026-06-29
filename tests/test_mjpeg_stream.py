@@ -3,8 +3,6 @@ from __future__ import annotations
 from queue import Empty
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from tests.conftest import MINIMAL_JPEG
 
 UPLOAD_HEADERS = {
