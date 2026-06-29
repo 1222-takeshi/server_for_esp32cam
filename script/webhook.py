@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
-import urllib.error
-import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timezone
 from urllib.parse import urlparse
+import urllib.error
+import urllib.request
 
 from script.detector import Detection
 from script.metadata import SnapshotRecord
 
 _logger = logging.getLogger(__name__)
+
+# Maximum concurrent outbound webhook HTTP connections.
+_WEBHOOK_MAX_WORKERS = 4
 
 
 class WebhookNotifier:
@@ -23,6 +26,13 @@ class WebhookNotifier:
             )
         self._url = url
         self._min_score = min_score
+        self._executor = ThreadPoolExecutor(
+            max_workers=_WEBHOOK_MAX_WORKERS,
+            thread_name_prefix="webhook",
+        )
+
+    def __del__(self) -> None:
+        self._executor.shutdown(wait=False)
 
     def notify(self, snapshot: SnapshotRecord, detections: list[Detection]) -> None:
         best = max(
@@ -55,14 +65,14 @@ class WebhookNotifier:
             method="POST",
         )
 
-        def _send():
+        def _send() -> None:
             try:
                 with urllib.request.urlopen(req, timeout=10):
                     pass
             except (urllib.error.URLError, OSError) as exc:
                 _logger.warning("Webhook delivery failed: %s", exc)
 
-        threading.Thread(target=_send, daemon=True).start()
+        self._executor.submit(_send)
 
 
 class _DisabledNotifier:
