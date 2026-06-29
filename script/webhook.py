@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
+from concurrent.futures import Future, ThreadPoolExecutor
 import urllib.error
 import urllib.request
 from datetime import timezone
@@ -15,7 +15,7 @@ _logger = logging.getLogger(__name__)
 
 
 class WebhookNotifier:
-    def __init__(self, url: str, *, min_score: float = 0.5) -> None:
+    def __init__(self, url: str, *, min_score: float = 0.5, max_workers: int = 3) -> None:
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
             raise ValueError(
@@ -23,15 +23,18 @@ class WebhookNotifier:
             )
         self._url = url
         self._min_score = min_score
+        self._executor = ThreadPoolExecutor(max_workers=max_workers)
 
-    def notify(self, snapshot: SnapshotRecord, detections: list[Detection]) -> None:
+    def notify(
+        self, snapshot: SnapshotRecord, detections: list[Detection]
+    ) -> Future[None] | None:
         best = max(
             (d for d in detections if d.score >= self._min_score),
             key=lambda d: d.score,
             default=None,
         )
         if best is None:
-            return
+            return None
 
         detected_at = (
             snapshot.captured_at
@@ -55,14 +58,18 @@ class WebhookNotifier:
             method="POST",
         )
 
-        def _send():
+        def _send() -> None:
             try:
                 with urllib.request.urlopen(req, timeout=10):
                     pass
             except (urllib.error.URLError, OSError) as exc:
                 _logger.warning("Webhook delivery failed: %s", exc)
 
-        threading.Thread(target=_send, daemon=True).start()
+        try:
+            return self._executor.submit(_send)
+        except RuntimeError:
+            _logger.warning("Webhook executor is shut down; dropping notification")
+            return None
 
 
 class _DisabledNotifier:

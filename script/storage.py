@@ -468,37 +468,34 @@ class LocalFilesystemStorage:
         preserved = preserve_relative_paths or set()
         reference = now or datetime.now(tz=timezone.utc)
         images = self.list_images()
-        candidates = [image for image in images if image.relative_path not in preserved]
+        candidates = sorted(
+            [image for image in images if image.relative_path not in preserved],
+            key=lambda item: item.created_at,
+        )
+        total_bytes = sum(image.size for image in images)
         deleted: list[str] = []
         deleted_bytes = 0
 
-        if policy.max_age_seconds is not None and policy.max_age_seconds > 0:
-            max_age_seconds = policy.max_age_seconds
-            for image in sorted(candidates, key=lambda item: item.created_at):
-                if (reference - image.created_at).total_seconds() > max_age_seconds:
-                    try:
-                        deleted_bytes += self._delete_image(image)
-                    except FileNotFoundError:
-                        continue
-                    deleted.append(image.relative_path)
-
-        if policy.max_bytes is not None and policy.max_bytes > 0:
-            remaining = [
-                image for image in images if image.relative_path not in deleted
-            ]
-            total_bytes = sum(image.size for image in remaining)
-            for image in sorted(remaining, key=lambda item: item.created_at):
-                if total_bytes <= policy.max_bytes:
-                    break
-                if image.relative_path in preserved:
-                    continue
-                try:
-                    deleted_bytes += self._delete_image(image)
-                except FileNotFoundError:
-                    total_bytes -= image.size
-                    continue
-                deleted.append(image.relative_path)
+        for image in candidates:
+            age_expired = (
+                policy.max_age_seconds is not None
+                and policy.max_age_seconds > 0
+                and (reference - image.created_at).total_seconds() > policy.max_age_seconds
+            )
+            over_quota = (
+                policy.max_bytes is not None
+                and policy.max_bytes > 0
+                and total_bytes > policy.max_bytes
+            )
+            if not age_expired and not over_quota:
+                continue
+            try:
+                deleted_bytes += self._delete_image(image)
+            except FileNotFoundError:
                 total_bytes -= image.size
+                continue
+            deleted.append(image.relative_path)
+            total_bytes -= image.size
 
         return StorageRetentionResult(deleted_relative_paths=deleted, deleted_bytes=deleted_bytes)
 
@@ -515,37 +512,35 @@ class LocalFilesystemStorage:
         preserved = preserve_relative_paths or set()
         reference = now or datetime.now(tz=timezone.utc)
         videos = self.list_videos()
-        candidates = [v for v in videos if v.relative_path not in preserved]
+        candidates = sorted(
+            [v for v in videos if v.relative_path not in preserved],
+            key=lambda item: item.stored_at,
+        )
+        total_bytes = sum(v.size for v in videos)
         deleted: list[str] = []
         deleted_bytes = 0
 
-        if policy.max_age_seconds is not None and policy.max_age_seconds > 0:
-            for v in sorted(candidates, key=lambda item: item.stored_at):
-                if (reference - v.stored_at).total_seconds() > policy.max_age_seconds:
-                    try:
-                        size = (self.upload_dir / v.relative_path).stat().st_size
-                        self.delete_video(v)
-                        deleted_bytes += size
-                    except (FileNotFoundError, OSError):
-                        continue
-                    deleted.append(v.relative_path)
-
-        if policy.max_bytes is not None and policy.max_bytes > 0:
-            remaining = [v for v in videos if v.relative_path not in deleted]
-            total_bytes = sum(v.size for v in remaining)
-            for v in sorted(remaining, key=lambda item: item.stored_at):
-                if total_bytes <= policy.max_bytes:
-                    break
-                if v.relative_path in preserved:
-                    continue
-                try:
-                    size = (self.upload_dir / v.relative_path).stat().st_size
-                    self.delete_video(v)
-                    deleted_bytes += size
-                except (FileNotFoundError, OSError):
-                    total_bytes -= v.size
-                    continue
-                deleted.append(v.relative_path)
+        for v in candidates:
+            age_expired = (
+                policy.max_age_seconds is not None
+                and policy.max_age_seconds > 0
+                and (reference - v.stored_at).total_seconds() > policy.max_age_seconds
+            )
+            over_quota = (
+                policy.max_bytes is not None
+                and policy.max_bytes > 0
+                and total_bytes > policy.max_bytes
+            )
+            if not age_expired and not over_quota:
+                continue
+            try:
+                size = (self.upload_dir / v.relative_path).stat().st_size
+                self.delete_video(v)
+                deleted_bytes += size
+            except (FileNotFoundError, OSError):
                 total_bytes -= v.size
+                continue
+            deleted.append(v.relative_path)
+            total_bytes -= v.size
 
         return StorageRetentionResult(deleted_relative_paths=deleted, deleted_bytes=deleted_bytes)
