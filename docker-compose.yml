@@ -6,9 +6,9 @@ services:
     volumes:
       - uploads:/app/uploads
       - data:/app/data
+      - ./models:/app/models:ro
     env_file:
-      - path: .env
-        required: false
+      - .env
     restart: unless-stopped
 
 volumes:

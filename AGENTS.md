@@ -126,3 +126,11 @@ Julesがタスクを遂行する上で遵守すべき基本方針は以下の通
 ### 5.5. ファイル作成時の注意点
 * 新しいファイルを作成する提案をする際には、そのファイルがGitリポジトリで管理されるべきか考慮してください。
 * ログファイル、ビルド成果物、ローカル設定ファイルなど、リポジトリに含めるべきではないと判断した場合は、必ず`.gitignore`ファイルに追記するよう指示してください。
+
+## プロジェクト固有（追記領域）
+
+### Raspberry Pi deployment and AI detection retention (追記日: 2026-06-30)
+- **概要**: ESP32-CAM サーバーを Raspberry Pi へ移行する際の Docker Compose 互換性と AI detection snapshot 保存制御。
+- **詳細**: Raspi/古い Docker Compose では object 形式の `env_file` が失敗する場合があるため、`.env` を作成したうえで string 形式の `env_file` を使う。TFLite モデルは host の `./models/` に置き、Compose で `/app/models` に read-only mount する。`ESP32CAM_KEEP_ONLY_DETECTED_SNAPSHOTS=true` の場合、推論成功かつ detection 0 件の snapshot は削除される。
+- **適用条件**: Raspi へ Docker Compose deploy する場合、または detection された snapshot だけを保存したい場合。
+- **例**: `cp .env.example .env && docker compose up -d --build`、`ESP32CAM_MODEL_PATH=/app/models/detect.tflite`、`ESP32CAM_KEEP_ONLY_DETECTED_SNAPSHOTS=true`

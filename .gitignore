@@ -95,6 +95,7 @@ memo.md
 .tmp/
 .hermes/
 uploads/
+models/
 *.sqlite3
 
 # Arduino / PlatformIO local build artifacts and user config

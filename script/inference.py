@@ -24,12 +24,14 @@ class InferenceService:
         detector: DetectorLike,
         mode: str = "async",
         notifier=DISABLED_NOTIFIER,
+        keep_only_detected_snapshots: bool = False,
     ) -> None:
         self.metadata_store = metadata_store
         self.storage = storage
         self.detector = detector
         self.mode = mode
         self._notifier = notifier
+        self.keep_only_detected_snapshots = keep_only_detected_snapshots
         self._queue: Queue[int] = Queue()
         self._stop_event = threading.Event()
         self._worker: threading.Thread | None = None
@@ -96,3 +98,14 @@ class InferenceService:
         self.metadata_store.mark_snapshot_result(snapshot_id, detections=detections)
         if detections:
             self._notifier.notify(snapshot, detections)
+        elif self.keep_only_detected_snapshots:
+            self._discard_undetected_snapshot(snapshot.relative_path)
+
+    def _discard_undetected_snapshot(self, relative_path: str) -> None:
+        try:
+            self.storage.delete_image_by_relative_path(relative_path)
+        except FileNotFoundError:
+            pass
+        except Exception:
+            return
+        self.metadata_store.delete_snapshots_by_relative_paths([relative_path])
