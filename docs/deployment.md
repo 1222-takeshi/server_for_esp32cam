@@ -122,7 +122,7 @@ run the service with a Python virtual environment under the `ubuntu` user:
 cd ~/server_for_esp32cam
 python3 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip setuptools
-.venv/bin/python -m pip install . gunicorn
+.venv/bin/python -m pip install . gunicorn gevent
 mkdir -p uploads data models ~/.config/systemd/user
 ```
 
@@ -137,7 +137,7 @@ After=network-online.target
 Type=simple
 WorkingDirectory=/home/ubuntu/server_for_esp32cam
 EnvironmentFile=/home/ubuntu/server_for_esp32cam/.env
-ExecStart=/home/ubuntu/server_for_esp32cam/.venv/bin/gunicorn -w 1 -b 0.0.0.0:${PORT} script.server:app
+ExecStart=/home/ubuntu/server_for_esp32cam/.venv/bin/gunicorn -k gevent -w 1 -b 0.0.0.0:${PORT} script.server:app
 Restart=on-failure
 RestartSec=5
 
