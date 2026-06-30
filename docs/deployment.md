@@ -113,6 +113,50 @@ docker compose ps
 curl http://127.0.0.1:8080/healthz/ready
 ```
 
+### 2b. Deploy without Docker using user systemd
+
+If Docker is not installed and sudo is not available in the automation session,
+run the service with a Python virtual environment under the `ubuntu` user:
+
+```bash
+cd ~/server_for_esp32cam
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip setuptools
+.venv/bin/python -m pip install . gunicorn
+mkdir -p uploads data models ~/.config/systemd/user
+```
+
+Create `~/.config/systemd/user/esp32cam-server.service`:
+
+```ini
+[Unit]
+Description=ESP32-CAM snapshot server
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/ubuntu/server_for_esp32cam
+EnvironmentFile=/home/ubuntu/server_for_esp32cam/.env
+ExecStart=/home/ubuntu/server_for_esp32cam/.venv/bin/gunicorn -w 1 -b 0.0.0.0:${PORT} script.server:app
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+
+Start it:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now esp32cam-server.service
+systemctl --user status esp32cam-server.service --no-pager
+curl http://127.0.0.1:8080/healthz/ready
+```
+
+This service runs while the user service manager is active. For boot persistence
+without an interactive login, enable lingering with `sudo loginctl enable-linger ubuntu`.
+
 ### 3. Verify LAN access
 
 From another device on the same network:
