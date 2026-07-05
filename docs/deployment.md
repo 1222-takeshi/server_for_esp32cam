@@ -38,6 +38,180 @@ The dashboard is available at `http://localhost:8080/`.
 
 ---
 
+## Raspberry Pi Migration Runbook
+
+Use this flow when moving the active server from a Mac to `raspi-server.local`.
+
+### 1. Prepare the Raspberry Pi
+
+```bash
+ssh ubuntu@raspi-server.local
+sudo apt-get update
+sudo apt-get install -y git docker.io docker-compose-plugin
+sudo usermod -aG docker ubuntu
+```
+
+Log out and back in after changing Docker group membership.
+
+Check capacity before choosing retention limits:
+
+```bash
+df -h /
+docker --version
+docker compose version
+tailscale status
+```
+
+### 2. Deploy the server
+
+```bash
+git clone https://github.com/1222-takeshi/server_for_esp32cam.git
+cd server_for_esp32cam
+cp .env.example .env
+$EDITOR .env
+```
+
+Minimum production settings:
+
+```dotenv
+PORT=8080
+ESP32CAM_DEVICE_API_KEY=<strong-random-key>
+ESP32CAM_ADMIN_TOKEN=<strong-random-token>
+ESP32CAM_STORAGE_RETENTION_MAX_AGE_SECONDS=2592000
+ESP32CAM_STORAGE_RETENTION_MAX_BYTES=8589934592
+ESP32CAM_VIDEO_RETENTION_MAX_AGE_SECONDS=0
+ESP32CAM_VIDEO_RETENTION_MAX_BYTES=1073741824
+```
+
+For TFLite person detection on the Raspberry Pi:
+
+```dotenv
+ESP32CAM_DETECTOR=tflite_cpu
+ESP32CAM_MODEL_PATH=/app/models/detect.tflite
+ESP32CAM_LABELS_PATH=/app/models/labels.txt
+ESP32CAM_DETECTION_THRESHOLD=0.5
+ESP32CAM_INFERENCE_MODE=async
+```
+
+Place model files on the host under `./models/`; Docker Compose mounts that
+directory read-only at `/app/models`. Do not commit model binaries to Git.
+
+To keep only snapshots with successful detections:
+
+```dotenv
+ESP32CAM_KEEP_ONLY_DETECTED_SNAPSHOTS=true
+```
+
+This option deletes snapshots only when inference succeeds and returns zero detections.
+Snapshots are kept when inference is disabled, skipped, or failed.
+
+Start the service:
+
+```bash
+docker compose up -d --build
+docker compose ps
+curl http://127.0.0.1:8080/healthz/ready
+```
+
+### 2b. Deploy without Docker using user systemd
+
+If Docker is not installed and sudo is not available in the automation session,
+run the service with a Python virtual environment under the `ubuntu` user:
+
+```bash
+cd ~/server_for_esp32cam
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip setuptools
+.venv/bin/python -m pip install . gunicorn gevent
+mkdir -p uploads data models ~/.config/systemd/user
+```
+
+Create `~/.config/systemd/user/esp32cam-server.service`:
+
+```ini
+[Unit]
+Description=ESP32-CAM snapshot server
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/ubuntu/server_for_esp32cam
+EnvironmentFile=/home/ubuntu/server_for_esp32cam/.env
+ExecStart=/home/ubuntu/server_for_esp32cam/.venv/bin/gunicorn -k gevent -w 1 -b 0.0.0.0:${PORT} script.server:app
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+
+Start it:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now esp32cam-server.service
+systemctl --user status esp32cam-server.service --no-pager
+curl http://127.0.0.1:8080/healthz/ready
+```
+
+This service runs while the user service manager is active. For boot persistence
+without an interactive login, enable lingering with `sudo loginctl enable-linger ubuntu`.
+
+### 3. Verify LAN access
+
+From another device on the same network:
+
+```bash
+curl http://raspi-server.local:8080/healthz/ready
+```
+
+Open `http://raspi-server.local:8080/` from a PC or smartphone browser.
+If mDNS does not resolve on a client, use the Raspberry Pi LAN IP from `hostname -I`.
+
+### 4. Verify Tailscale access
+
+On the Raspberry Pi:
+
+```bash
+tailscale ip -4
+tailscale status
+```
+
+From a Tailscale-connected device:
+
+```bash
+curl http://<raspi-tailscale-ip>:8080/healthz/ready
+```
+
+Keep the server bound to Docker's `0.0.0.0:8080`, and use firewall/router policy to
+avoid exposing it to the public internet. Tailscale access should require the same
+application tokens as LAN access.
+
+### 5. Switch traffic and stop the Mac server
+
+After the Raspberry Pi passes readiness and browser checks:
+
+1. Update ESP32-CAM upload URL to `http://raspi-server.local:8080/upload` or the
+   Raspberry Pi LAN IP.
+2. Confirm a new upload appears on the Raspberry Pi dashboard.
+3. Stop the Mac container:
+
+```bash
+docker compose stop app
+```
+
+4. Keep the Mac Docker volumes until the Raspberry Pi has received new snapshots and
+   retention behavior has been verified.
+5. Remove the Mac snapshot volume only after confirming no rollback is needed:
+
+```bash
+docker volume rm server_for_esp32cam_uploads
+```
+
+Keep `server_for_esp32cam_data` longer if historical metadata is still needed.
+
+---
+
 ## Environment Variables
 
 All variables are optional unless marked **required for production**.
@@ -65,6 +239,7 @@ All variables are optional unless marked **required for production**.
 | `ESP32CAM_PERSON_LABEL` | `person` | Label string that identifies a person. |
 | `ESP32CAM_PERSON_CLASS_ID` | `0` | Class index for the person class in the model. |
 | `ESP32CAM_CAMERA_EXPECTED_INTERVAL_SECONDS` | `300` | Seconds between expected uploads; used to compute camera health. |
+| `ESP32CAM_KEEP_ONLY_DETECTED_SNAPSHOTS` | `false` | If true, delete snapshots with successful inference and zero detections. |
 | `ESP32CAM_MAX_WS_CONNECTIONS` | `50` | Maximum concurrent WebSocket connections. |
 | `ESP32CAM_WEBHOOK_URL` | _(empty — disabled)_ | Webhook URL to POST when a person is detected. |
 | `ESP32CAM_WEBHOOK_MIN_SCORE` | `0.5` | Minimum score to trigger the webhook. |

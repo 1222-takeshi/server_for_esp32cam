@@ -110,6 +110,8 @@ class Storage(Protocol):
 
     def read_image_by_relative_path(self, relative_path: str) -> bytes: ...
 
+    def delete_image_by_relative_path(self, relative_path: str) -> int: ...
+
     def apply_retention(
         self,
         policy: StorageRetentionPolicy,
@@ -440,6 +442,14 @@ class LocalFilesystemStorage:
     def read_image_by_relative_path(self, relative_path: str) -> bytes:
         return self._resolve_relative_path(relative_path).read_bytes()
 
+    def delete_image_by_relative_path(self, relative_path: str) -> int:
+        path = self._resolve_relative_path(relative_path)
+        size = path.stat().st_size
+        self._metadata_path(path).unlink(missing_ok=True)
+        path.unlink(missing_ok=True)
+        self._cleanup_empty_parents(path)
+        return size
+
     def delete_camera_files(self, camera_id: str) -> None:
         camera_dir = self._camera_image_dir(camera_id).parent.resolve()
         if camera_dir == self.upload_dir or self.upload_dir not in camera_dir.parents:
@@ -448,12 +458,7 @@ class LocalFilesystemStorage:
             shutil.rmtree(camera_dir)
 
     def _delete_image(self, image: StoredImage) -> int:
-        path = self._resolve_relative_path(image.relative_path)
-        size = path.stat().st_size
-        self._metadata_path(path).unlink(missing_ok=True)
-        path.unlink(missing_ok=True)
-        self._cleanup_empty_parents(path)
-        return size
+        return self.delete_image_by_relative_path(image.relative_path)
 
     def apply_retention(
         self,

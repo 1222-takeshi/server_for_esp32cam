@@ -520,7 +520,51 @@ def test_upload_records_person_detection_when_detector_finds_person(app, client)
     assert body["detections"][0]["label"] == "person"
 
 
+def test_upload_keeps_detected_snapshot_when_detection_only_mode_enabled(app, client):
+    from script.detector import Detection
+
+    app.extensions["inference_service"].keep_only_detected_snapshots = True
+    app.extensions["inference_service"].detector = FakePersonDetector(
+        [Detection(label="person", score=0.9, x1=0.1, y1=0.2, x2=0.4, y2=0.8)]
+    )
+
+    response = client.post(
+        "/upload",
+        data=MINIMAL_JPEG,
+        headers=UPLOAD_HEADERS,
+    )
+    body = response.get_json()
+
+    assert response.status_code == 200
+    assert client.get(f"/files/{body['filename']}").status_code == 200
+    snapshots = app.extensions["metadata_store"].list_camera_snapshots(
+        "esp32cam-front-door", limit=10
+    )
+    assert len(snapshots) == 1
+    assert len(snapshots[0].detections) == 1
+
+
+def test_upload_discards_undetected_snapshot_when_detection_only_mode_enabled(app, client):
+    app.extensions["inference_service"].keep_only_detected_snapshots = True
+    app.extensions["inference_service"].detector = FakePersonDetector([])
+
+    response = client.post(
+        "/upload",
+        data=MINIMAL_JPEG,
+        headers=UPLOAD_HEADERS,
+    )
+    body = response.get_json()
+
+    assert response.status_code == 200
+    assert client.get(f"/files/{body['filename']}").status_code == 404
+    snapshots = app.extensions["metadata_store"].list_camera_snapshots(
+        "esp32cam-front-door", limit=10
+    )
+    assert snapshots == []
+
+
 def test_upload_still_returns_200_when_detector_fails(app, client):
+    app.extensions["inference_service"].keep_only_detected_snapshots = True
     app.extensions["inference_service"].detector = BrokenDetector()
 
     response = client.post(
@@ -528,11 +572,13 @@ def test_upload_still_returns_200_when_detector_fails(app, client):
         data=MINIMAL_JPEG,
         headers=UPLOAD_HEADERS,
     )
+    body = response.get_json()
     snapshots = app.extensions["metadata_store"].list_camera_snapshots(
         "esp32cam-front-door", limit=1
     )
 
     assert response.status_code == 200
+    assert client.get(f"/files/{body['filename']}").status_code == 200
     assert snapshots[0].inference_status == "failed"
     assert snapshots[0].inference_error == "model unavailable"
 

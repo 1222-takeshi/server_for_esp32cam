@@ -119,6 +119,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         detector=detector,
         mode=app.config["INFERENCE_MODE"],
         notifier=notifier,
+        keep_only_detected_snapshots=app.config["KEEP_ONLY_DETECTED_SNAPSHOTS"],
     )
     inference_service.start()
     snapshot_event_publisher = SnapshotEventPublisher()

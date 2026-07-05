@@ -5,6 +5,10 @@ import os
 from pathlib import Path
 
 
+def _env_bool(name: str, default: str = "false") -> bool:
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _load_device_api_keys() -> dict[str, str]:
     raw = os.getenv("ESP32CAM_DEVICE_API_KEYS", "").strip()
     if not raw:
@@ -37,6 +41,7 @@ class Config:
     PERSON_LABEL = os.getenv("ESP32CAM_PERSON_LABEL", "person")
     PERSON_CLASS_ID = int(os.getenv("ESP32CAM_PERSON_CLASS_ID", "0"))
     INFERENCE_MODE = os.getenv("ESP32CAM_INFERENCE_MODE", "async")
+    KEEP_ONLY_DETECTED_SNAPSHOTS = _env_bool("ESP32CAM_KEEP_ONLY_DETECTED_SNAPSHOTS")
     CAMERA_EXPECTED_INTERVAL_SECONDS = int(
         os.getenv("ESP32CAM_CAMERA_EXPECTED_INTERVAL_SECONDS", "300")
     )
