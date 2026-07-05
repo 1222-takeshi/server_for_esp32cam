@@ -152,8 +152,11 @@ permanent fix below.
    change never strands deployed devices, or use an mDNS-resolvable name.
 
 4. **After flashing, verify end to end**: `GET /api/cameras` shows a fresh
-   `last_seen_at`, and OTA answers on port 3232
-   (`nc -z esp32cam-01.local 3232`).
+   `last_seen_at`, and an actual over-the-air update succeeds
+   (`pio run -e esp32cam_websocket_upload_ota -t upload` with the
+   `ESP32CAM_OTA_*` variables set). Note that ArduinoOTA listens on
+   **UDP** port 3232, so a TCP probe such as `nc -z <host> 3232` reports
+   "connection refused" even when OTA is working.
 
 ## 4. Notes for multi-device benches
 
