@@ -63,3 +63,18 @@
 // video-like burst of exactly that many frames, then keep OTA/alive loop running.
 #define CAPTURE_INTERVAL_MS 5000
 #define CAPTURE_FRAME_LIMIT 0
+
+// Onboard flash LED (AI-Thinker: bright white LED on GPIO4).
+// When FLASH_LED_ENABLED is 1, WebSocket-upload builds turn the LED on for
+// each capture, but only inside the configured night window (local time via
+// NTP + FLASH_TZ_OFFSET_SECONDS; 32400 = JST). The window may wrap midnight:
+// START 18 / END 6 means 18:00-06:00. Equal START and END means always on.
+// Brightness is PWM-dimmed (0-100). WARMUP_MS lets exposure settle after the
+// LED turns on. If NTP has not synced yet, the flash stays off.
+#define FLASH_LED_ENABLED 0
+#define FLASH_LED_PIN 4
+#define FLASH_LED_BRIGHTNESS_PCT 50
+#define FLASH_LED_WARMUP_MS 150
+#define FLASH_NIGHT_START_HOUR 18
+#define FLASH_NIGHT_END_HOUR 6
+#define FLASH_TZ_OFFSET_SECONDS 32400
