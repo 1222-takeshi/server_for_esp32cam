@@ -63,6 +63,7 @@ Here are some common issues you might encounter and how to resolve them:
 
 ### General Tips:
 
+*   **No Serial Cable?** A deployed device that answers ping but never uploads can be diagnosed and recovered entirely over the network — see [Remote Debugging ESP32-CAM Devices](remote-debugging.md).
 *   **Start Simple:** If you're having trouble, try to isolate the problem. Test server functionality with a tool like `curl` or Postman first. Test client Wi-Fi connectivity separately.
 *   **Check Logs:** Always check the console output of `server.py` and the serial monitor output of your client device (if applicable) for error messages.
 *   **Incrementally Develop:** When writing client code (like for ESP32-CAM), add features step-by-step (connect to Wi-Fi, then try a simple GET request, then try POSTing data).
