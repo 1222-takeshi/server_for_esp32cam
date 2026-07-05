@@ -105,6 +105,27 @@
 #ifndef CAPTURE_FRAME_LIMIT
 #define CAPTURE_FRAME_LIMIT 0
 #endif
+#ifndef FLASH_LED_ENABLED
+#define FLASH_LED_ENABLED 0
+#endif
+#ifndef FLASH_LED_PIN
+#define FLASH_LED_PIN 4
+#endif
+#ifndef FLASH_LED_BRIGHTNESS_PCT
+#define FLASH_LED_BRIGHTNESS_PCT 50
+#endif
+#ifndef FLASH_LED_WARMUP_MS
+#define FLASH_LED_WARMUP_MS 150
+#endif
+#ifndef FLASH_NIGHT_START_HOUR
+#define FLASH_NIGHT_START_HOUR 18
+#endif
+#ifndef FLASH_NIGHT_END_HOUR
+#define FLASH_NIGHT_END_HOUR 6
+#endif
+#ifndef FLASH_TZ_OFFSET_SECONDS
+#define FLASH_TZ_OFFSET_SECONDS 32400
+#endif
 
 namespace {
 constexpr uint32_t kBaudRate = 115200;
@@ -883,6 +904,40 @@ void setupWebSocketUpload() {
   Serial.println("========================================");
 }
 
+#if FLASH_LED_ENABLED
+constexpr int kFlashLedcChannel = 4;  // camera XCLK uses LEDC channel/timer 0
+
+void setupFlashLed() {
+  ledcSetup(kFlashLedcChannel, 5000, 8);
+  ledcAttachPin(FLASH_LED_PIN, kFlashLedcChannel);
+  ledcWrite(kFlashLedcChannel, 0);
+  configTime(FLASH_TZ_OFFSET_SECONDS, 0, NTP_SERVER);
+  Serial.printf("Flash LED enabled: pin=%d brightness=%d%% night_window=%02d:00-%02d:00 (UTC offset %+d s)\n",
+                FLASH_LED_PIN,
+                FLASH_LED_BRIGHTNESS_PCT,
+                FLASH_NIGHT_START_HOUR,
+                FLASH_NIGHT_END_HOUR,
+                FLASH_TZ_OFFSET_SECONDS);
+}
+
+bool isFlashWindowNow() {
+  const time_t now = time(nullptr);
+  if (now < 1700000000) {
+    return false;  // clock not synced yet; skip flash rather than guess
+  }
+  struct tm local = {};
+  localtime_r(&now, &local);
+  const int hour = local.tm_hour;
+  if (FLASH_NIGHT_START_HOUR == FLASH_NIGHT_END_HOUR) {
+    return true;  // equal hours mean flash around the clock
+  }
+  if (FLASH_NIGHT_START_HOUR < FLASH_NIGHT_END_HOUR) {
+    return hour >= FLASH_NIGHT_START_HOUR && hour < FLASH_NIGHT_END_HOUR;
+  }
+  return hour >= FLASH_NIGHT_START_HOUR || hour < FLASH_NIGHT_END_HOUR;
+}
+#endif
+
 void captureAndUploadWebSocketFrame() {
   if (!wifiConnected || !websocketConnected) {
     return;
@@ -891,7 +946,25 @@ void captureAndUploadWebSocketFrame() {
     return;
   }
 
+#if FLASH_LED_ENABLED
+  const bool flashOn = isFlashWindowNow();
+  if (flashOn) {
+    ledcWrite(kFlashLedcChannel, (255 * FLASH_LED_BRIGHTNESS_PCT) / 100);
+    // fb_count=1 + GRAB_WHEN_EMPTY queues a frame captured before the LED
+    // went on — discard it so the uploaded frame is actually lit.
+    camera_fb_t *stale = esp_camera_fb_get();
+    if (stale != nullptr) {
+      esp_camera_fb_return(stale);
+    }
+    delay(FLASH_LED_WARMUP_MS);
+  }
+#endif
   camera_fb_t *fb = esp_camera_fb_get();
+#if FLASH_LED_ENABLED
+  if (flashOn) {
+    ledcWrite(kFlashLedcChannel, 0);
+  }
+#endif
   if (fb == nullptr) {
     jpegCaptureSucceeded = false;
     websocketUploadSucceeded = false;
@@ -965,6 +1038,9 @@ void setup() {
 #endif
 #elif defined(WEBSOCKET_UPLOAD_SMOKE_TEST)
   setupWebSocketUpload();
+#if FLASH_LED_ENABLED
+  setupFlashLed();
+#endif
 #ifdef ENABLE_ARDUINO_OTA
   setupArduinoOta();
 #endif
