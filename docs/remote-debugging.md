@@ -85,24 +85,45 @@ built with. Compare that key against the server's current
 python3 -c "import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" '<key>'
 ```
 
-## 2. Recovery without reflashing: the bridge proxy
+## 2. Recovery without reflashing
 
-Once you know the device targets a stale address/key, restore service
-immediately by bridging it to the real server. On the machine whose IP the
-device targets:
+### 2.1 Stale key only → accept the old key server-side
+
+If the device targets the **correct address** but a **rotated-out key**, no
+proxy is needed: the server already supports per-device keys. Add the stale
+key to the server's `.env` and restart it:
+
+```dotenv
+ESP32CAM_DEVICE_API_KEYS={"esp32cam-01": "<stale-key>"}
+```
+
+`check_device_api_key` accepts any key in this mapping, so the device
+recovers immediately. Remove the entry once the device is re-flashed.
+
+### 2.2 Stale address (± stale key) → the bridge proxy
+
+If the device targets an **old server address**, run the bridge proxy on the
+machine that owns that address. It forwards all traffic (HTTP and WebSocket)
+to the real server and rewrites the stale `X-API-Key` header in flight:
 
 ```bash
 export ESP32CAM_DEVICE_API_KEY=<current-key>
-python3 scripts/esp32cam_bridge_proxy.py --upstream raspi-server.local:8080
+python3 scripts/esp32cam_bridge_proxy.py \
+  --upstream raspi-server.local:8080 --allow-source <device-ip>
 ```
 
-The proxy forwards all traffic (HTTP and WebSocket) to the real server and
-rewrites the stale `X-API-Key` header in flight. Snapshots resume within one
-retry interval. Confirm with `GET /api/cameras` (`last_seen_at` becomes
-current).
+Snapshots resume within one retry interval. Confirm with `GET /api/cameras`
+(`last_seen_at` becomes current).
+
+**Always pass `--allow-source`.** The proxy replaces the `X-API-Key` of any
+matching request with a valid key, so an unrestricted proxy lets every host
+that can reach its port authenticate as a device. Restrict it to the stranded
+device's IP.
 
 This is a stopgap: the proxy machine must stay on, and the stale key keeps
-crossing the LAN. Schedule the permanent fix below.
+crossing the LAN. Only the first request of each TCP connection is rewritten
+(fine for the retrying firmwares, which reconnect per attempt). Schedule the
+permanent fix below.
 
 ## 3. Permanent fix and prevention
 
