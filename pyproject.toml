@@ -28,7 +28,8 @@ dev = [
 ]
 ml = [
   "numpy>=1.26,<3.0",
-  "tflite-runtime>=2.14,<3.0",
+  "tflite-runtime>=2.14,<3.0; python_version < '3.12'",
+  "ai-edge-litert>=1.0,<3.0; python_version >= '3.12'",
 ]
 
 [tool.pytest.ini_options]
