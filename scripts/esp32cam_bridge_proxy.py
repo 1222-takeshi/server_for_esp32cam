@@ -15,12 +15,23 @@ header value with the current key on the way through.
 Usage::
 
     export ESP32CAM_DEVICE_API_KEY=<current-key>
-    python3 scripts/esp32cam_bridge_proxy.py --upstream raspi-server.local:8080
+    python3 scripts/esp32cam_bridge_proxy.py \
+        --upstream raspi-server.local:8080 --allow-source <device-ip>
 
 The key is read from the environment (or ``--api-key-file``) and is never
 logged or written to disk. This is a recovery tool: once the device is
 re-flashed with correct settings (ideally an OTA-enabled build), stop the
 proxy. See docs/remote-debugging.md for the full runbook.
+
+Caveats:
+
+* Always pass ``--allow-source``: the proxy replaces the ``X-API-Key`` of
+  matching requests with a valid key, so any host allowed to connect can
+  authenticate as a device.
+* Only the first request of each TCP connection is rewritten. The retrying
+  ESP32-CAM firmwares open a fresh connection per attempt, so this is fine
+  for recovery, but a client that pipelines keep-alive requests would send
+  its stale key on the second request.
 """
 
 from __future__ import annotations
@@ -93,9 +104,18 @@ async def _forward_first_request(
     return True
 
 
-def _make_handler(upstream_host: str, upstream_port: int, api_key: bytes):
+def _make_handler(
+    upstream_host: str,
+    upstream_port: int,
+    api_key: bytes,
+    allowed_sources: frozenset[str],
+):
     async def handle(client_reader, client_writer):
         peer = client_writer.get_extra_info("peername")
+        if allowed_sources and (peer is None or peer[0] not in allowed_sources):
+            print(f"[bridge] rejected {peer}: not in --allow-source", flush=True)
+            client_writer.close()
+            return
         try:
             upstream_reader, upstream_writer = await asyncio.open_connection(
                 upstream_host, upstream_port
@@ -151,14 +171,29 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="file whose first line is the current device API key "
         "(default: read ESP32CAM_DEVICE_API_KEY from the environment)",
     )
+    parser.add_argument(
+        "--allow-source",
+        help="comma-separated client IPs allowed to use the bridge "
+        "(strongly recommended: the proxy injects a valid API key into "
+        "matching requests, so restrict it to the known device IP)",
+    )
     return parser.parse_args(argv)
 
 
+def parse_upstream(upstream: str) -> tuple[str, int]:
+    """Split ``host``, ``host:port``, or ``[ipv6]:port`` into (host, port)."""
+    host, _, port = upstream.rpartition(":")
+    if not host or (host.startswith("[") and not host.endswith("]")):
+        return upstream.strip("[]"), 8080  # no port given
+    return host.strip("[]"), int(port)
+
+
 async def _main(args: argparse.Namespace) -> None:
-    host, _, port = args.upstream.partition(":")
+    host, port = parse_upstream(args.upstream)
     api_key = _load_api_key(args)
+    allowed = frozenset(ip.strip() for ip in (args.allow_source or "").split(",") if ip.strip())
     server = await asyncio.start_server(
-        _make_handler(host, int(port or 8080), api_key), "0.0.0.0", args.listen_port
+        _make_handler(host, port, api_key, allowed), "0.0.0.0", args.listen_port
     )
     print(f"[bridge] listening on 0.0.0.0:{args.listen_port}", flush=True)
     async with server:

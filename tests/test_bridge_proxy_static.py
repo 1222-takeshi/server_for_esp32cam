@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 from pathlib import Path
 
@@ -63,3 +64,66 @@ def test_binary_payload_after_headers_untouched() -> None:
 
     assert count == 1
     assert rewritten.endswith(body)
+
+
+def test_parse_upstream_variants() -> None:
+    module = _load_module()
+
+    assert module.parse_upstream("raspi-server.local:8080") == ("raspi-server.local", 8080)
+    assert module.parse_upstream("192.168.1.220") == ("192.168.1.220", 8080)
+    assert module.parse_upstream("[fd00::5]:9090") == ("fd00::5", 9090)
+    assert module.parse_upstream("[fd00::5]") == ("fd00::5", 8080)
+
+
+class _CollectingWriter:
+    def __init__(self) -> None:
+        self.data = b""
+        self.closed = False
+
+    def write(self, data: bytes) -> None:
+        self.data += data
+
+    async def drain(self) -> None:
+        pass
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _run_forward(chunks: list[bytes], api_key: bytes = b"new"):
+    module = _load_module()
+
+    async def scenario():
+        reader = asyncio.StreamReader()
+        for chunk in chunks:
+            reader.feed_data(chunk)
+        reader.feed_eof()
+        writer = _CollectingWriter()
+        forwarded = await module._forward_first_request(reader, writer, api_key)
+        return forwarded, writer
+
+    return asyncio.run(scenario())
+
+
+def test_forward_rewrites_headers_split_across_chunks() -> None:
+    forwarded, writer = _run_forward([b"GET / HTTP/1.1\r\nX-API-K", b"ey: old\r\n\r\n"])
+
+    assert forwarded is True
+    assert b"X-API-Key: new\r\n" in writer.data
+    assert b"old" not in writer.data
+
+
+def test_forward_returns_false_when_client_disconnects_before_headers() -> None:
+    forwarded, writer = _run_forward([b"GET / HTTP/1.1\r\nX-API"])
+
+    assert forwarded is False
+    assert writer.data == b""
+
+
+def test_forward_passes_oversized_non_http_data_untouched() -> None:
+    module = _load_module()
+    blob = b"\x00" * (module.HEADER_LIMIT + 1)
+    forwarded, writer = _run_forward([blob])
+
+    assert forwarded is True
+    assert writer.data == blob
