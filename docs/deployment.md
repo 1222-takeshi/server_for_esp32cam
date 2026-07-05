@@ -157,6 +157,24 @@ curl http://127.0.0.1:8080/healthz/ready
 This service runs while the user service manager is active. For boot persistence
 without an interactive login, enable lingering with `sudo loginctl enable-linger ubuntu`.
 
+### 2c. Sync updates from the development machine
+
+The repository is private and the Pi deployment is a plain copy, so updates
+are pushed from a development checkout with:
+
+```bash
+./scripts/deploy_raspi.sh
+```
+
+The script rsyncs all git-tracked files (never touching the Pi's `.env`,
+`data/`, `uploads/`, `models/`, or `.venv/`), reinstalls the package in
+editable mode, restarts `esp32cam-server.service`, and fails loudly unless
+`/healthz/ready` comes back up. Override the target with `DEPLOY_HOST`,
+`DEPLOY_DIR`, or `DEPLOY_SERVICE` environment variables.
+
+Run it from the branch you want deployed — it ships the current checkout's
+tracked files, and warns if uncommitted changes are present.
+
 ### 3. Verify LAN access
 
 From another device on the same network:
