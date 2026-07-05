@@ -56,3 +56,54 @@ def test_tflite_detector_normalizes_standard_ssd_output_shapes():
     assert detections[0].y1 == 0.10
     assert detections[0].x2 == 0.40
     assert detections[0].y2 == 0.30
+
+
+def _fake_module(name: str, **attrs):
+    import types
+
+    module = types.ModuleType(name)
+    for key, value in attrs.items():
+        setattr(module, key, value)
+    return module
+
+
+def test_interpreter_loader_falls_back_to_ai_edge_litert(monkeypatch):
+    from script.detector import _load_interpreter_class
+
+    class LitertInterpreter:
+        pass
+
+    monkeypatch.setitem(__import__("sys").modules, "tflite_runtime", None)
+    monkeypatch.setitem(__import__("sys").modules, "tflite_runtime.interpreter", None)
+    monkeypatch.setitem(__import__("sys").modules, "ai_edge_litert", _fake_module("ai_edge_litert"))
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "ai_edge_litert.interpreter",
+        _fake_module("ai_edge_litert.interpreter", Interpreter=LitertInterpreter),
+    )
+
+    assert _load_interpreter_class() is LitertInterpreter
+
+
+def test_interpreter_loader_prefers_tflite_runtime(monkeypatch):
+    from script.detector import _load_interpreter_class
+
+    class RuntimeInterpreter:
+        pass
+
+    class LitertInterpreter:
+        pass
+
+    monkeypatch.setitem(__import__("sys").modules, "tflite_runtime", _fake_module("tflite_runtime"))
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "tflite_runtime.interpreter",
+        _fake_module("tflite_runtime.interpreter", Interpreter=RuntimeInterpreter),
+    )
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "ai_edge_litert.interpreter",
+        _fake_module("ai_edge_litert.interpreter", Interpreter=LitertInterpreter),
+    )
+
+    assert _load_interpreter_class() is RuntimeInterpreter

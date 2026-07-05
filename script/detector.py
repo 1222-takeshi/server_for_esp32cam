@@ -20,6 +20,32 @@ class DetectionSkipped(RuntimeError):
     """Raised when inference is intentionally skipped, not failed."""
 
 
+def _load_interpreter_class():
+    """Return the first available TFLite Interpreter implementation.
+
+    tflite-runtime has no wheels for Python >= 3.12; ai-edge-litert is its
+    official successor and covers newer interpreters, so try it next before
+    falling back to the full TensorFlow package.
+    """
+    try:
+        from tflite_runtime.interpreter import Interpreter
+    except ImportError:
+        pass
+    else:
+        return Interpreter
+    try:
+        from ai_edge_litert.interpreter import Interpreter
+    except ImportError:
+        pass
+    else:
+        return Interpreter
+    try:
+        from tensorflow.lite import Interpreter  # type: ignore[attr-defined]
+    except ImportError as exc:
+        raise RuntimeError("No TFLite interpreter available") from exc
+    return Interpreter
+
+
 class DisabledDetector:
     def __init__(self, reason: str = "Detector is disabled", *, skip: bool = True) -> None:
         self.reason = reason
@@ -48,13 +74,7 @@ class TFLiteCpuDetector:
         except ImportError as exc:  # pragma: no cover - depends on optional deps
             raise RuntimeError("Install the ml extra to use TFLite detection") from exc
 
-        try:
-            from tflite_runtime.interpreter import Interpreter
-        except ImportError:  # pragma: no cover - depends on optional deps
-            try:
-                from tensorflow.lite import Interpreter  # type: ignore[attr-defined]
-            except ImportError as exc:
-                raise RuntimeError("No TFLite interpreter available") from exc
+        Interpreter = _load_interpreter_class()
 
         self._np = np
         self._image = Image
