@@ -587,15 +587,27 @@ def mjpeg_stream(camera_id: str):
         except Exception:
             pass
 
-    unsubscribe = publisher.subscribe(on_event, camera_id=camera_id)
+    unsubscribe = None
+    try:
+        unsubscribe = publisher.subscribe(on_event, camera_id=camera_id)
 
-    latest = _metadata_store().list_recent_snapshots(camera_id=camera_id, limit=1)
-    initial_frame: bytes | None = None
-    if latest:
-        try:
-            initial_frame = storage.read_image_by_relative_path(latest[0].relative_path)
-        except FileNotFoundError:
-            pass
+        latest = _metadata_store().list_recent_snapshots(camera_id=camera_id, limit=1)
+        initial_frame: bytes | None = None
+        if latest:
+            try:
+                initial_frame = storage.read_image_by_relative_path(latest[0].relative_path)
+            except FileNotFoundError:
+                pass
+    except Exception:
+        # Setup failed before the streaming Response (and its generator's
+        # `finally` block) exists to release the slot — release it here so a
+        # transient error (e.g. a DB hiccup) can't permanently occupy one of
+        # MAX_MJPEG_STREAMS slots.
+        if unsubscribe is not None:
+            unsubscribe()
+        with _mjpeg_stream_lock:
+            _mjpeg_stream_count -= 1
+        raise
 
     def generate():
         global _mjpeg_stream_count

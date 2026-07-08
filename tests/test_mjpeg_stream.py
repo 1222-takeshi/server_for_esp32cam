@@ -3,6 +3,8 @@ from __future__ import annotations
 from queue import Empty
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from tests.conftest import MINIMAL_JPEG
 
 UPLOAD_HEADERS = {
@@ -63,5 +65,24 @@ def test_mjpeg_stream_too_many_returns_503(app):
             response = c.get("/stream/cameras/cam1")
         assert response.status_code == 503
         assert response.get_json()["message"] == "Too many active streams"
+    finally:
+        del app.config["MAX_MJPEG_STREAMS"]
+
+
+def test_mjpeg_stream_releases_slot_when_setup_fails(app):
+    # A transient failure while preparing the stream (before the Response and
+    # its generator's `finally` block exist) must still release the acquired
+    # slot, otherwise repeated failures permanently exhaust MAX_MJPEG_STREAMS.
+    app.config["MAX_MJPEG_STREAMS"] = 1
+    try:
+        with app.test_client() as c:
+            with patch("script.routes._metadata_store", side_effect=RuntimeError("boom")):
+                with pytest.raises(RuntimeError):
+                    c.get("/stream/cameras/cam1")
+
+        with app.test_client() as c:
+            with patch("script.routes.Queue", return_value=_mock_queue()):
+                response = c.get("/stream/cameras/cam1")
+        assert response.status_code == 200
     finally:
         del app.config["MAX_MJPEG_STREAMS"]
