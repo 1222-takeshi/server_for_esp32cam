@@ -454,6 +454,23 @@ def test_get_file_returns_uploaded_image_bytes(client):
     assert response.mimetype == "image/jpeg"
 
 
+def test_get_file_supports_range_requests(client):
+    upload = client.post(
+        "/upload",
+        data=MINIMAL_JPEG,
+        headers=UPLOAD_HEADERS,
+    ).get_json()
+
+    response = client.get(
+        f"/files/{upload['filename']}",
+        headers={"Range": "bytes=0-3"},
+    )
+
+    assert response.status_code == 206
+    assert response.data == MINIMAL_JPEG[:4]
+    assert response.content_range.units == "bytes"
+
+
 def test_get_file_rejects_metadata_sidecar_requests(client):
     upload = client.post(
         "/upload",

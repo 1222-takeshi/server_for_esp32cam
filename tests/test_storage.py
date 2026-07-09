@@ -182,6 +182,21 @@ def test_storage_reads_image_by_relative_path(tmp_path):
     assert payload == b"\xff\xd8jpeg"
 
 
+def test_storage_read_image_path_by_relative_path_returns_resolved_path(tmp_path):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+    stored = storage.save_image(
+        b"\xff\xd8jpeg",
+        "image/jpeg",
+        device_id="cam-a",
+        captured_at=datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc),
+    )
+
+    path = storage.read_image_path_by_relative_path(stored.relative_path)
+
+    assert path == storage.upload_dir / stored.relative_path
+    assert path.read_bytes() == b"\xff\xd8jpeg"
+
+
 def test_apply_retention_deletes_images_older_than_max_age(tmp_path):
     storage = LocalFilesystemStorage(tmp_path / "uploads")
     captured_at = datetime(2026, 5, 9, 12, 0, tzinfo=timezone.utc)
@@ -315,6 +330,11 @@ def test_save_video_persists_mp4_in_camera_video_directory_with_sidecar(tmp_path
     assert stored.content_type == "video/mp4"
     assert len(stored.sha256) == 64
     assert video_path.read_bytes() == payload
+
+    path, content_type = storage.read_video_path_by_relative_path(stored.relative_path)
+    assert path == video_path
+    assert content_type == "video/mp4"
+    assert path.read_bytes() == payload
     assert sidecar == {
         "camera_id": "esp32cam-01",
         "captured_at": "2026-06-01T12:00:00+00:00",

@@ -142,6 +142,21 @@ def test_video_content_returns_mp4(tmp_path):
     assert resp.data == _minimal_mp4()
 
 
+def test_video_content_supports_range_requests(tmp_path):
+    app = _app(tmp_path)
+    client = app.test_client()
+    v = _upload_video(client)
+
+    resp = client.get(
+        f"/api/cameras/cam-a/videos/{v['id']}/content",
+        headers={"Range": "bytes=0-3"},
+    )
+
+    assert resp.status_code == 206
+    assert resp.data == _minimal_mp4()[:4]
+    assert resp.content_range.units == "bytes"
+
+
 def test_video_content_wrong_camera_returns_404(tmp_path):
     app = _app(tmp_path)
     client = app.test_client()

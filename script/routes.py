@@ -540,10 +540,12 @@ def get_file(filename: str):
         snapshot = _metadata_store().get_snapshot_by_filename(filename)
         if snapshot is None:
             return jsonify({"message": "File not found"}), 404
+        path = _storage().read_image_path_by_relative_path(snapshot.relative_path)
         return send_file(
-            BytesIO(_storage().read_image_by_relative_path(snapshot.relative_path)),
+            path,
             mimetype="image/jpeg",
             download_name=filename,
+            conditional=True,
         )
     except FileNotFoundError:
         return jsonify({"message": "File not found"}), 404
@@ -755,12 +757,11 @@ def api_video_content(camera_id: str, video_id: int):
     if video is None:
         return jsonify({"message": "Video not found"}), 404
     try:
-        data, content_type = _storage().read_video_by_relative_path(video.relative_path)
+        path, content_type = _storage().read_video_path_by_relative_path(video.relative_path)
     except FileNotFoundError:
         return jsonify({"message": "Video not found"}), 404
-    from io import BytesIO
     return send_file(
-        BytesIO(data),
+        path,
         mimetype=content_type,
         download_name=video.filename,
         conditional=True,
