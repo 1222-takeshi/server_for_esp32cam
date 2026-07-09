@@ -16,6 +16,7 @@ from script.logging_config import configure_logging
 from script.metadata import SQLiteMetadataStore
 from script.auth import validate_auth_config
 from script.prometheus_metrics import AppMetrics
+from script.retention import RetentionScanGate
 from script.routes import limiter, server
 from script.storage import LocalFilesystemStorage, StorageRetentionPolicy
 from script.upload_metrics import UploadMetricsRegistry
@@ -131,6 +132,12 @@ def create_app(test_config: dict | None = None) -> Flask:
         max_age_seconds=app.config.get("VIDEO_RETENTION_MAX_AGE_SECONDS") or None,
         max_bytes=app.config.get("VIDEO_RETENTION_MAX_BYTES") or None,
     )
+    storage_retention_scan_gate = RetentionScanGate(
+        app.config.get("STORAGE_RETENTION_SCAN_INTERVAL_UPLOADS", 1)
+    )
+    video_retention_scan_gate = RetentionScanGate(
+        app.config.get("VIDEO_RETENTION_SCAN_INTERVAL_UPLOADS", 1)
+    )
     upload_metrics = UploadMetricsRegistry()
     app_metrics = AppMetrics()
 
@@ -141,6 +148,8 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.extensions["snapshot_event_publisher"] = snapshot_event_publisher
     app.extensions["storage_retention_policy"] = storage_retention_policy
     app.extensions["video_retention_policy"] = video_retention_policy
+    app.extensions["storage_retention_scan_gate"] = storage_retention_scan_gate
+    app.extensions["video_retention_scan_gate"] = video_retention_scan_gate
     app.extensions["upload_metrics"] = upload_metrics
     app.extensions["app_metrics"] = app_metrics
     limiter.init_app(app)
