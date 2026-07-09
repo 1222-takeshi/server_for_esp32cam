@@ -13,6 +13,15 @@ from uuid import uuid4
 
 
 _SAFE_CAMERA_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_HASH_CHUNK_SIZE = 1024 * 1024
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(_HASH_CHUNK_SIZE), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 @dataclass(frozen=True)
@@ -427,7 +436,7 @@ class LocalFilesystemStorage:
         except (ValueError, IndexError):
             camera_id = "unknown"
         captured_at, duration_ms, content_type, sha256 = self._read_video_metadata(path)
-        data_sha256 = sha256 or hashlib.sha256(path.read_bytes()).hexdigest()
+        data_sha256 = sha256 or _sha256_file(path)
         return StoredVideo(
             name=path.name,
             relative_path=path.relative_to(self.upload_dir).as_posix(),
