@@ -110,6 +110,8 @@ class Storage(Protocol):
 
     def read_image_by_relative_path(self, relative_path: str) -> bytes: ...
 
+    def read_image_path_by_relative_path(self, relative_path: str) -> Path: ...
+
     def delete_image_by_relative_path(self, relative_path: str) -> int: ...
 
     def apply_retention(
@@ -141,6 +143,8 @@ class Storage(Protocol):
     def list_videos(self) -> list[StoredVideo]: ...
 
     def read_video_by_relative_path(self, relative_path: str) -> tuple[bytes, str]: ...
+
+    def read_video_path_by_relative_path(self, relative_path: str) -> tuple[Path, str]: ...
 
     def delete_video(self, stored: StoredVideo) -> None: ...
 
@@ -384,7 +388,7 @@ class LocalFilesystemStorage:
         ]
         return sorted(videos, key=lambda video: video.stored_at, reverse=True)
 
-    def read_video_by_relative_path(self, relative_path: str) -> tuple[bytes, str]:
+    def _resolve_video_relative_path(self, relative_path: str) -> Path:
         normalized = Path(relative_path)
         if normalized.is_absolute() or ".." in normalized.parts:
             raise FileNotFoundError(relative_path)
@@ -395,7 +399,15 @@ class LocalFilesystemStorage:
             raise FileNotFoundError(relative_path)
         if path.suffix.lower() != ".mp4":
             raise FileNotFoundError(relative_path)
+        return path
+
+    def read_video_by_relative_path(self, relative_path: str) -> tuple[bytes, str]:
+        path = self._resolve_video_relative_path(relative_path)
         return path.read_bytes(), "video/mp4"
+
+    def read_video_path_by_relative_path(self, relative_path: str) -> tuple[Path, str]:
+        path = self._resolve_video_relative_path(relative_path)
+        return path, "video/mp4"
 
     def delete_video(self, stored: StoredVideo) -> None:
         path = (self.upload_dir / stored.relative_path).resolve()
@@ -441,6 +453,9 @@ class LocalFilesystemStorage:
 
     def read_image_by_relative_path(self, relative_path: str) -> bytes:
         return self._resolve_relative_path(relative_path).read_bytes()
+
+    def read_image_path_by_relative_path(self, relative_path: str) -> Path:
+        return self._resolve_relative_path(relative_path)
 
     def delete_image_by_relative_path(self, relative_path: str) -> int:
         path = self._resolve_relative_path(relative_path)
