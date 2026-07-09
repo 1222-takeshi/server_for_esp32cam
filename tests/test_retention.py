@@ -1,0 +1,263 @@
+"""Unit tests for the retention-scan gate (issue #196).
+
+`apply_retention()` / `apply_video_retention()` walk the entire upload
+directory, so `RetentionScanGate` exists to avoid paying that cost on every
+single upload. These tests cover the gate's scan/skip schedule in isolation,
+that the `apply_*_upload_retention` wrappers honor it (skipping the storage
+scan entirely when the gate declines), and an end-to-end route-level test
+that retention is still eventually enforced even though intermediate uploads
+skip the scan.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from unittest.mock import MagicMock
+from uuid import uuid4
+
+from script.retention import (
+    RetentionScanGate,
+    apply_upload_retention,
+    apply_video_upload_retention,
+)
+from script.app import create_app
+from script.storage import StorageRetentionPolicy, StorageRetentionResult, StoredImage, StoredVideo
+from tests.conftest import MINIMAL_JPEG
+
+import pytest
+
+
+@pytest.fixture()
+def app_factory(tmp_path):
+    """Build a fresh app (with its own upload dir/DB) per call, so each test
+    case gets an isolated `RetentionScanGate` instance."""
+
+    def _build(**config_overrides):
+        unique = uuid4().hex
+        config = {
+            "TESTING": True,
+            "UPLOAD_DIR": tmp_path / f"uploads-{unique}",
+            "DB_PATH": tmp_path / f"esp32cam-{unique}.sqlite3",
+            "INFERENCE_MODE": "sync",
+            "RATELIMIT_ENABLED": False,
+        }
+        config.update(config_overrides)
+        return create_app(config)
+
+    return _build
+
+
+# ---------------------------------------------------------------------------
+# RetentionScanGate
+# ---------------------------------------------------------------------------
+
+
+def test_gate_default_interval_scans_every_call():
+    gate = RetentionScanGate()
+    assert [gate.should_scan() for _ in range(5)] == [True, True, True, True, True]
+
+
+def test_gate_interval_one_scans_every_call():
+    gate = RetentionScanGate(interval=1)
+    assert [gate.should_scan() for _ in range(5)] == [True, True, True, True, True]
+
+
+def test_gate_non_positive_interval_treated_as_one():
+    for interval in (0, -5):
+        gate = RetentionScanGate(interval=interval)
+        assert [gate.should_scan() for _ in range(3)] == [True, True, True]
+
+
+def test_gate_scans_first_call_then_every_nth_call():
+    # interval=3: scan on call 1 (always), skip 2-3, scan on call 4, skip 5-6,
+    # scan on call 7, ...
+    gate = RetentionScanGate(interval=3)
+    results = [gate.should_scan() for _ in range(7)]
+    assert results == [True, False, False, True, False, False, True]
+
+
+def test_gate_is_thread_safe_and_scans_exactly_once_per_interval():
+    import threading
+
+    gate = RetentionScanGate(interval=10)
+    scan_count = 0
+    lock = threading.Lock()
+
+    def worker():
+        nonlocal scan_count
+        if gate.should_scan():
+            with lock:
+                scan_count += 1
+
+    threads = [threading.Thread(target=worker) for _ in range(100)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # 100 calls at interval=10 must scan exactly 10 times, no more, no less,
+    # regardless of thread interleaving.
+    assert scan_count == 10
+
+
+# ---------------------------------------------------------------------------
+# apply_upload_retention / apply_video_upload_retention wiring
+# ---------------------------------------------------------------------------
+
+
+def _stored_image() -> StoredImage:
+    return StoredImage(
+        name="image_1.jpg",
+        relative_path="cam-a/image_1.jpg",
+        size=10,
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        device_id="cam-a",
+        captured_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+
+def _stored_video() -> StoredVideo:
+    return StoredVideo(
+        name="video_1.mp4",
+        relative_path="cam-a/video_1.mp4",
+        size=10,
+        camera_id="cam-a",
+        captured_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        stored_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        duration_ms=None,
+        content_type="video/mp4",
+        sha256="0" * 64,
+    )
+
+
+def test_apply_upload_retention_skips_storage_scan_when_gate_declines(app):
+    fake_storage = MagicMock()
+    app.extensions["storage"] = fake_storage
+    app.extensions["storage_retention_scan_gate"] = MagicMock(should_scan=MagicMock(return_value=False))
+
+    with app.app_context():
+        result = apply_upload_retention(_stored_image())
+
+    assert result == []
+    fake_storage.apply_retention.assert_not_called()
+
+
+def test_apply_upload_retention_runs_storage_scan_when_gate_allows(app):
+    fake_storage = MagicMock()
+    fake_storage.apply_retention.return_value = StorageRetentionResult(
+        deleted_relative_paths=[], deleted_bytes=0
+    )
+    app.extensions["storage"] = fake_storage
+    app.extensions["storage_retention_scan_gate"] = MagicMock(should_scan=MagicMock(return_value=True))
+
+    with app.app_context():
+        apply_upload_retention(_stored_image())
+
+    fake_storage.apply_retention.assert_called_once()
+
+
+def test_apply_upload_retention_disabled_policy_never_consults_gate(app):
+    # Both limits unset -> policy.enabled is False.
+    app.extensions["storage_retention_policy"] = StorageRetentionPolicy()
+    gate = MagicMock(should_scan=MagicMock(return_value=True))
+    app.extensions["storage_retention_scan_gate"] = gate
+
+    with app.app_context():
+        result = apply_upload_retention(_stored_image())
+
+    assert result == []
+    gate.should_scan.assert_not_called()
+
+
+def test_apply_video_upload_retention_skips_storage_scan_when_gate_declines(app):
+    app.extensions["video_retention_policy"] = StorageRetentionPolicy(max_bytes=1000)
+    fake_storage = MagicMock()
+    app.extensions["storage"] = fake_storage
+    app.extensions["video_retention_scan_gate"] = MagicMock(should_scan=MagicMock(return_value=False))
+
+    with app.app_context():
+        result = apply_video_upload_retention(_stored_video())
+
+    assert result == []
+    fake_storage.apply_video_retention.assert_not_called()
+
+
+def test_apply_video_upload_retention_runs_storage_scan_when_gate_allows(app):
+    app.extensions["video_retention_policy"] = StorageRetentionPolicy(max_bytes=1000)
+    fake_storage = MagicMock()
+    fake_storage.apply_video_retention.return_value = StorageRetentionResult(
+        deleted_relative_paths=[], deleted_bytes=0
+    )
+    app.extensions["storage"] = fake_storage
+    app.extensions["video_retention_scan_gate"] = MagicMock(should_scan=MagicMock(return_value=True))
+
+    with app.app_context():
+        apply_video_upload_retention(_stored_video())
+
+    fake_storage.apply_video_retention.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: retention is skipped on intermediate uploads but still
+# eventually enforced once the interval boundary is reached.
+# ---------------------------------------------------------------------------
+
+
+def _upload(client, *, device_id: str, captured_at: str, body: bytes = MINIMAL_JPEG):
+    return client.post(
+        "/upload",
+        data=body,
+        headers={
+            "Content-Type": "image/jpeg",
+            "X-Device-Id": device_id,
+            "X-Captured-At": captured_at,
+        },
+    )
+
+
+def test_retention_scan_interval_skips_then_eventually_enforces(app_factory):
+    # RetentionScanGate(interval=2) scans on calls 1, 3, 5, ... (always scans
+    # on the first call, then every 2nd call after that).
+    app = app_factory(
+        STORAGE_RETENTION_MAX_BYTES=1000,
+        STORAGE_RETENTION_SCAN_INTERVAL_UPLOADS=2,
+    )
+    client = app.test_client()
+
+    # Upload 1 (call 1, scanned): nothing to evict yet, storage is under budget.
+    resp1 = _upload(client, device_id="cam-ret", captured_at="2026-01-01T00:00:00Z")
+    assert resp1.status_code == 200
+    snap1 = resp1.get_json()
+
+    # Upload 2 (call 2, skipped): two images together exceed the 1000-byte
+    # budget, which would normally evict snap1 -- but the scan is skipped,
+    # so snap1 must still be present.
+    resp2 = _upload(client, device_id="cam-ret", captured_at="2026-01-01T01:00:00Z")
+    assert resp2.status_code == 200
+    assert client.get(f"/files/{snap1['filename']}").status_code == 200
+
+    # Upload 3 (call 3, scanned): interval boundary reached -> the full scan
+    # runs and catches up on the retention backlog, evicting the oldest file
+    # that the skipped scan in step 2 left behind.
+    resp3 = _upload(client, device_id="cam-ret", captured_at="2026-01-01T02:00:00Z")
+    assert resp3.status_code == 200
+    snap3 = resp3.get_json()
+
+    assert client.get(f"/files/{snap1['filename']}").status_code == 404
+    assert client.get(f"/files/{snap3['filename']}").status_code == 200
+
+
+def test_retention_scan_interval_default_matches_prior_every_upload_behavior(app_factory):
+    # Default (no STORAGE_RETENTION_SCAN_INTERVAL_UPLOADS override) must
+    # behave exactly like before this change: scan on every upload.
+    app = app_factory(STORAGE_RETENTION_MAX_BYTES=1000)
+    client = app.test_client()
+
+    resp1 = _upload(client, device_id="cam-ret", captured_at="2026-01-01T00:00:00Z")
+    snap1 = resp1.get_json()
+
+    resp2 = _upload(client, device_id="cam-ret", captured_at="2026-01-01T01:00:00Z")
+    snap2 = resp2.get_json()
+
+    assert client.get(f"/files/{snap2['filename']}").status_code == 200
+    assert client.get(f"/files/{snap1['filename']}").status_code == 404
