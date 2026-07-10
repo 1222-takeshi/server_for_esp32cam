@@ -35,6 +35,7 @@ def retention_app(tmp_path):
             "INFERENCE_MODE": "sync",
             "RATELIMIT_ENABLED": False,
             "STORAGE_RETENTION_MAX_BYTES": 1000,
+            "STORAGE_RETENTION_MIN_INTERVAL_SECONDS": 0,
         }
     )
 

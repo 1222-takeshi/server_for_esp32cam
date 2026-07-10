@@ -248,6 +248,7 @@ All variables are optional unless marked **required for production**.
 | `ESP32CAM_VIDEO_UPLOAD_RATE_LIMIT` | `5 per minute` | Video upload rate limit per device API key. Flask-Limiter format. |
 | `ESP32CAM_STORAGE_RETENTION_MAX_AGE_SECONDS` | `2592000` (30 days) | Delete images older than this. Set `0` to disable. |
 | `ESP32CAM_STORAGE_RETENTION_MAX_BYTES` | `0` (disabled) | Delete oldest images when total exceeds this size. |
+| `ESP32CAM_STORAGE_RETENTION_MIN_INTERVAL_SECONDS` | `300` | Minimum seconds between retention scans of the upload directory. `0` scans on every upload (not recommended with continuous uploads: the scan blocks the gevent event loop). |
 | `ESP32CAM_VIDEO_RETENTION_MAX_AGE_SECONDS` | `0` (disabled) | Delete videos older than this many seconds. Set `0` to disable. |
 | `ESP32CAM_VIDEO_RETENTION_MAX_BYTES` | `0` (disabled) | Delete oldest videos when total video storage exceeds this size. |
 | `ESP32CAM_DETECTOR` | `disabled` | Object detector. Options: `disabled`, `tflite_cpu`. |

@@ -1,14 +1,30 @@
 from __future__ import annotations
 
+from time import monotonic as _monotonic
+
 from flask import current_app
 
 from script.storage import StoredImage, StoredVideo
+
+_LAST_RUN_KEY = "storage_retention_last_run_monotonic"
 
 
 def apply_upload_retention(stored: StoredImage) -> list[str]:
     policy = current_app.extensions.get("storage_retention_policy")
     if policy is None or not policy.enabled:
         return []
+
+    # The retention scan walks the whole upload directory, which blocks the
+    # event loop under gevent. Running it on every upload melts down once the
+    # file count grows, so rate-limit the scan; deletions still catch up on
+    # the next allowed run.
+    min_interval = current_app.config.get("STORAGE_RETENTION_MIN_INTERVAL_SECONDS", 0)
+    if min_interval > 0:
+        last_run = current_app.extensions.get(_LAST_RUN_KEY)
+        now = _monotonic()
+        if last_run is not None and now - last_run < min_interval:
+            return []
+        current_app.extensions[_LAST_RUN_KEY] = now
 
     result = current_app.extensions["storage"].apply_retention(
         policy,
