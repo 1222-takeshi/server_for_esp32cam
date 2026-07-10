@@ -14,7 +14,7 @@ dependencies = [
   "Flask-Sock>=0.7,<0.8",
   "Pillow>=12.2,<13.0",
   "python-json-logger>=2.0,<4.0",
-  "prometheus-client>=0.20,<0.22",
+  "prometheus-client>=0.20,<0.26",
   "Werkzeug>=3.1.6,<4.0",
 ]
 
