@@ -131,6 +131,115 @@ def test_metadata_store_sync_preserves_camera_first_and_last_seen_at(tmp_path):
     assert camera.last_seen_at == newer
 
 
+def test_sync_storage_index_does_not_select_entire_snapshots_table(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+
+    # Seed a large pre-existing snapshots table (bigger than a single sync
+    # batch would ever be), to stand in for a long-lived deployment with
+    # millions of rows.
+    seed_images = [
+        _stored_image(
+            name=f"seed-{i}.jpg",
+            relative_path=f"cam-a/images/seed-{i}.jpg",
+            camera_id="cam-a",
+            captured_at=stored_at,
+            stored_at=stored_at,
+        )
+        for i in range(1200)
+    ]
+    store.sync_storage_index(seed_images)
+    assert len(store.list_recent_snapshots(limit=10_000)) == 1200
+
+    executed_sql: list[str] = []
+    conn = store._get_connection()
+    conn.set_trace_callback(executed_sql.append)
+    try:
+        # Re-sync a mix of already-indexed files and brand new ones, large
+        # enough to span multiple lookup chunks.
+        resync_images = seed_images[:900] + [
+            _stored_image(
+                name=f"new-{i}.jpg",
+                relative_path=f"cam-a/images/new-{i}.jpg",
+                camera_id="cam-a",
+                captured_at=stored_at,
+                stored_at=stored_at,
+            )
+            for i in range(50)
+        ]
+        store.sync_storage_index(resync_images)
+    finally:
+        conn.set_trace_callback(None)
+
+    # The whole point of the fix: no query should select every row of the
+    # snapshots table unconditionally.
+    unfiltered_selects = [
+        sql
+        for sql in executed_sql
+        if "SELECT" in sql.upper()
+        and "FROM snapshots" in sql
+        and "WHERE" not in sql.upper()
+    ]
+    assert unfiltered_selects == []
+
+    snapshots = store.list_recent_snapshots(limit=10_000)
+    assert len(snapshots) == 1250
+    filenames = {snapshot.filename for snapshot in snapshots}
+    assert all(f"seed-{i}.jpg" in filenames for i in range(1200))
+    assert all(f"new-{i}.jpg" in filenames for i in range(50))
+
+
+def test_sync_storage_index_skips_already_indexed_filenames(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    initial = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    brand_new_time = datetime(2026, 3, 11, 12, 30, tzinfo=timezone.utc)
+    stale_resync_time = datetime(2026, 3, 11, 13, 0, tzinfo=timezone.utc)
+
+    store.sync_storage_index(
+        [
+            _stored_image(
+                name="existing.jpg",
+                relative_path="cam-a/images/existing.jpg",
+                camera_id="cam-a",
+                captured_at=initial,
+                stored_at=initial,
+            )
+        ]
+    )
+
+    # Re-sync the same filename with a much later timestamp, plus one
+    # genuinely new file with a timestamp in between. The already-indexed
+    # file must be left untouched (not re-inserted/re-registered, so its
+    # later timestamp must NOT bump camera.last_seen_at), while the new file
+    # must be added and does bump last_seen_at to its own timestamp.
+    store.sync_storage_index(
+        [
+            _stored_image(
+                name="existing.jpg",
+                relative_path="cam-a/images/existing.jpg",
+                camera_id="cam-a",
+                captured_at=stale_resync_time,
+                stored_at=stale_resync_time,
+            ),
+            _stored_image(
+                name="brand-new.jpg",
+                relative_path="cam-a/images/brand-new.jpg",
+                camera_id="cam-a",
+                captured_at=brand_new_time,
+                stored_at=brand_new_time,
+            ),
+        ]
+    )
+
+    snapshots = {s.filename: s for s in store.list_camera_snapshots("cam-a")}
+    assert set(snapshots) == {"existing.jpg", "brand-new.jpg"}
+    assert snapshots["existing.jpg"].stored_at == initial
+
+    camera = store.get_camera("cam-a")
+    assert camera is not None
+    assert camera.last_seen_at == brand_new_time
+
+
 def test_metadata_store_deletes_snapshots_by_relative_path(tmp_path):
     store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
     stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
