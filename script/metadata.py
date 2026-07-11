@@ -72,6 +72,11 @@ class CameraSummary:
 
 ALLOWED_LOG_LEVELS = frozenset({"info", "warning", "error", "critical"})
 
+# SQLite has a default limit on the number of bound parameters per statement
+# (SQLITE_MAX_VARIABLE_NUMBER, historically 999). Chunk filename lookups so a
+# large on-disk listing never exceeds that limit.
+_SYNC_LOOKUP_CHUNK_SIZE = 500
+
 
 @dataclass(frozen=True)
 class DeviceLogRecord:
@@ -530,12 +535,22 @@ class SQLiteMetadataStore:
         if not images:
             return
         conn = self._get_connection()
-        existing = {
-            row[0]
-            for row in conn.execute(
-                "SELECT filename FROM snapshots"
+        # Only check whether *these* on-disk filenames already exist in the
+        # index, instead of materializing the entire (potentially huge)
+        # snapshots table into a Python set. `filename` is UNIQUE/indexed,
+        # so each chunked lookup is an indexed query, not a table scan, and
+        # the memory/row count is bounded by the on-disk listing rather than
+        # the historical size of the snapshots table.
+        names = [img.name for img in images]
+        existing: set[str] = set()
+        for offset in range(0, len(names), _SYNC_LOOKUP_CHUNK_SIZE):
+            chunk = names[offset : offset + _SYNC_LOOKUP_CHUNK_SIZE]
+            placeholders = ",".join("?" for _ in chunk)
+            rows = conn.execute(
+                f"SELECT filename FROM snapshots WHERE filename IN ({placeholders})",
+                tuple(chunk),
             ).fetchall()
-        }
+            existing.update(row[0] for row in rows)
         new_images = [img for img in images if img.name not in existing]
         if not new_images:
             return
