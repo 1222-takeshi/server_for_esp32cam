@@ -375,6 +375,29 @@ def test_save_video_rejects_non_mp4_payload_and_cleans_temporary_file(tmp_path):
     assert list(storage.upload_dir.rglob("*")) == []
 
 
+def test_list_videos_backfills_sha256_for_legacy_sidecar_missing_hash(tmp_path):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+    payload = b"\x00\x00\x00 ftypisom" + b"legacy-video-bytes"
+    stored = storage.save_video(
+        payload,
+        "video/mp4",
+        camera_id="esp32cam-01",
+        captured_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+    )
+    video_path = storage.upload_dir / stored.relative_path
+    sidecar_path = video_path.with_suffix(".mp4.json")
+    sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    del sidecar["sha256"]
+    sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
+
+    videos = storage.list_videos()
+    assert videos[0].sha256 == stored.sha256
+
+    # The backfilled hash must be persisted so a second scan doesn't re-hash.
+    refreshed_sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    assert refreshed_sidecar["sha256"] == stored.sha256
+
+
 def test_list_videos_returns_latest_first(tmp_path):
     storage = LocalFilesystemStorage(tmp_path / "uploads")
     first = storage.save_video(
