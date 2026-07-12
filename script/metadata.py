@@ -695,6 +695,17 @@ class SQLiteMetadataStore:
             )
         return cursor.rowcount > 0
 
+    def list_camera_last_seen(self) -> list[tuple[str, datetime | None]]:
+        """Lightweight camera_id/last_seen_at listing for /metrics.
+
+        Unlike list_camera_summaries(), this skips the per-camera latest
+        snapshot and detection lookups (window function + join scans) that
+        callers who only need the last-seen timestamp don't use.
+        """
+        conn = self._get_connection()
+        rows = conn.execute("SELECT camera_id, last_seen_at FROM cameras").fetchall()
+        return [(row["camera_id"], _parse_datetime(row["last_seen_at"])) for row in rows]
+
     def list_camera_summaries(self) -> list[CameraSummary]:
         conn = self._get_connection()
         camera_rows = conn.execute(

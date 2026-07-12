@@ -352,6 +352,45 @@ def test_list_camera_summaries_returns_empty_for_empty_store(tmp_path):
     assert summaries == []
 
 
+def test_list_camera_last_seen_returns_empty_for_empty_store(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+
+    assert store.list_camera_last_seen() == []
+
+
+def test_list_camera_last_seen_matches_summaries_last_seen(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    older = now - timedelta(hours=1)
+
+    store.record_snapshot(
+        _stored_image(
+            name="image_a.jpg",
+            relative_path="cam-a/images/image_a.jpg",
+            camera_id="cam-a",
+            captured_at=now,
+            stored_at=now,
+        )
+    )
+    store.record_snapshot(
+        _stored_image(
+            name="image_b.jpg",
+            relative_path="cam-b/images/image_b.jpg",
+            camera_id="cam-b",
+            captured_at=older,
+            stored_at=older,
+        )
+    )
+
+    last_seen = dict(store.list_camera_last_seen())
+    summary_last_seen = {
+        s.camera.camera_id: s.camera.last_seen_at for s in store.list_camera_summaries()
+    }
+
+    assert last_seen == summary_last_seen
+    assert last_seen.keys() == {"cam-a", "cam-b"}
+
+
 def test_list_camera_summaries_latest_detection_at_is_set_when_detection_exists(tmp_path):
     store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
     now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)

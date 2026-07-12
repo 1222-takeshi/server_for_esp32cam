@@ -1161,10 +1161,9 @@ def metrics():
     if inference_svc is not None:
         app_metrics.inference_queue_length.set(inference_svc.queue_length())
 
-    for summary in _metadata_store().list_camera_summaries():
-        cam = summary.camera
-        ts = cam.last_seen_at.timestamp() if cam.last_seen_at else 0
-        app_metrics.camera_last_seen_timestamp.labels(camera_id=cam.camera_id).set(ts)
+    for camera_id, last_seen_at in _metadata_store().list_camera_last_seen():
+        ts = last_seen_at.timestamp() if last_seen_at else 0
+        app_metrics.camera_last_seen_timestamp.labels(camera_id=camera_id).set(ts)
 
     from flask import Response
     return Response(
