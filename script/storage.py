@@ -436,8 +436,13 @@ class LocalFilesystemStorage:
         except (ValueError, IndexError):
             camera_id = "unknown"
         captured_at, duration_ms, content_type, sha256 = self._read_video_metadata(path)
-        data_sha256 = sha256 or _sha256_file(path)
-        return StoredVideo(
+        data_sha256 = sha256
+        if data_sha256 is None:
+            # Legacy sidecar predating stream-hashing on upload: hash once
+            # here and persist it back so future scans don't re-read the
+            # whole file every time list_videos() is called.
+            data_sha256 = _sha256_file(path)
+        video = StoredVideo(
             name=path.name,
             relative_path=path.relative_to(self.upload_dir).as_posix(),
             size=stat.st_size,
@@ -448,6 +453,14 @@ class LocalFilesystemStorage:
             content_type=content_type,
             sha256=data_sha256,
         )
+        if sha256 is None:
+            try:
+                self._write_video_metadata(video)
+            except OSError:
+                # Best-effort cache backfill; a failed write just means the
+                # next scan re-hashes this file, matching the old behavior.
+                pass
+        return video
 
     def read_image(self, name: str) -> bytes:
         if not name or Path(name).name != name:

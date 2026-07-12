@@ -6,7 +6,7 @@ RUN useradd --create-home --shell /bin/sh appuser
 
 COPY pyproject.toml ./
 COPY script/ ./script/
-RUN pip install --no-cache-dir . && pip install --no-cache-dir "gunicorn>=23,<27" "gevent>=24,<27"
+RUN pip install --no-cache-dir ".[server]"
 
 COPY templates/ ./templates/
 

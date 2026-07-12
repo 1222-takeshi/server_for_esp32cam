@@ -77,3 +77,6 @@ class Config:
         os.getenv("ESP32CAM_VIDEO_RETENTION_SCAN_INTERVAL_UPLOADS", "1")
     )
     MAX_MJPEG_STREAMS = int(os.getenv("ESP32CAM_MAX_MJPEG_STREAMS", "10"))
+    DISK_USAGE_CHECK_INTERVAL_UPLOADS = int(
+        os.getenv("ESP32CAM_DISK_USAGE_CHECK_INTERVAL_UPLOADS", "1")
+    )

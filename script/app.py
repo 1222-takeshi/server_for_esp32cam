@@ -138,6 +138,9 @@ def create_app(test_config: dict | None = None) -> Flask:
     video_retention_scan_gate = RetentionScanGate(
         app.config.get("VIDEO_RETENTION_SCAN_INTERVAL_UPLOADS", 1)
     )
+    disk_usage_scan_gate = RetentionScanGate(
+        app.config.get("DISK_USAGE_CHECK_INTERVAL_UPLOADS", 1)
+    )
     upload_metrics = UploadMetricsRegistry()
     app_metrics = AppMetrics()
 
@@ -150,6 +153,7 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.extensions["video_retention_policy"] = video_retention_policy
     app.extensions["storage_retention_scan_gate"] = storage_retention_scan_gate
     app.extensions["video_retention_scan_gate"] = video_retention_scan_gate
+    app.extensions["disk_usage_scan_gate"] = disk_usage_scan_gate
     app.extensions["upload_metrics"] = upload_metrics
     app.extensions["app_metrics"] = app_metrics
     limiter.init_app(app)

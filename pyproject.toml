@@ -31,6 +31,10 @@ ml = [
   "tflite-runtime>=2.14,<3.0; python_version < '3.12'",
   "ai-edge-litert>=1.0,<3.0; python_version >= '3.12'",
 ]
+server = [
+  "gunicorn>=23,<27",
+  "gevent>=24,<27",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

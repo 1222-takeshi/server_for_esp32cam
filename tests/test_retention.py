@@ -12,7 +12,7 @@ skip the scan.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 from script.retention import (
@@ -261,3 +261,36 @@ def test_retention_scan_interval_default_matches_prior_every_upload_behavior(app
 
     assert client.get(f"/files/{snap2['filename']}").status_code == 200
     assert client.get(f"/files/{snap1['filename']}").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Disk usage check gate (issue #208): _check_disk_usage() ran an unconditional
+# shutil.disk_usage() syscall on every upload; it's gated by the same
+# RetentionScanGate mechanism used above.
+# ---------------------------------------------------------------------------
+
+
+def test_disk_usage_check_default_interval_runs_every_upload(app_factory):
+    app = app_factory()
+    client = app.test_client()
+
+    with patch("script.routes.shutil.disk_usage") as disk_usage:
+        disk_usage.return_value = type("disk_usage", (), {"total": 100, "used": 1, "free": 99})()
+        _upload(client, device_id="cam-disk", captured_at="2026-01-01T00:00:00Z")
+        _upload(client, device_id="cam-disk", captured_at="2026-01-01T01:00:00Z")
+
+    assert disk_usage.call_count == 2
+
+
+def test_disk_usage_check_interval_skips_intermediate_uploads(app_factory):
+    app = app_factory(DISK_USAGE_CHECK_INTERVAL_UPLOADS=2)
+    client = app.test_client()
+
+    with patch("script.routes.shutil.disk_usage") as disk_usage:
+        disk_usage.return_value = type("disk_usage", (), {"total": 100, "used": 1, "free": 99})()
+        _upload(client, device_id="cam-disk", captured_at="2026-01-01T00:00:00Z")
+        _upload(client, device_id="cam-disk", captured_at="2026-01-01T01:00:00Z")
+        _upload(client, device_id="cam-disk", captured_at="2026-01-01T02:00:00Z")
+
+    # Scans on calls 1 and 3 (interval boundary), skips call 2.
+    assert disk_usage.call_count == 2

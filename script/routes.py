@@ -74,6 +74,9 @@ def _parse_pagination() -> tuple[int, int] | tuple[None, None]:
 
 
 def _check_disk_usage() -> None:
+    gate = current_app.extensions.get("disk_usage_scan_gate")
+    if gate is not None and not gate.should_scan():
+        return
     upload_dir = current_app.config["UPLOAD_DIR"]
     usage = shutil.disk_usage(upload_dir)
     pct = usage.used * 100 / usage.total
