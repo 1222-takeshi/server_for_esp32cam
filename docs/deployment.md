@@ -137,13 +137,25 @@ After=network-online.target
 Type=simple
 WorkingDirectory=/home/ubuntu/server_for_esp32cam
 EnvironmentFile=/home/ubuntu/server_for_esp32cam/.env
-ExecStart=/home/ubuntu/server_for_esp32cam/.venv/bin/gunicorn -k gevent -w 1 -b 0.0.0.0:${PORT} script.server:app
+ExecStart=/home/ubuntu/server_for_esp32cam/.venv/bin/gunicorn -k gevent -w 1 --timeout 120 --graceful-timeout 30 -b 0.0.0.0:${PORT} script.server:app
 Restart=on-failure
 RestartSec=5
 
 [Install]
 WantedBy=default.target
 ```
+
+> **`--timeout 120` is required when `ESP32CAM_DETECTOR=tflite_cpu`.** The
+> `gevent` worker shares one OS thread, and enabling TFLite detection adds
+> two CPU-bound phases that do not yield to the event loop: XNNPACK delegate
+> creation at worker boot (~30 s on a Raspberry Pi 4) and per-frame inference.
+> With gunicorn's default 30 s timeout the arbiter kills the worker mid-init,
+> which drops the camera WebSocket and respawns into the same init — an
+> endless crash loop that starves uploads (frames arrive every ~90 s instead
+> of the configured interval) and floods syslog with misparsed binary frames.
+> Raising the timeout past the init cost breaks the loop. If inference itself
+> ever backs up under sustained load, move it off the web worker (a separate
+> process) rather than raising the timeout further.
 
 Start it:
 
