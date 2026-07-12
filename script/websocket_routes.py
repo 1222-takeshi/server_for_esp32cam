@@ -7,7 +7,7 @@ import time
 from flask import Flask, current_app, request
 from flask_sock import Sock
 
-from script.auth import check_device_api_key
+from script.auth import check_device_api_key, check_device_api_key_for_device
 from script.events import SnapshotEventPublisher
 from script.retention import apply_upload_retention
 from script.routes import _validate_jpeg_image, _serialize_snapshot, _validate_device_id
@@ -53,6 +53,21 @@ def handle_binary_snapshot_upload(
             "url": f"/files/{snapshot.filename}",
         },
     }
+
+
+def _check_camera_upload_auth(camera_id: str, provided: str | None) -> dict[str, object] | None:
+    """Return a websocket error payload if `provided` may not upload as `camera_id`.
+
+    Mirrors `_check_device_matches_path` in routes.py: a key must first pass
+    the general device-auth check (any configured device key), and then must
+    specifically match the key assigned to `camera_id` — otherwise a key
+    valid for one camera could be used to impersonate another.
+    """
+    if not check_device_api_key(provided):
+        return {"type": "error", "message": "Unauthorized"}
+    if not check_device_api_key_for_device(camera_id, provided):
+        return {"type": "error", "message": "Forbidden"}
+    return None
 
 
 def _handle_binary_upload_connection(websocket: WebSocketLike, *, camera_id: str) -> None:
@@ -129,8 +144,9 @@ def register_websocket_routes(
 
     @sock.route("/ws/cameras/<camera_id>/upload")
     def camera_upload(websocket, camera_id: str):
-        if not check_device_api_key(request.headers.get("X-API-Key")):
-            websocket.send(json.dumps({"type": "error", "message": "Unauthorized"}))
+        auth_error = _check_camera_upload_auth(camera_id, request.headers.get("X-API-Key"))
+        if auth_error is not None:
+            websocket.send(json.dumps(auth_error))
             return
         if _validate_device_id(camera_id):
             websocket.send(json.dumps({"type": "error", "message": "Invalid camera_id"}))
