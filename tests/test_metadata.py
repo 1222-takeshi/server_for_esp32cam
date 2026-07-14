@@ -269,6 +269,120 @@ def test_metadata_store_deletes_snapshots_by_relative_path(tmp_path):
     assert [snapshot.id for snapshot in snapshots] == [keep_me.id]
 
 
+def test_list_camera_snapshots_paginates_stably_with_duplicate_timestamps(tmp_path):
+    # ORDER BY stored_at DESC alone is not a stable sort when multiple rows
+    # share the same stored_at (e.g. an upload burst or a backfill via
+    # sync_storage_index): without a tie-break, LIMIT/OFFSET pagination can
+    # duplicate or skip rows across pages because SQLite's order for ties is
+    # unspecified.
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    first = store.record_snapshot(
+        _stored_image(
+            name="a.jpg",
+            relative_path="cam-a/images/a.jpg",
+            camera_id="cam-a",
+            captured_at=stored_at,
+            stored_at=stored_at,
+        )
+    )
+    second = store.record_snapshot(
+        _stored_image(
+            name="b.jpg",
+            relative_path="cam-a/images/b.jpg",
+            camera_id="cam-a",
+            captured_at=stored_at,
+            stored_at=stored_at,
+        )
+    )
+
+    page1 = store.list_camera_snapshots("cam-a", limit=1, offset=0)
+    page2 = store.list_camera_snapshots("cam-a", limit=1, offset=1)
+
+    assert [s.id for s in page1] == [second.id]
+    assert [s.id for s in page2] == [first.id]
+
+
+def test_list_detections_paginates_stably_with_duplicate_timestamps(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    first = store.record_snapshot(
+        _stored_image(
+            name="a.jpg",
+            relative_path="cam-a/images/a.jpg",
+            camera_id="cam-a",
+            captured_at=stored_at,
+            stored_at=stored_at,
+        )
+    )
+    second = store.record_snapshot(
+        _stored_image(
+            name="b.jpg",
+            relative_path="cam-a/images/b.jpg",
+            camera_id="cam-a",
+            captured_at=stored_at,
+            stored_at=stored_at,
+        )
+    )
+    store.mark_snapshot_result(
+        first.id, detections=[Detection(label="person", score=0.9, x1=0, y1=0, x2=1, y2=1)]
+    )
+    store.mark_snapshot_result(
+        second.id, detections=[Detection(label="cat", score=0.8, x1=0, y1=0, x2=1, y2=1)]
+    )
+
+    page1 = store.list_detections(camera_id="cam-a", limit=1, offset=0)
+    page2 = store.list_detections(camera_id="cam-a", limit=1, offset=1)
+
+    assert [d["filename"] for d in page1] == [second.filename]
+    assert [d["filename"] for d in page2] == [first.filename]
+
+
+def test_list_pending_snapshot_ids_returns_all_by_default(tmp_path):
+    # A previous default of limit=100 silently dropped any pending snapshot
+    # beyond the first 100 (oldest-first) from the one-time startup recovery
+    # sweep in InferenceService.start(), orphaning them forever since nothing
+    # else re-scans for pending work after boot.
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    ids = []
+    for i in range(105):
+        snapshot = store.record_snapshot(
+            _stored_image(
+                name=f"img-{i}.jpg",
+                relative_path=f"cam-a/images/img-{i}.jpg",
+                camera_id="cam-a",
+                captured_at=stored_at + timedelta(seconds=i),
+                stored_at=stored_at + timedelta(seconds=i),
+            )
+        )
+        ids.append(snapshot.id)
+
+    pending = store.list_pending_snapshot_ids()
+
+    assert len(pending) == 105
+    assert set(pending) == set(ids)
+
+
+def test_list_pending_snapshot_ids_respects_explicit_limit(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    for i in range(5):
+        store.record_snapshot(
+            _stored_image(
+                name=f"img-{i}.jpg",
+                relative_path=f"cam-a/images/img-{i}.jpg",
+                camera_id="cam-a",
+                captured_at=stored_at + timedelta(seconds=i),
+                stored_at=stored_at + timedelta(seconds=i),
+            )
+        )
+
+    pending = store.list_pending_snapshot_ids(limit=2)
+
+    assert len(pending) == 2
+
+
 def test_record_device_log_stores_log(tmp_path):
     store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
     store.record_heartbeat("cam-a")

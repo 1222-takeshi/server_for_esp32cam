@@ -793,7 +793,7 @@ class SQLiteMetadataStore:
         if until is not None:
             query += " AND stored_at <= ?"
             params.append(until.astimezone(timezone.utc).isoformat())
-        query += " ORDER BY stored_at DESC LIMIT ? OFFSET ?"
+        query += " ORDER BY stored_at DESC, id DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
         conn = self._get_connection()
         rows = conn.execute(query, tuple(params)).fetchall()
@@ -867,7 +867,7 @@ class SQLiteMetadataStore:
             FROM detections
             JOIN snapshots ON snapshots.id = detections.snapshot_id
             {where}
-            ORDER BY snapshots.stored_at DESC LIMIT ? OFFSET ?
+            ORDER BY snapshots.stored_at DESC, snapshots.id DESC LIMIT ? OFFSET ?
         """
         params.extend([limit, offset])
 
@@ -887,18 +887,19 @@ class SQLiteMetadataStore:
             for row in rows
         ]
 
-    def list_pending_snapshot_ids(self, *, limit: int = 100) -> list[int]:
+    def list_pending_snapshot_ids(self, *, limit: int | None = None) -> list[int]:
         conn = self._get_connection()
-        rows = conn.execute(
-            """
+        query = """
             SELECT id
             FROM snapshots
             WHERE inference_status = 'pending'
             ORDER BY stored_at ASC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+        """
+        params: tuple[object, ...] = ()
+        if limit is not None:
+            query += " LIMIT ?"
+            params = (limit,)
+        rows = conn.execute(query, params).fetchall()
         return [int(row["id"]) for row in rows]
 
     def reset_processing_snapshots(self) -> None:
