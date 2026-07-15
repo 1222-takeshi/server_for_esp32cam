@@ -67,7 +67,7 @@ def test_storage_rejects_traversal(tmp_path):
     storage = LocalFilesystemStorage(tmp_path / "uploads")
 
     with pytest.raises(FileNotFoundError):
-        storage.read_image("../secret.jpg")
+        storage.read_image_by_relative_path("../secret.jpg")
 
 
 def test_storage_lists_only_jpeg_files(tmp_path):
