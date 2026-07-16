@@ -23,4 +23,4 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:${PORT}/healthz')" || exit 1
 
-CMD gunicorn -k gevent -w 1 -b "0.0.0.0:${PORT}" script.server:app
+CMD gunicorn -k gevent -w 1 --timeout 120 -b "0.0.0.0:${PORT}" script.server:app
