@@ -984,22 +984,25 @@ class SQLiteMetadataStore:
                 "DELETE FROM detections WHERE snapshot_id = ?",
                 (snapshot_id,),
             )
-            for detection in detections:
-                conn.execute(
+            if detections:
+                conn.executemany(
                     """
                     INSERT INTO detections (
                         snapshot_id, label, score, x1, y1, x2, y2
                     ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (
-                        snapshot_id,
-                        detection.label,
-                        detection.score,
-                        detection.x1,
-                        detection.y1,
-                        detection.x2,
-                        detection.y2,
-                    ),
+                    [
+                        (
+                            snapshot_id,
+                            detection.label,
+                            detection.score,
+                            detection.x1,
+                            detection.y1,
+                            detection.x2,
+                            detection.y2,
+                        )
+                        for detection in detections
+                    ],
                 )
 
     def _detections_by_snapshot_id(
