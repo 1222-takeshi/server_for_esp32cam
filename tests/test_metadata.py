@@ -529,6 +529,40 @@ def test_list_camera_summaries_latest_detection_at_is_set_when_detection_exists(
     assert summary.latest_detection_at == now
 
 
+def test_mark_snapshot_result_stores_multiple_detections_in_one_call(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    snapshot = store.record_snapshot(
+        _stored_image(
+            name="img.jpg",
+            relative_path="cam-a/images/img.jpg",
+            camera_id="cam-a",
+            captured_at=now,
+            stored_at=now,
+        )
+    )
+
+    store.mark_snapshot_result(
+        snapshot.id,
+        detections=[
+            Detection(label="person", score=0.9, x1=0.0, y1=0.0, x2=1.0, y2=1.0),
+            Detection(label="cat", score=0.5, x1=0.1, y1=0.1, x2=0.9, y2=0.9),
+            Detection(label="dog", score=0.4, x1=0.2, y1=0.2, x2=0.8, y2=0.8),
+        ],
+    )
+
+    stored = store.get_snapshot(snapshot.id)
+
+    assert stored is not None
+    assert sorted(d.label for d in stored.detections) == ["cat", "dog", "person"]
+
+    # Re-marking with no detections must clear the previous ones without erroring
+    # on an empty executemany() call.
+    store.mark_snapshot_result(snapshot.id, detections=[])
+
+    assert store.get_snapshot(snapshot.id).detections == ()
+
+
 def test_list_camera_summaries_returns_latest_snapshot_per_camera(tmp_path):
     store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
     t1 = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
