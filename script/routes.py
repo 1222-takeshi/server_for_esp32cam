@@ -31,11 +31,10 @@ from script.metadata import (
 )
 from script.retention import apply_upload_retention, apply_video_upload_retention
 from script.storage import Storage
+from script.validation import is_valid_camera_id
 
 DEVICE_ID_MAX_LENGTH = 128
-_CAMERA_ID_MAX_LENGTH = 64
 _DEVICE_ID_RE = re.compile(rf"[A-Za-z0-9_\-]{{1,{DEVICE_ID_MAX_LENGTH}}}")
-_CAMERA_ID_RE = re.compile(rf"[A-Za-z0-9_\-]{{1,{_CAMERA_ID_MAX_LENGTH}}}")
 
 
 def _upload_rate_limit_key() -> str:
@@ -119,7 +118,7 @@ def _validate_camera_id(camera_id: str) -> str | None:
     """Returns an error message string if invalid, None if valid."""
     if not camera_id:
         return "camera_id is required"
-    if not _CAMERA_ID_RE.fullmatch(camera_id):
+    if not is_valid_camera_id(camera_id):
         return "camera_id contains invalid characters or exceeds maximum length"
     return None
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -11,8 +10,8 @@ from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
 
+from script.validation import is_valid_camera_id
 
-_SAFE_CAMERA_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _HASH_CHUNK_SIZE = 1024 * 1024
 
 
@@ -73,7 +72,7 @@ def _normalize_device_id(value: str | None) -> str | None:
 
 
 def _validate_camera_id(value: str) -> str:
-    if not _SAFE_CAMERA_ID_RE.fullmatch(value):
+    if not is_valid_camera_id(value):
         raise ValueError(f"Invalid camera_id: {value!r}")
     return value
 
