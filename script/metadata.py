@@ -695,6 +695,17 @@ class SQLiteMetadataStore:
             )
         return cursor.rowcount > 0
 
+    def list_camera_last_seen(self) -> list[tuple[str, datetime | None]]:
+        """Lightweight camera_id/last_seen_at listing for /metrics.
+
+        Unlike list_camera_summaries(), this skips the per-camera latest
+        snapshot and detection lookups (window function + join scans) that
+        callers who only need the last-seen timestamp don't use.
+        """
+        conn = self._get_connection()
+        rows = conn.execute("SELECT camera_id, last_seen_at FROM cameras").fetchall()
+        return [(row["camera_id"], _parse_datetime(row["last_seen_at"])) for row in rows]
+
     def list_camera_summaries(self) -> list[CameraSummary]:
         conn = self._get_connection()
         camera_rows = conn.execute(
@@ -782,7 +793,7 @@ class SQLiteMetadataStore:
         if until is not None:
             query += " AND stored_at <= ?"
             params.append(until.astimezone(timezone.utc).isoformat())
-        query += " ORDER BY stored_at DESC LIMIT ? OFFSET ?"
+        query += " ORDER BY stored_at DESC, id DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
         conn = self._get_connection()
         rows = conn.execute(query, tuple(params)).fetchall()
@@ -856,7 +867,7 @@ class SQLiteMetadataStore:
             FROM detections
             JOIN snapshots ON snapshots.id = detections.snapshot_id
             {where}
-            ORDER BY snapshots.stored_at DESC LIMIT ? OFFSET ?
+            ORDER BY snapshots.stored_at DESC, snapshots.id DESC LIMIT ? OFFSET ?
         """
         params.extend([limit, offset])
 
@@ -876,18 +887,19 @@ class SQLiteMetadataStore:
             for row in rows
         ]
 
-    def list_pending_snapshot_ids(self, *, limit: int = 100) -> list[int]:
+    def list_pending_snapshot_ids(self, *, limit: int | None = None) -> list[int]:
         conn = self._get_connection()
-        rows = conn.execute(
-            """
+        query = """
             SELECT id
             FROM snapshots
             WHERE inference_status = 'pending'
             ORDER BY stored_at ASC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+        """
+        params: tuple[object, ...] = ()
+        if limit is not None:
+            query += " LIMIT ?"
+            params = (limit,)
+        rows = conn.execute(query, params).fetchall()
         return [int(row["id"]) for row in rows]
 
     def reset_processing_snapshots(self) -> None:
@@ -972,22 +984,25 @@ class SQLiteMetadataStore:
                 "DELETE FROM detections WHERE snapshot_id = ?",
                 (snapshot_id,),
             )
-            for detection in detections:
-                conn.execute(
+            if detections:
+                conn.executemany(
                     """
                     INSERT INTO detections (
                         snapshot_id, label, score, x1, y1, x2, y2
                     ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (
-                        snapshot_id,
-                        detection.label,
-                        detection.score,
-                        detection.x1,
-                        detection.y1,
-                        detection.x2,
-                        detection.y2,
-                    ),
+                    [
+                        (
+                            snapshot_id,
+                            detection.label,
+                            detection.score,
+                            detection.x1,
+                            detection.y1,
+                            detection.x2,
+                            detection.y2,
+                        )
+                        for detection in detections
+                    ],
                 )
 
     def _detections_by_snapshot_id(

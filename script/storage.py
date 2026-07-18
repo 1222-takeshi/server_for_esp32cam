@@ -115,8 +115,6 @@ class Storage(Protocol):
 
     def list_images(self) -> list[StoredImage]: ...
 
-    def read_image(self, name: str) -> bytes: ...
-
     def read_image_by_relative_path(self, relative_path: str) -> bytes: ...
 
     def read_image_path_by_relative_path(self, relative_path: str) -> Path: ...
@@ -461,17 +459,6 @@ class LocalFilesystemStorage:
                 # next scan re-hashes this file, matching the old behavior.
                 pass
         return video
-
-    def read_image(self, name: str) -> bytes:
-        if not name or Path(name).name != name:
-            raise FileNotFoundError(name)
-        if Path(name).suffix.lower() not in {".jpg", ".jpeg"}:
-            raise FileNotFoundError(name)
-
-        matches = [path for path in self.upload_dir.rglob(name) if path.is_file()]
-        if len(matches) != 1:
-            raise FileNotFoundError(name)
-        return matches[0].read_bytes()
 
     def read_image_by_relative_path(self, relative_path: str) -> bytes:
         return self._resolve_relative_path(relative_path).read_bytes()

@@ -43,7 +43,11 @@ class InferenceService:
             return
 
         self.metadata_store.reset_processing_snapshots()
-        for snapshot_id in self.metadata_store.list_pending_snapshot_ids():
+        # Startup-only recovery sweep, not a hot path: re-queue every
+        # snapshot left pending/processing from a prior run, not just the
+        # oldest 100 (anything beyond that cap was previously orphaned
+        # forever, since nothing re-scans for pending work after boot).
+        for snapshot_id in self.metadata_store.list_pending_snapshot_ids(limit=None):
             self._queue.put(snapshot_id)
 
         self._worker = threading.Thread(target=self._worker_loop, daemon=True, name="esp32cam-inference")
