@@ -1083,6 +1083,19 @@ def test_metrics_endpoint_includes_http_request_count(client):
     assert "esp32cam_http_requests_total" in body
 
 
+def test_metrics_endpoint_caches_disk_usage_within_ttl(client):
+    import script.routes as routes_module
+
+    routes_module._disk_usage_cache.clear()
+    usage = type("usage", (), {"free": 9_000, "total": 10_000, "used": 1_000})()
+
+    with patch("script.routes.shutil.disk_usage", return_value=usage) as mock_disk_usage:
+        client.get("/metrics")
+        client.get("/metrics")
+
+    assert mock_disk_usage.call_count == 1
+
+
 def test_upload_logs_disk_error_at_95_percent(client, caplog):
     fake_usage = type("disk_usage", (), {"total": 100, "used": 96, "free": 4})()
     with patch("script.routes.shutil.disk_usage", return_value=fake_usage):
@@ -1328,6 +1341,17 @@ def test_api_openapi_yaml_serves_spec(client):
     body = response.get_data(as_text=True)
     assert "openapi:" in body
     assert "/upload" in body
+
+
+def test_api_openapi_yaml_caches_spec_text(client):
+    from script.routes import _openapi_spec_text
+
+    _openapi_spec_text.cache_clear()
+
+    client.get("/api/openapi.yaml")
+    client.get("/api/openapi.yaml")
+
+    assert _openapi_spec_text.cache_info().hits >= 1
 
 
 def test_api_docs_serves_swagger_ui(client):
