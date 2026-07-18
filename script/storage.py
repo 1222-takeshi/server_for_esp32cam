@@ -146,7 +146,7 @@ class Storage(Protocol):
         duration_ms: int | None = None,
     ) -> StoredVideo: ...
 
-    def list_videos(self) -> list[StoredVideo]: ...
+    def list_videos(self, *, include_metadata: bool = True) -> list[StoredVideo]: ...
 
     def read_video_by_relative_path(self, relative_path: str) -> tuple[bytes, str]: ...
 
@@ -388,9 +388,9 @@ class LocalFilesystemStorage:
             self._cleanup_empty_parents(path)
             raise
 
-    def list_videos(self) -> list[StoredVideo]:
+    def list_videos(self, *, include_metadata: bool = True) -> list[StoredVideo]:
         videos = [
-            self._stored_video(path)
+            self._stored_video(path, include_metadata=include_metadata)
             for path in self.upload_dir.rglob("*.mp4")
             if path.is_file() and path.parent.name == "videos"
         ]
@@ -427,13 +427,29 @@ class LocalFilesystemStorage:
         path.unlink(missing_ok=True)
         self._cleanup_empty_parents(path)
 
-    def _stored_video(self, path: Path) -> StoredVideo:
+    def _stored_video(self, path: Path, *, include_metadata: bool = True) -> StoredVideo:
         stat = path.stat()
         try:
             camera_id = path.relative_to(self.upload_dir).parts[0]
             camera_id = _validate_camera_id(camera_id)
         except (ValueError, IndexError):
             camera_id = "unknown"
+
+        if not include_metadata:
+            # Retention decisions only use relative_path/size/stored_at/camera_id,
+            # so skip the sidecar JSON read and the legacy sha256 backfill below.
+            return StoredVideo(
+                name=path.name,
+                relative_path=path.relative_to(self.upload_dir).as_posix(),
+                size=stat.st_size,
+                camera_id=camera_id,
+                captured_at=None,
+                stored_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+                duration_ms=None,
+                content_type="video/mp4",
+                sha256="",
+            )
+
         captured_at, duration_ms, content_type, sha256 = self._read_video_metadata(path)
         data_sha256 = sha256
         if data_sha256 is None:
@@ -544,7 +560,11 @@ class LocalFilesystemStorage:
 
         preserved = preserve_relative_paths or set()
         reference = now or datetime.now(tz=timezone.utc)
-        videos = self.list_videos()
+        # Retention decisions only use relative_path/size/stored_at/camera_id,
+        # never captured_at/duration_ms/sha256, so skip the per-video JSON
+        # sidecar read (and legacy sha256 backfill) that list_videos() does
+        # by default. Mirrors the same fix already applied to apply_retention().
+        videos = self.list_videos(include_metadata=False)
         candidates = sorted(
             [v for v in videos if v.relative_path not in preserved],
             key=lambda item: item.stored_at,
