@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from functools import lru_cache
 from io import BytesIO, StringIO
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -8,6 +9,7 @@ from queue import Empty, Queue
 import re
 import shutil
 import threading
+import time
 import uuid
 
 from flask import Blueprint, Response, current_app, jsonify, render_template, request, send_file, stream_with_context
@@ -1139,6 +1141,26 @@ def api_camera_logs(camera_id: str):
     return jsonify({"camera_id": camera_id, "logs": [_serialize_device_log(log) for log in logs]})
 
 
+_DISK_USAGE_CACHE_SECONDS = 5.0
+_disk_usage_cache: dict[str, tuple[float, object]] = {}
+
+
+def _cached_disk_usage(path: str):
+    """`shutil.disk_usage()` with a short TTL cache, keyed by path.
+
+    Called on every `/metrics` scrape; a Prometheus scrape interval shorter
+    than the TTL would otherwise turn each scrape into an extra syscall for
+    no observable benefit (disk usage doesn't change meaningfully sub-second).
+    """
+    now = time.monotonic()
+    cached = _disk_usage_cache.get(path)
+    if cached is not None and now - cached[0] < _DISK_USAGE_CACHE_SECONDS:
+        return cached[1]
+    usage = shutil.disk_usage(path)
+    _disk_usage_cache[path] = (now, usage)
+    return usage
+
+
 @server.route("/metrics")
 @require_admin_auth
 def metrics():
@@ -1151,7 +1173,7 @@ def metrics():
     # Refresh gauges with current system state
     upload_dir = current_app.config["UPLOAD_DIR"]
     try:
-        usage = shutil.disk_usage(upload_dir)
+        usage = _cached_disk_usage(str(upload_dir))
         app_metrics.storage_used_bytes.set(usage.used)
     except OSError:
         pass
@@ -1171,12 +1193,20 @@ def metrics():
     )
 
 
-@server.route("/api/openapi.yaml")
-def api_openapi_yaml():
+@lru_cache(maxsize=1)
+def _openapi_spec_text() -> str | None:
     spec_path = Path(__file__).resolve().parent.parent / "docs" / "openapi.yaml"
     if not spec_path.is_file():
+        return None
+    return spec_path.read_text(encoding="utf-8")
+
+
+@server.route("/api/openapi.yaml")
+def api_openapi_yaml():
+    spec_text = _openapi_spec_text()
+    if spec_text is None:
         return jsonify({"message": "OpenAPI spec not found"}), 404
-    return Response(spec_path.read_text(encoding="utf-8"), mimetype="application/yaml")
+    return Response(spec_text, mimetype="application/yaml")
 
 
 _SWAGGER_UI_HTML = """\
