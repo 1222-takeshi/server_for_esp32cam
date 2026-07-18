@@ -102,6 +102,25 @@ def test_apply_video_retention_preserve_skips_current_upload(tmp_path):
     assert (storage.upload_dir / v2.relative_path).exists()
 
 
+def test_apply_video_retention_does_not_read_metadata_sidecars(tmp_path, monkeypatch):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+    old = _save_video(storage)
+    _pin_mtime(storage, old, 1_800_000_000)
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("apply_video_retention must not read metadata sidecars")
+
+    monkeypatch.setattr(storage, "_read_video_metadata", fail_if_called)
+    monkeypatch.setattr("script.storage._sha256_file", fail_if_called)
+
+    result = storage.apply_video_retention(
+        StorageRetentionPolicy(max_age_seconds=60),
+        now=datetime.fromtimestamp(1_800_000_120, tz=timezone.utc),
+    )
+
+    assert result.deleted_relative_paths == [old.relative_path]
+
+
 def test_apply_video_retention_disabled_policy_returns_empty(tmp_path):
     storage = LocalFilesystemStorage(tmp_path / "uploads")
     v = _save_video(storage)
