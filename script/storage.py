@@ -113,7 +113,7 @@ class Storage(Protocol):
         captured_at: datetime,
     ) -> StoredImage: ...
 
-    def list_images(self) -> list[StoredImage]: ...
+    def list_images(self, *, include_metadata: bool = True) -> list[StoredImage]: ...
 
     def read_image_by_relative_path(self, relative_path: str) -> bytes: ...
 
@@ -271,9 +271,9 @@ class LocalFilesystemStorage:
             self._cleanup_empty_parents(path)
             raise
 
-    def list_images(self) -> list[StoredImage]:
+    def list_images(self, *, include_metadata: bool = True) -> list[StoredImage]:
         images = [
-            StoredImage(*self._stored_image_fields(path))
+            StoredImage(*self._stored_image_fields(path, include_metadata=include_metadata))
             for path in self.upload_dir.rglob("*")
             if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg"}
         ]
@@ -282,9 +282,11 @@ class LocalFilesystemStorage:
     def _stored_image_fields(
         self,
         path: Path,
+        *,
+        include_metadata: bool = True,
     ) -> tuple[str, str, int, datetime, str | None, datetime | None]:
         stat = path.stat()
-        device_id, captured_at = self._read_metadata(path)
+        device_id, captured_at = self._read_metadata(path) if include_metadata else (None, None)
         return (
             path.name,
             path.relative_to(self.upload_dir).as_posix(),
@@ -496,7 +498,10 @@ class LocalFilesystemStorage:
 
         preserved = preserve_relative_paths or set()
         reference = now or datetime.now(tz=timezone.utc)
-        images = self.list_images()
+        # Retention decisions only use relative_path/size/created_at (file
+        # mtime), never device_id/captured_at, so skip the per-image JSON
+        # sidecar read+parse that list_images() does by default.
+        images = self.list_images(include_metadata=False)
         candidates = sorted(
             [image for image in images if image.relative_path not in preserved],
             key=lambda item: item.created_at,
