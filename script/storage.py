@@ -114,6 +114,8 @@ class Storage(Protocol):
 
     def list_images(self, *, include_metadata: bool = True) -> list[StoredImage]: ...
 
+    def read_image_metadata(self, relative_path: str) -> tuple[str | None, datetime | None]: ...
+
     def read_image_by_relative_path(self, relative_path: str) -> bytes: ...
 
     def read_image_path_by_relative_path(self, relative_path: str) -> Path: ...
@@ -277,6 +279,10 @@ class LocalFilesystemStorage:
             if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg"}
         ]
         return sorted(images, key=lambda image: image.created_at, reverse=True)
+
+    def read_image_metadata(self, relative_path: str) -> tuple[str | None, datetime | None]:
+        path = self._resolve_relative_path(relative_path)
+        return self._read_metadata(path)
 
     def _stored_image_fields(
         self,
