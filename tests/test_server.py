@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from script.app import create_app
+from script.storage import LocalFilesystemStorage
 from tests.conftest import MINIMAL_JPEG
 
 
@@ -68,6 +71,37 @@ def test_upload_marks_inference_skipped_when_detector_is_disabled(client):
     files_response = client.get("/files")
     assert files_response.status_code == 200
     assert b"Inference: skipped" in files_response.data
+
+
+def test_create_app_indexes_preexisting_images_with_their_stored_metadata(tmp_path):
+    upload_dir = tmp_path / "uploads"
+    # Pre-populate storage before the app (and its metadata index) exist, to
+    # simulate images left on disk by a prior process run.
+    pre_seed_storage = LocalFilesystemStorage(upload_dir)
+    stored = pre_seed_storage.save_image(
+        MINIMAL_JPEG,
+        "image/jpeg",
+        device_id="esp32cam-preexisting",
+        captured_at=datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc),
+    )
+
+    app = create_app(
+        {
+            "TESTING": True,
+            "UPLOAD_DIR": upload_dir,
+            "DB_PATH": tmp_path / "esp32cam.sqlite3",
+            "INFERENCE_MODE": "sync",
+        }
+    )
+    client = app.test_client()
+
+    response = client.get("/api/cameras/esp32cam-preexisting/snapshots")
+
+    assert response.status_code == 200
+    snapshots = response.get_json()["snapshots"]
+    assert len(snapshots) == 1
+    assert snapshots[0]["filename"] == stored.name
+    assert snapshots[0]["captured_at"] == "2026-03-11T12:00:00+00:00"
 
 
 def test_upload_marks_inference_failed_when_detector_configuration_is_invalid(tmp_path):

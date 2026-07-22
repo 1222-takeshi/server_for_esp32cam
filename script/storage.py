@@ -114,6 +114,10 @@ class Storage(Protocol):
 
     def list_images(self, *, include_metadata: bool = True) -> list[StoredImage]: ...
 
+    def read_image_metadata_by_relative_path(
+        self, relative_path: str
+    ) -> tuple[str | None, datetime | None]: ...
+
     def read_image_by_relative_path(self, relative_path: str) -> bytes: ...
 
     def read_image_path_by_relative_path(self, relative_path: str) -> Path: ...
@@ -476,6 +480,17 @@ class LocalFilesystemStorage:
                 # next scan re-hashes this file, matching the old behavior.
                 pass
         return video
+
+    def read_image_metadata_by_relative_path(
+        self, relative_path: str
+    ) -> tuple[str | None, datetime | None]:
+        """Read just the device_id/captured_at sidecar for one image.
+
+        Used to backfill metadata for the (typically small) set of on-disk
+        images not yet present in the metadata index, without having to read
+        every image's sidecar JSON up front.
+        """
+        return self._read_metadata(self._resolve_relative_path(relative_path))
 
     def read_image_by_relative_path(self, relative_path: str) -> bytes:
         return self._resolve_relative_path(relative_path).read_bytes()

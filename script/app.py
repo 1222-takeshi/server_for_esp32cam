@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -49,6 +50,32 @@ def _create_detector(app: Flask):
         )
     except Exception as exc:  # pragma: no cover - depends on optional deps and model file
         return DisabledDetector(str(exc), skip=False)
+
+
+def _sync_storage_index_lazily(storage, metadata_store) -> None:
+    """Index on-disk images that aren't in the metadata store yet.
+
+    `storage.list_images(include_metadata=True)` (the default) reads and
+    JSON-parses every image's sidecar file, including ones already indexed
+    from a prior run. On a long-lived deployment most files are already
+    indexed, so that cost is repeated on every process restart for no
+    benefit. Instead: list cheaply first (stat only, no sidecar read),
+    find which filenames are missing from the index, and only read the
+    sidecar for that (normally empty or small) subset before syncing.
+    """
+    cheap_images = storage.list_images(include_metadata=False)
+    if not cheap_images:
+        return
+    missing_names = metadata_store.unindexed_filenames([img.name for img in cheap_images])
+    if not missing_names:
+        return
+    images_to_sync = []
+    for img in cheap_images:
+        if img.name not in missing_names:
+            continue
+        device_id, captured_at = storage.read_image_metadata_by_relative_path(img.relative_path)
+        images_to_sync.append(replace(img, device_id=device_id, captured_at=captured_at))
+    metadata_store.sync_storage_index(images_to_sync)
 
 
 def create_app(test_config: dict | None = None) -> Flask:
@@ -101,7 +128,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         app.config["DB_PATH"],
         default_expected_interval_seconds=app.config["CAMERA_EXPECTED_INTERVAL_SECONDS"],
     )
-    metadata_store.sync_storage_index(storage.list_images())
+    _sync_storage_index_lazily(storage, metadata_store)
     detector = _create_detector(app)
     webhook_url = app.config.get("WEBHOOK_URL", "")
     webhook_min_score = app.config["WEBHOOK_MIN_SCORE"]

@@ -531,17 +531,13 @@ class SQLiteMetadataStore:
             )
         return int(cursor.rowcount)
 
-    def sync_storage_index(self, images: list[StoredImage]) -> None:
-        if not images:
-            return
-        conn = self._get_connection()
+    def _existing_filenames(self, conn: sqlite3.Connection, names: list[str]) -> set[str]:
         # Only check whether *these* on-disk filenames already exist in the
         # index, instead of materializing the entire (potentially huge)
         # snapshots table into a Python set. `filename` is UNIQUE/indexed,
         # so each chunked lookup is an indexed query, not a table scan, and
         # the memory/row count is bounded by the on-disk listing rather than
         # the historical size of the snapshots table.
-        names = [img.name for img in images]
         existing: set[str] = set()
         for offset in range(0, len(names), _SYNC_LOOKUP_CHUNK_SIZE):
             chunk = names[offset : offset + _SYNC_LOOKUP_CHUNK_SIZE]
@@ -551,6 +547,28 @@ class SQLiteMetadataStore:
                 tuple(chunk),
             ).fetchall()
             existing.update(row[0] for row in rows)
+        return existing
+
+    def unindexed_filenames(self, names: list[str]) -> set[str]:
+        """Return the subset of `names` not yet present in the snapshots table.
+
+        Lets callers (e.g. the app-startup storage sync) cheaply discover
+        which on-disk files still need their full metadata sidecar read
+        before building StoredImage rows, instead of reading the JSON
+        sidecar for every already-indexed file on every restart.
+        """
+        if not names:
+            return set()
+        conn = self._get_connection()
+        existing = self._existing_filenames(conn, names)
+        return {name for name in names if name not in existing}
+
+    def sync_storage_index(self, images: list[StoredImage]) -> None:
+        if not images:
+            return
+        conn = self._get_connection()
+        names = [img.name for img in images]
+        existing = self._existing_filenames(conn, names)
         new_images = [img for img in images if img.name not in existing]
         if not new_images:
             return

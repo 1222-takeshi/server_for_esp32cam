@@ -240,6 +240,29 @@ def test_sync_storage_index_skips_already_indexed_filenames(tmp_path):
     assert camera.last_seen_at == brand_new_time
 
 
+def test_unindexed_filenames_returns_only_names_missing_from_index(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+
+    assert store.unindexed_filenames([]) == set()
+    assert store.unindexed_filenames(["never-synced.jpg"]) == {"never-synced.jpg"}
+
+    store.sync_storage_index(
+        [
+            _stored_image(
+                name="indexed.jpg",
+                relative_path="cam-a/images/indexed.jpg",
+                camera_id="cam-a",
+                captured_at=stored_at,
+                stored_at=stored_at,
+            )
+        ]
+    )
+
+    assert store.unindexed_filenames(["indexed.jpg", "not-indexed.jpg"]) == {"not-indexed.jpg"}
+    assert store.unindexed_filenames(["indexed.jpg"]) == set()
+
+
 def test_metadata_store_deletes_snapshots_by_relative_path(tmp_path):
     store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
     stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
