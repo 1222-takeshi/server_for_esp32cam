@@ -15,6 +15,8 @@ import uuid
 from flask import Blueprint, Response, current_app, jsonify, render_template, request, send_file, stream_with_context
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from PIL import Image, UnidentifiedImageError
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from script.auth import (
     check_admin_token,
@@ -127,8 +129,6 @@ def _validate_camera_id(camera_id: str) -> str | None:
 
 def _validate_jpeg_image(data: bytes) -> str | None:
     """Returns None if the JPEG is valid, or an error message string if invalid."""
-    from PIL import Image, UnidentifiedImageError  # lazy import — Pillow is optional at import time
-
     max_dim = current_app.config.get("UPLOAD_MAX_IMAGE_DIMENSION", 4096)
     try:
         with Image.open(BytesIO(data)) as img:
@@ -1164,8 +1164,6 @@ def _cached_disk_usage(path: str):
 @server.route("/metrics")
 @require_admin_auth
 def metrics():
-    from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-
     app_metrics = current_app.extensions.get("app_metrics")
     if app_metrics is None:
         return jsonify({"message": "Metrics not available"}), 503
@@ -1186,7 +1184,6 @@ def metrics():
         ts = last_seen_at.timestamp() if last_seen_at else 0
         app_metrics.camera_last_seen_timestamp.labels(camera_id=camera_id).set(ts)
 
-    from flask import Response
     return Response(
         generate_latest(app_metrics.registry),
         mimetype=CONTENT_TYPE_LATEST,
