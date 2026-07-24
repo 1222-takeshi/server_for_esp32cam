@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -6,7 +7,7 @@ RUN useradd --create-home --shell /bin/sh appuser
 
 COPY pyproject.toml ./
 COPY script/ ./script/
-RUN pip install --no-cache-dir ".[server]"
+RUN --mount=type=cache,target=/root/.cache/pip pip install ".[server]"
 
 COPY templates/ ./templates/
 
