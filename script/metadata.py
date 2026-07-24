@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 import json
 import os
@@ -208,7 +209,7 @@ class SQLiteMetadataStore:
 
     def _initialize_schema(self, conn: sqlite3.Connection) -> None:
         conn.executescript(
-                """
+            """
                 CREATE TABLE IF NOT EXISTS cameras (
                     camera_id TEXT PRIMARY KEY,
                     display_name TEXT NOT NULL,
@@ -531,7 +532,12 @@ class SQLiteMetadataStore:
             )
         return int(cursor.rowcount)
 
-    def sync_storage_index(self, images: list[StoredImage]) -> None:
+    def sync_storage_index(
+        self,
+        images: list[StoredImage],
+        *,
+        hydrate_metadata: Callable[[str], tuple[str | None, datetime | None]] | None = None,
+    ) -> None:
         if not images:
             return
         conn = self._get_connection()
@@ -554,6 +560,17 @@ class SQLiteMetadataStore:
         new_images = [img for img in images if img.name not in existing]
         if not new_images:
             return
+        # `images` may have been listed with include_metadata=False (the
+        # caller only needs `name` for the existence check above) — hydrate
+        # device_id/captured_at here, one metadata-sidecar read per image,
+        # but only for the handful that turn out to actually be new instead
+        # of every image on disk.
+        if hydrate_metadata is not None:
+            hydrated = []
+            for img in new_images:
+                device_id, captured_at = hydrate_metadata(img.relative_path)
+                hydrated.append(replace(img, device_id=device_id, captured_at=captured_at))
+            new_images = hydrated
         for img in new_images:
             if img.device_id is not None:
                 self.ensure_camera(img.device_id, seen_at=img.created_at)

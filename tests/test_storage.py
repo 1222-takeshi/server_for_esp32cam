@@ -109,6 +109,21 @@ def test_storage_persists_request_metadata_in_camera_directory(tmp_path):
     assert files[0].captured_at == datetime(2026, 3, 11, 12, 34, 56, tzinfo=timezone.utc)
 
 
+def test_storage_read_image_metadata_returns_device_id_and_captured_at(tmp_path):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+    stored = storage.save_image(
+        b"\xff\xd8jpeg",
+        "image/jpeg",
+        device_id="esp32cam-front-door",
+        captured_at=datetime(2026, 3, 11, 12, 34, 56, tzinfo=timezone.utc),
+    )
+
+    device_id, captured_at = storage.read_image_metadata(stored.relative_path)
+
+    assert device_id == "esp32cam-front-door"
+    assert captured_at == datetime(2026, 3, 11, 12, 34, 56, tzinfo=timezone.utc)
+
+
 def test_storage_cleans_up_partial_write_when_metadata_write_fails(tmp_path, monkeypatch):
     storage = LocalFilesystemStorage(tmp_path / "uploads")
 

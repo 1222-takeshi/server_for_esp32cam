@@ -101,7 +101,10 @@ def create_app(test_config: dict | None = None) -> Flask:
         app.config["DB_PATH"],
         default_expected_interval_seconds=app.config["CAMERA_EXPECTED_INTERVAL_SECONDS"],
     )
-    metadata_store.sync_storage_index(storage.list_images())
+    metadata_store.sync_storage_index(
+        storage.list_images(include_metadata=False),
+        hydrate_metadata=storage.read_image_metadata,
+    )
     detector = _create_detector(app)
     webhook_url = app.config.get("WEBHOOK_URL", "")
     webhook_min_score = app.config["WEBHOOK_MIN_SCORE"]
@@ -138,9 +141,7 @@ def create_app(test_config: dict | None = None) -> Flask:
     video_retention_scan_gate = RetentionScanGate(
         app.config.get("VIDEO_RETENTION_SCAN_INTERVAL_UPLOADS", 1)
     )
-    disk_usage_scan_gate = RetentionScanGate(
-        app.config.get("DISK_USAGE_CHECK_INTERVAL_UPLOADS", 1)
-    )
+    disk_usage_scan_gate = RetentionScanGate(app.config.get("DISK_USAGE_CHECK_INTERVAL_UPLOADS", 1))
     upload_metrics = UploadMetricsRegistry()
     app_metrics = AppMetrics()
 
@@ -176,6 +177,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
         return response
+
     register_websocket_routes(
         app, snapshot_event_publisher, max_connections=app.config["MAX_WS_CONNECTIONS"]
     )

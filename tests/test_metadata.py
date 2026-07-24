@@ -176,9 +176,7 @@ def test_sync_storage_index_does_not_select_entire_snapshots_table(tmp_path):
     unfiltered_selects = [
         sql
         for sql in executed_sql
-        if "SELECT" in sql.upper()
-        and "FROM snapshots" in sql
-        and "WHERE" not in sql.upper()
+        if "SELECT" in sql.upper() and "FROM snapshots" in sql and "WHERE" not in sql.upper()
     ]
     assert unfiltered_selects == []
 
@@ -238,6 +236,66 @@ def test_sync_storage_index_skips_already_indexed_filenames(tmp_path):
     camera = store.get_camera("cam-a")
     assert camera is not None
     assert camera.last_seen_at == brand_new_time
+
+
+def test_sync_storage_index_hydrates_metadata_only_for_new_images(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    initial = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    new_time = datetime(2026, 3, 11, 12, 30, tzinfo=timezone.utc)
+
+    store.sync_storage_index(
+        [
+            _stored_image(
+                name="existing.jpg",
+                relative_path="cam-a/images/existing.jpg",
+                camera_id="cam-a",
+                captured_at=initial,
+                stored_at=initial,
+            )
+        ]
+    )
+
+    # Simulate the caller listing images with include_metadata=False: the
+    # StoredImage objects carry no device_id/captured_at, and hydration must
+    # be sourced from `hydrate_metadata` instead.
+    hydrate_calls: list[str] = []
+
+    def hydrate(relative_path: str) -> tuple[str | None, datetime | None]:
+        hydrate_calls.append(relative_path)
+        return "cam-a", new_time
+
+    store.sync_storage_index(
+        [
+            _stored_image(
+                name="existing.jpg",
+                relative_path="cam-a/images/existing.jpg",
+                camera_id=None,
+                captured_at=None,
+                stored_at=initial,
+            ),
+            _stored_image(
+                name="brand-new.jpg",
+                relative_path="cam-a/images/brand-new.jpg",
+                camera_id=None,
+                captured_at=None,
+                stored_at=new_time,
+            ),
+        ],
+        hydrate_metadata=hydrate,
+    )
+
+    # hydrate_metadata must only be called for the genuinely new image, not
+    # for the already-indexed one.
+    assert hydrate_calls == ["cam-a/images/brand-new.jpg"]
+
+    snapshot = next(
+        s for s in store.list_camera_snapshots("cam-a") if s.filename == "brand-new.jpg"
+    )
+    assert snapshot.captured_at == new_time
+
+    camera = store.get_camera("cam-a")
+    assert camera is not None
+    assert camera.last_seen_at == new_time
 
 
 def test_metadata_store_deletes_snapshots_by_relative_path(tmp_path):
@@ -672,9 +730,11 @@ def test_migrate_schema_adds_cascade_to_existing_db(tmp_path):
 
     store = SQLiteMetadataStore(db_path)
 
-    row = store._get_connection().execute(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='snapshots'"
-    ).fetchone()
+    row = (
+        store._get_connection()
+        .execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='snapshots'")
+        .fetchone()
+    )
     assert "ON DELETE CASCADE" in row["sql"].upper()
     assert store.get_camera("cam-x") is not None
     assert len(store.list_camera_snapshots("cam-x")) == 1
@@ -754,9 +814,11 @@ def _stored_video(
 def test_metadata_store_creates_videos_table(tmp_path):
     store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
 
-    row = store._get_connection().execute(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='videos'"
-    ).fetchone()
+    row = (
+        store._get_connection()
+        .execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='videos'")
+        .fetchone()
+    )
 
     assert row is not None
     assert "processing_status" in row["sql"]
