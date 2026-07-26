@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import threading
@@ -40,15 +41,22 @@ class CameraUploadMetrics:
 
 
 class UploadMetricsRegistry:
-    def __init__(self) -> None:
+    def __init__(self, max_tracked_cameras: int = 500) -> None:
         self._lock = threading.RLock()
-        self._metrics: dict[str, CameraUploadMetrics] = {}
+        self._metrics: OrderedDict[str, CameraUploadMetrics] = OrderedDict()
+        self._max_tracked_cameras = max_tracked_cameras
 
     def _get(self, camera_id: str) -> CameraUploadMetrics:
         metrics = self._metrics.get(camera_id)
         if metrics is None:
             metrics = CameraUploadMetrics(camera_id=camera_id)
             self._metrics[camera_id] = metrics
+            if self._max_tracked_cameras > 0 and len(self._metrics) > self._max_tracked_cameras:
+                # Evict the least-recently-active camera_id so a churn of
+                # spoofed/rotated device ids can't grow this dict unbounded.
+                self._metrics.popitem(last=False)
+        else:
+            self._metrics.move_to_end(camera_id)
         return metrics
 
     def record_connection(self, camera_id: str, *, at: datetime | None = None) -> None:

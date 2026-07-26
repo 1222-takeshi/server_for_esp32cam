@@ -142,7 +142,9 @@ def create_app(test_config: dict | None = None) -> Flask:
         app.config.get("VIDEO_RETENTION_SCAN_INTERVAL_UPLOADS", 1)
     )
     disk_usage_scan_gate = RetentionScanGate(app.config.get("DISK_USAGE_CHECK_INTERVAL_UPLOADS", 1))
-    upload_metrics = UploadMetricsRegistry()
+    upload_metrics = UploadMetricsRegistry(
+        max_tracked_cameras=app.config.get("MAX_TRACKED_CAMERAS", 500)
+    )
     app_metrics = AppMetrics()
 
     app.extensions["storage"] = storage
