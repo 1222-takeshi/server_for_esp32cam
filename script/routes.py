@@ -545,12 +545,15 @@ def get_file(filename: str):
         if snapshot is None:
             return jsonify({"message": "File not found"}), 404
         path = _storage().read_image_path_by_relative_path(snapshot.relative_path)
-        return send_file(
+        response = send_file(
             path,
             mimetype="image/jpeg",
             download_name=filename,
             conditional=True,
+            max_age=31536000,
         )
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
     except FileNotFoundError:
         return jsonify({"message": "File not found"}), 404
     except Exception as exc:  # pragma: no cover
@@ -776,12 +779,15 @@ def api_video_content(camera_id: str, video_id: int):
         path, content_type = _storage().read_video_path_by_relative_path(video.relative_path)
     except FileNotFoundError:
         return jsonify({"message": "Video not found"}), 404
-    return send_file(
+    response = send_file(
         path,
         mimetype=content_type,
         download_name=video.filename,
         conditional=True,
+        max_age=31536000,
     )
+    response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return response
 
 
 @server.route("/api/cameras/<camera_id>", methods=["DELETE"])
