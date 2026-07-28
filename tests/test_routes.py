@@ -207,6 +207,31 @@ def test_upload_rejects_invalid_device_id_chars(client):
     )
 
 
+def test_uploaded_device_id_between_64_and_128_chars_is_queryable_as_camera_id(client):
+    # Regression test for #255: device_id validation (/upload) accepted up
+    # to 128 chars while camera_id validation (video/stream endpoints, e.g.
+    # /api/cameras/<camera_id>/videos) capped at 64. A device that
+    # successfully uploaded a snapshot with a 65-128 char device_id was then
+    # reported as "Camera not found" by every camera_id-keyed endpoint. Both
+    # limits are now unified at 128 (script/validation.py).
+    long_device_id = "y" * 100
+    upload_response = client.post(
+        "/upload",
+        data=MINIMAL_JPEG,
+        headers={
+            "Content-Type": "image/jpeg",
+            "X-Device-Id": long_device_id,
+            "X-Captured-At": "2026-03-11T12:34:56Z",
+        },
+    )
+    assert upload_response.status_code == 200
+
+    videos_response = client.get(f"/api/cameras/{long_device_id}/videos")
+
+    assert videos_response.status_code == 200
+    assert videos_response.get_json()["camera_id"] == long_device_id
+
+
 def test_upload_rejects_invalid_captured_at_metadata(client):
     response = client.post(
         "/upload",

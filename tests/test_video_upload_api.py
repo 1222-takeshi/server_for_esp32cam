@@ -156,6 +156,43 @@ def test_video_upload_rejects_invalid_camera_id(tmp_path):
     assert response.get_json()["message"] == "Camera not found"
 
 
+def test_video_upload_accepts_camera_id_between_64_and_128_chars(tmp_path):
+    # Regression test for #255: camera_id validation (script/validation.py,
+    # shared with device_id validation in routes.py) used to cap at 64 chars
+    # while device_id-keyed endpoints (e.g. /upload, /api/status_update)
+    # accepted up to 128. A device_id in the 65-128 range could therefore
+    # authenticate/upload snapshots and appear in listings, yet be reported
+    # as "Camera not found" by every camera_id-keyed endpoint, including
+    # this one. Both limits are now unified at 128.
+    long_camera_id = "x" * 100
+    app = _video_app(tmp_path, DEVICE_API_KEYS={long_camera_id: "key-long"})
+    client = app.test_client()
+
+    response = client.post(
+        f"/api/cameras/{long_camera_id}/videos",
+        data=_minimal_mp4(),
+        headers=_headers(long_camera_id, "key-long"),
+    )
+
+    assert response.status_code == 201, response.get_json()
+    assert response.get_json()["video"]["camera_id"] == long_camera_id
+
+
+def test_video_upload_still_rejects_camera_id_over_128_chars(tmp_path):
+    too_long_camera_id = "x" * 129
+    app = _video_app(tmp_path, DEVICE_API_KEYS={too_long_camera_id: "key-long"})
+    client = app.test_client()
+
+    response = client.post(
+        f"/api/cameras/{too_long_camera_id}/videos",
+        data=_minimal_mp4(),
+        headers=_headers(too_long_camera_id, "key-long"),
+    )
+
+    assert response.status_code == 404
+    assert response.get_json()["message"] == "Camera not found"
+
+
 def test_video_upload_rejects_payload_over_video_limit(tmp_path):
     app = _video_app(tmp_path, MAX_VIDEO_CONTENT_LENGTH=16)
     client = app.test_client()

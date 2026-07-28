@@ -6,7 +6,6 @@ from io import BytesIO, StringIO
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from queue import Empty, Queue
-import re
 import shutil
 import threading
 import time
@@ -35,10 +34,12 @@ from script.metadata import (
 )
 from script.retention import apply_upload_retention, apply_video_upload_retention
 from script.storage import Storage
-from script.validation import is_valid_camera_id
+from script.validation import CAMERA_ID_MAX_LENGTH, is_valid_camera_id
 
-DEVICE_ID_MAX_LENGTH = 128
-_DEVICE_ID_RE = re.compile(rf"[A-Za-z0-9_\-]{{1,{DEVICE_ID_MAX_LENGTH}}}")
+# device_id and camera_id are the same identifier (see script/validation.py);
+# both are validated with is_valid_camera_id/CAMERA_ID_MAX_LENGTH so the two
+# checks can't drift apart again (see #255).
+DEVICE_ID_MAX_LENGTH = CAMERA_ID_MAX_LENGTH
 
 
 def _upload_rate_limit_key() -> str:
@@ -113,7 +114,7 @@ def _validate_device_id(device_id: str) -> str | None:
     """Returns an error message string if invalid, None if valid."""
     if not device_id:
         return "device_id is required"
-    if not _DEVICE_ID_RE.fullmatch(device_id):
+    if not is_valid_camera_id(device_id):
         return "device_id contains invalid characters or exceeds maximum length"
     return None
 
