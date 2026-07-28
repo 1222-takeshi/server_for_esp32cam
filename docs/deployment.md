@@ -249,6 +249,7 @@ All variables are optional unless marked **required for production**.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ESP32CAM_DEVICE_API_KEY` | _(empty — auth disabled)_ | **Required for production.** API key devices must send in `X-API-Key`. |
+| `ESP32CAM_DEVICE_API_KEYS` | _(empty)_ | Optional per-device keys as a JSON object (`{"cam-a": "key-a"}`). When set, a device's key is checked against its own device_id instead of any configured key. |
 | `ESP32CAM_ADMIN_TOKEN` | _(empty — auth disabled)_ | **Required for production.** Bearer token for admin endpoints and `/metrics`. |
 | `ESP32CAM_UPLOAD_DIR` | `./uploads` | Directory to store uploaded JPEG files. |
 | `ESP32CAM_DB_PATH` | `./esp32cam.sqlite3` | Path to the SQLite database. |
@@ -264,6 +265,7 @@ All variables are optional unless marked **required for production**.
 | `ESP32CAM_VIDEO_RETENTION_MAX_AGE_SECONDS` | `0` (disabled) | Delete videos older than this many seconds. Set `0` to disable. |
 | `ESP32CAM_VIDEO_RETENTION_MAX_BYTES` | `0` (disabled) | Delete oldest videos when total video storage exceeds this size. |
 | `ESP32CAM_VIDEO_RETENTION_SCAN_INTERVAL_UPLOADS` | `1` | Same as `ESP32CAM_STORAGE_RETENTION_SCAN_INTERVAL_UPLOADS` but for the video retention scan. |
+| `ESP32CAM_DISK_USAGE_CHECK_INTERVAL_UPLOADS` | `1` | Only recheck disk usage against `ESP32CAM_STORAGE_RETENTION_MAX_BYTES` every N uploads instead of every upload. |
 | `ESP32CAM_DETECTOR` | `disabled` | Object detector. Options: `disabled`, `tflite_cpu`. |
 | `ESP32CAM_MODEL_PATH` | _(empty)_ | Path to TFLite model file. Required when `DETECTOR=tflite_cpu`. |
 | `ESP32CAM_LABELS_PATH` | _(empty)_ | Path to labels text file (optional). |
@@ -273,6 +275,7 @@ All variables are optional unless marked **required for production**.
 | `ESP32CAM_CAMERA_EXPECTED_INTERVAL_SECONDS` | `300` | Seconds between expected uploads; used to compute camera health. |
 | `ESP32CAM_KEEP_ONLY_DETECTED_SNAPSHOTS` | `false` | If true, delete snapshots with successful inference and zero detections. |
 | `ESP32CAM_MAX_WS_CONNECTIONS` | `50` | Maximum concurrent WebSocket connections. |
+| `ESP32CAM_MAX_MJPEG_STREAMS` | `10` | Maximum concurrent MJPEG stream viewers per camera. |
 | `ESP32CAM_WEBHOOK_URL` | _(empty — disabled)_ | Webhook URL to POST when a person is detected. |
 | `ESP32CAM_WEBHOOK_MIN_SCORE` | `0.5` | Minimum score to trigger the webhook. |
 | `ESP32CAM_RATELIMIT_STORAGE_URI` | `memory://` | Flask-Limiter storage. Use `redis://host:6379` for multi-worker deployments. |
