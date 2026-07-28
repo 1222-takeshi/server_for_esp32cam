@@ -1047,7 +1047,7 @@ components:
           description: File size in bytes
         camera_id:
           type: string
-          maxLength: 64
+          maxLength: 128
           pattern: "^[A-Za-z0-9_\\-]+$"
         captured_at:
           type: string
