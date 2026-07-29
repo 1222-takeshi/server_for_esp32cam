@@ -253,6 +253,7 @@ All variables are optional unless marked **required for production**.
 | `ESP32CAM_ADMIN_TOKEN` | _(empty — auth disabled)_ | **Required for production.** Bearer token for admin endpoints and `/metrics`. |
 | `ESP32CAM_UPLOAD_DIR` | `./uploads` | Directory to store uploaded JPEG files. |
 | `ESP32CAM_DB_PATH` | `./esp32cam.sqlite3` | Path to the SQLite database. |
+| `ESP32CAM_STORAGE_BACKEND` | `local` | Storage backend. Only `local` is currently supported. |
 | `PORT` | `8080` | TCP port the server listens on. |
 | `ESP32CAM_MAX_CONTENT_LENGTH` | `1048576` (1 MiB) | Maximum JPEG payload size in bytes. |
 | `ESP32CAM_MAX_VIDEO_CONTENT_LENGTH` | `10485760` (10 MiB) | Maximum video payload size in bytes. |
@@ -276,10 +277,12 @@ All variables are optional unless marked **required for production**.
 | `ESP32CAM_KEEP_ONLY_DETECTED_SNAPSHOTS` | `false` | If true, delete snapshots with successful inference and zero detections. |
 | `ESP32CAM_MAX_WS_CONNECTIONS` | `50` | Maximum concurrent WebSocket connections. |
 | `ESP32CAM_MAX_MJPEG_STREAMS` | `10` | Maximum concurrent MJPEG stream viewers per camera. |
+| `ESP32CAM_MAX_TRACKED_CAMERAS` | `500` | Maximum distinct `camera_id`s tracked by the in-process upload metrics registry; least-recently-active entries are evicted beyond this cap. Set `0` to disable the cap. |
 | `ESP32CAM_WEBHOOK_URL` | _(empty — disabled)_ | Webhook URL to POST when a person is detected. |
 | `ESP32CAM_WEBHOOK_MIN_SCORE` | `0.5` | Minimum score to trigger the webhook. |
 | `ESP32CAM_RATELIMIT_STORAGE_URI` | `memory://` | Flask-Limiter storage. Use `redis://host:6379` for multi-worker deployments. |
 | `ESP32CAM_UPLOAD_WS_MIN_FRAME_INTERVAL_SECONDS` | `1.0` | Minimum seconds between WebSocket frames per connection. |
+| `ESP32CAM_LOG_FORMAT` | `text` | Log output format: `text` (human-readable) or `json` (structured, via python-json-logger). |
 
 ---
 
