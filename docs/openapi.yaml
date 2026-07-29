@@ -790,7 +790,9 @@ paths:
   /api/log_error:
     post:
       summary: Ingest a device log entry
-      description: Stores a log message from a device for later review in the admin UI.
+      description: |
+        Stores a log message from a device for later review in the admin UI.
+        Rate-limited to `LOG_ERROR_RATE_LIMIT` (default 30/min) per device API key.
       tags: [device]
       security:
         - deviceApiKey: []
@@ -815,6 +817,12 @@ paths:
                 $ref: "#/components/schemas/ErrorMessage"
         "401":
           description: Missing or invalid device API key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "429":
+          description: Rate limit exceeded
           content:
             application/json:
               schema:

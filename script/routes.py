@@ -1111,6 +1111,7 @@ def api_status_update():
 
 
 @server.route("/api/log_error", methods=["POST"])
+@limiter.limit(lambda: current_app.config.get("LOG_ERROR_RATE_LIMIT", "30 per minute"))
 @require_device_auth
 def api_log_error():
     body = request.get_json(silent=True) or {}

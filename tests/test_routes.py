@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from unittest.mock import patch
 
+from script.app import create_app
 from tests.conftest import MINIMAL_JPEG
 
 UPLOAD_HEADERS = {
@@ -811,6 +812,59 @@ def test_log_error_rejects_invalid_level(client):
 
     assert response.status_code == 400
     assert "level" in response.get_json()["message"]
+
+
+def test_log_error_is_rate_limited(tmp_path):
+    app = create_app(
+        {
+            "TESTING": True,
+            "UPLOAD_DIR": tmp_path / "uploads",
+            "DB_PATH": tmp_path / "esp32cam.sqlite3",
+            "INFERENCE_MODE": "sync",
+            "LOG_ERROR_RATE_LIMIT": "1 per hour",
+            # Explicit True (not just "unset"): other tests in this module
+            # create apps with RATELIMIT_ENABLED=False, and Flask-Limiter's
+            # `enabled` flag lives on the shared module-level `limiter`
+            # object (script.routes.limiter), so an unset value here would
+            # inherit whatever the most recently-initialized app left behind.
+            "RATELIMIT_ENABLED": True,
+        }
+    )
+    log_client = app.test_client()
+    payload = {"device_id": "cam-rate-limited", "level": "error", "message": "boom"}
+
+    first = log_client.post("/api/log_error", json=payload, content_type="application/json")
+    second = log_client.post("/api/log_error", json=payload, content_type="application/json")
+
+    assert first.status_code == 201
+    assert second.status_code == 429
+
+    with app.app_context():
+        logs = app.extensions["metadata_store"].list_device_logs("cam-rate-limited")
+    assert len(logs) == 1
+
+
+def test_log_error_rate_limit_is_configurable(tmp_path):
+    app = create_app(
+        {
+            "TESTING": True,
+            "UPLOAD_DIR": tmp_path / "uploads",
+            "DB_PATH": tmp_path / "esp32cam.sqlite3",
+            "INFERENCE_MODE": "sync",
+            "LOG_ERROR_RATE_LIMIT": "2 per hour",
+            "RATELIMIT_ENABLED": True,
+        }
+    )
+    log_client = app.test_client()
+    payload = {"device_id": "cam-two-allowed", "level": "error", "message": "boom"}
+
+    first = log_client.post("/api/log_error", json=payload, content_type="application/json")
+    second = log_client.post("/api/log_error", json=payload, content_type="application/json")
+    third = log_client.post("/api/log_error", json=payload, content_type="application/json")
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert third.status_code == 429
 
 
 def test_api_camera_logs_returns_logs_for_camera(client):
