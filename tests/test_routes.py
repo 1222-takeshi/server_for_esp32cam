@@ -1384,3 +1384,22 @@ def test_api_docs_serves_swagger_ui(client):
     assert response.status_code == 200
     assert "text/html" in response.content_type
     assert b"swagger-ui" in response.data
+
+
+def test_index_page_links_to_external_base_css_instead_of_inline_style(client):
+    response = client.get("/")
+    page = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "<style>" not in page
+    assert '<link rel="stylesheet" href="/static/base.css">' in page
+
+
+def test_static_base_css_is_served_with_long_lived_cache_headers(client):
+    response = client.get("/static/base.css")
+
+    assert response.status_code == 200
+    assert "text/css" in response.content_type
+    assert len(response.data) > 0
+    assert b":root" in response.data
+    assert response.headers["Cache-Control"] == "public, max-age=31536000, immutable"
