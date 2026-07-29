@@ -10,6 +10,7 @@ COPY script/ ./script/
 RUN --mount=type=cache,target=/root/.cache/pip pip install ".[server]"
 
 COPY templates/ ./templates/
+COPY static/ ./static/
 
 RUN mkdir -p uploads data && chown -R appuser:appuser /app
 

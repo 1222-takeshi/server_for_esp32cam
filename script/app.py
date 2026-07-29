@@ -52,8 +52,16 @@ def _create_detector(app: Flask):
 
 
 def create_app(test_config: dict | None = None) -> Flask:
-    app = Flask(__name__, template_folder=str(Config.BASE_DIR / "templates"))
+    app = Flask(
+        __name__,
+        template_folder=str(Config.BASE_DIR / "templates"),
+        static_folder=str(Config.BASE_DIR / "static"),
+    )
     app.config.from_object(Config)
+    # Serve static assets (e.g. templates/_base.html's extracted CSS) with a
+    # long-lived, cacheable response instead of relying on Flask's default
+    # (no max-age, revalidate-on-every-request) behavior.
+    app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 31536000
 
     @app.template_filter("jst")
     def format_jst(value: datetime | None, fmt: str = "%Y-%m-%d %H:%M:%S JST") -> str:
@@ -172,12 +180,19 @@ def create_app(test_config: dict | None = None) -> Flask:
     def _after_request(response):
         metrics = app.extensions.get("app_metrics")
         start = getattr(g, "_esp32cam_request_start", None)
+        endpoint = request.endpoint or "unknown"
         if metrics is not None and start is not None:
-            endpoint = request.endpoint or "unknown"
             metrics.finish_request(start, request.method, endpoint, response.status_code)
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        if endpoint == "static":
+            # Mirror the long-lived, cacheable Cache-Control used for
+            # /files/<filename> — static assets (e.g. base.css) are
+            # content-addressed enough (bundled with releases) to be safe
+            # to cache aggressively, and this doesn't depend on Flask's
+            # SEND_FILE_MAX_AGE_DEFAULT default of "no explicit max-age".
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
         return response
 
     register_websocket_routes(
