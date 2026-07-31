@@ -21,11 +21,18 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 matches the Dockerfile's production runtime (and its
+        # tflite-runtime dependency branch); 3.12 is the forward-looking
+        # version. Testing only one left the other's runtime path unverified.
+        python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
           cache: "pip"
           cache-dependency-path: pyproject.toml
       - name: Install dependencies
