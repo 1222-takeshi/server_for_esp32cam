@@ -6,9 +6,18 @@ import urllib.request
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from script.detector import Detection
 from script.metadata import SnapshotRecord
 from script.webhook import DISABLED_NOTIFIER, WebhookNotifier
+
+
+@pytest.fixture()
+def notifier():
+    instance = WebhookNotifier("http://example.com/hook", min_score=0.5)
+    yield instance
+    instance.close()
 
 
 def _snapshot(*, captured_at=None) -> SnapshotRecord:
@@ -30,8 +39,7 @@ def _detection(score: float) -> Detection:
     return Detection(label="person", score=score, x1=0.1, y1=0.1, x2=0.9, y2=0.9)
 
 
-def test_notifier_posts_when_detection_above_threshold():
-    notifier = WebhookNotifier("http://example.com/hook", min_score=0.5)
+def test_notifier_posts_when_detection_above_threshold(notifier):
     snapshot = _snapshot(captured_at=datetime(2026, 5, 23, 11, 0, tzinfo=timezone.utc))
     detections = [_detection(0.9)]
 
@@ -53,8 +61,7 @@ def test_notifier_posts_when_detection_above_threshold():
     assert "2026-05-23" in payload["detected_at"]
 
 
-def test_notifier_uses_stored_at_when_no_captured_at():
-    notifier = WebhookNotifier("http://example.com/hook", min_score=0.5)
+def test_notifier_uses_stored_at_when_no_captured_at(notifier):
     snapshot = _snapshot(captured_at=None)
 
     mock_response = MagicMock()
@@ -72,26 +79,24 @@ def test_notifier_uses_stored_at_when_no_captured_at():
 
 
 def test_notifier_skips_when_all_detections_below_threshold():
-    notifier = WebhookNotifier("http://example.com/hook", min_score=0.8)
+    high_threshold_notifier = WebhookNotifier("http://example.com/hook", min_score=0.8)
+    try:
+        with patch("urllib.request.urlopen") as mock_open:
+            high_threshold_notifier.notify(_snapshot(), [_detection(0.6)])
 
-    with patch("urllib.request.urlopen") as mock_open:
-        notifier.notify(_snapshot(), [_detection(0.6)])
+        mock_open.assert_not_called()
+    finally:
+        high_threshold_notifier.close()
 
-    mock_open.assert_not_called()
 
-
-def test_notifier_skips_when_no_detections():
-    notifier = WebhookNotifier("http://example.com/hook", min_score=0.5)
-
+def test_notifier_skips_when_no_detections(notifier):
     with patch("urllib.request.urlopen") as mock_open:
         notifier.notify(_snapshot(), [])
 
     mock_open.assert_not_called()
 
 
-def test_notifier_logs_warning_on_delivery_failure(caplog):
-    notifier = WebhookNotifier("http://example.com/hook", min_score=0.5)
-
+def test_notifier_logs_warning_on_delivery_failure(notifier, caplog):
     import logging
     with caplog.at_level(logging.WARNING, logger="script.webhook"):
         with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("conn refused")):
@@ -104,3 +109,18 @@ def test_notifier_logs_warning_on_delivery_failure(caplog):
 
 def test_disabled_notifier_does_nothing():
     DISABLED_NOTIFIER.notify(_snapshot(), [_detection(0.99)])
+    DISABLED_NOTIFIER.close()
+
+
+def test_close_shuts_down_executor_and_drops_further_notifications(caplog):
+    closable_notifier = WebhookNotifier("http://example.com/hook", min_score=0.5)
+    closable_notifier.close()
+
+    import logging
+    with caplog.at_level(logging.WARNING, logger="script.webhook"):
+        with patch("urllib.request.urlopen") as mock_open:
+            result = closable_notifier.notify(_snapshot(), [_detection(0.9)])
+
+    assert result is None
+    mock_open.assert_not_called()
+    assert any("executor is shut down" in r.message for r in caplog.records)

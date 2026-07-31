@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -125,6 +126,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         if webhook_url
         else DISABLED_NOTIFIER
     )
+    atexit.register(notifier.close)
     inference_service = InferenceService(
         metadata_store=metadata_store,
         storage=storage,

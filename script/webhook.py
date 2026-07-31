@@ -71,9 +71,20 @@ class WebhookNotifier:
             _logger.warning("Webhook executor is shut down; dropping notification")
             return None
 
+    def close(self, wait: bool = True) -> None:
+        """Shut down the notifier's thread pool.
+
+        Without this, every `WebhookNotifier` instance leaks its worker
+        threads for the life of the process once it goes out of scope.
+        """
+        self._executor.shutdown(wait=wait)
+
 
 class _DisabledNotifier:
     def notify(self, _snapshot: SnapshotRecord, _detections: list[Detection]) -> None:
+        pass
+
+    def close(self, wait: bool = True) -> None:
         pass
 
 
