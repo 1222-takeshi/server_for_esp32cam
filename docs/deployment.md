@@ -260,6 +260,7 @@ All variables are optional unless marked **required for production**.
 | `ESP32CAM_UPLOAD_MAX_IMAGE_DIMENSION` | `4096` | Maximum image dimension in pixels (width or height). |
 | `ESP32CAM_UPLOAD_RATE_LIMIT` | `10 per minute` | Upload rate limit per device API key. Flask-Limiter format. |
 | `ESP32CAM_VIDEO_UPLOAD_RATE_LIMIT` | `5 per minute` | Video upload rate limit per device API key. Flask-Limiter format. |
+| `ESP32CAM_LOG_ERROR_RATE_LIMIT` | `30 per minute` | `POST /api/log_error` rate limit per device API key. Flask-Limiter format. |
 | `ESP32CAM_STORAGE_RETENTION_MAX_AGE_SECONDS` | `2592000` (30 days) | Delete images older than this. Set `0` to disable. |
 | `ESP32CAM_STORAGE_RETENTION_MAX_BYTES` | `0` (disabled) | Delete oldest images when total exceeds this size. |
 | `ESP32CAM_STORAGE_RETENTION_SCAN_INTERVAL_UPLOADS` | `1` | Only run the full image retention directory scan every N uploads instead of every upload (still always scans on the very first upload). Raise on deployments with many stored files to cut per-upload disk I/O. |
