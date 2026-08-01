@@ -144,12 +144,12 @@ def register_websocket_routes(
 
     @sock.route("/ws/cameras/<camera_id>/upload")
     def camera_upload(websocket, camera_id: str):
+        if _validate_device_id(camera_id):
+            websocket.send(json.dumps({"type": "error", "message": "Invalid camera_id"}))
+            return
         auth_error = _check_camera_upload_auth(camera_id, request.headers.get("X-API-Key"))
         if auth_error is not None:
             websocket.send(json.dumps(auth_error))
-            return
-        if _validate_device_id(camera_id):
-            websocket.send(json.dumps({"type": "error", "message": "Invalid camera_id"}))
             return
         try:
             disconnect = hub.connect(websocket, camera_id=camera_id)
