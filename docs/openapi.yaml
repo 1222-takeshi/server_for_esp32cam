@@ -10,10 +10,12 @@ info:
 
     | Header | Scope |
     |--------|-------|
-    | `X-API-Key: <DEVICE_API_KEY>` | Device endpoints (`/upload`, `/api/status_update`, `/api/log_error`, WebSocket upload) |
+    | `X-API-Key: <DEVICE_API_KEY>` | Device endpoints (`/upload`, `/api/status_update`, `/api/log_error`, WebSocket upload); identity-bearing requests must match `ESP32CAM_SHARED_KEY_DEVICE_ID` in shared-key mode |
     | `Authorization: Bearer <ADMIN_TOKEN>` | Admin endpoints (`DELETE /api/cameras/*`, `PATCH /api/cameras/*`, `/api/cameras/*/logs`, `/metrics`, export endpoints) |
 
-    When the corresponding environment variable is not set, the check is skipped.
+    When device authentication variables are not set, the check is skipped for
+    local development. For multiple devices, configure
+    `ESP32CAM_DEVICE_API_KEYS`; do not reuse one global key across identities.
 
   version: "1.0.0"
   license:
@@ -130,6 +132,12 @@ paths:
                 $ref: "#/components/schemas/ErrorMessage"
         "401":
           description: Missing or invalid device API key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "403":
+          description: API key is valid but not assigned to this device_id
           content:
             application/json:
               schema:
@@ -469,7 +477,7 @@ paths:
   /api/devices/{device_id}/desired-config:
     get:
       summary: Device polling endpoint for desired config
-      description: ESP32-CAM calls this when awake. Per-device API keys from `ESP32CAM_DEVICE_API_KEYS` must match the path `device_id` when configured.
+      description: ESP32-CAM calls this when awake. In shared-key mode, `ESP32CAM_DEVICE_API_KEY` must be paired with `ESP32CAM_SHARED_KEY_DEVICE_ID` and match the path `device_id`. For multiple devices, per-device API keys from `ESP32CAM_DEVICE_API_KEYS` must match the path `device_id`.
       tags: [device]
       security:
         - deviceApiKey: []
@@ -786,6 +794,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorMessage"
+        "403":
+          description: API key is valid but not assigned to this device_id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
 
   /api/log_error:
     post:
@@ -817,6 +831,12 @@ paths:
                 $ref: "#/components/schemas/ErrorMessage"
         "401":
           description: Missing or invalid device API key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "403":
+          description: API key is valid but not assigned to this device_id
           content:
             application/json:
               schema:
@@ -915,9 +935,11 @@ components:
       name: X-API-Key
       description: |
         Device API key header. Legacy endpoints use `ESP32CAM_DEVICE_API_KEY`
-        when configured. Video upload requires per-camera keys from
-        `ESP32CAM_DEVICE_API_KEYS` and fails closed when a camera mapping is
-        missing.
+        when configured, and identity-bearing requests must also match
+        `ESP32CAM_SHARED_KEY_DEVICE_ID`. Use per-device keys from
+        `ESP32CAM_DEVICE_API_KEYS` for multiple cameras; requests fail closed
+        when the identity binding is missing or mismatched. Video upload
+        always requires a matching camera key.
     adminToken:
       type: http
       scheme: bearer

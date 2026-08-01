@@ -384,7 +384,10 @@ alive: millis=... wifi=ok camera_init=ok jpeg_capture=ok http_upload=ok http_sta
 4. `ota_update_requested=true` かつ `ENABLE_ARDUINO_OTA` と非空 `OTA_PASSWORD` が設定されている場合、`ota_window_seconds` の間だけ OTA window を開きます。
 5. `restart_requested=true` の場合、ack後に `ESP.restart()` します。
 
-`DEVICE_API_KEY` は `/upload` の `X-API-Key` にも付与されます。サーバー側で `ESP32CAM_DEVICE_API_KEYS` を設定した場合は、`DEVICE_ID` に対応するキーを必ず設定してください。
+`DEVICE_API_KEY` は `/upload` の `X-API-Key` にも付与されます。サーバー側で単一デバイス用の
+`ESP32CAM_DEVICE_API_KEY` を設定する場合は、`ESP32CAM_SHARED_KEY_DEVICE_ID` をこの
+`DEVICE_ID` と同じ値にしてください。複数デバイスでは `ESP32CAM_DEVICE_API_KEYS` に
+`DEVICE_ID` ごとのキーを設定し、同じ共有キーを使い回さないでください。
 
 ## よくある問題
 

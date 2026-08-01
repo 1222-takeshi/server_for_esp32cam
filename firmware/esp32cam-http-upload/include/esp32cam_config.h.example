@@ -21,8 +21,10 @@
 // DEVICE_API_BASE_URL is the Flask server origin without a trailing slash.
 // Example: http://192.168.1.23:8080
 #define DEVICE_API_BASE_URL "http://YOUR_MAC_LAN_IP:8080"
-// Leave empty when the server does not enforce ESP32CAM_DEVICE_API_KEYS.
-// Set this to the per-device key when ESP32CAM_DEVICE_API_KEYS is configured.
+// Leave empty when device authentication is disabled.
+// For a single device, the server's ESP32CAM_SHARED_KEY_DEVICE_ID must match
+// DEVICE_ID. For multiple devices, set a per-device key in
+// ESP32CAM_DEVICE_API_KEYS instead of reusing one shared key.
 #define DEVICE_API_KEY ""
 #define DESIRED_CONFIG_POLL_TIMEOUT_MS 10000
 #define DESIRED_CONFIG_FIRMWARE_VERSION "0.3.0"

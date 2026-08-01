@@ -68,7 +68,7 @@ uploads/
 - `X-API-Key` を要求する。
 - `ESP32CAM_DEVICE_API_KEYS` の `camera_id` と key の対応を検証する。
 - 動画アップロードは fail-closed とし、該当 `camera_id` の key が設定されていない場合は `403 Forbidden` で拒否する。
-- 開発用に単一の `ESP32CAM_DEVICE_API_KEY` を許可する場合でも、本番運用では `ESP32CAM_DEVICE_API_KEYS` への移行を推奨し、OpenAPI と運用ドキュメントに明記する。
+- 単一デバイス用の `ESP32CAM_DEVICE_API_KEY` を使う場合は `ESP32CAM_SHARED_KEY_DEVICE_ID` で `camera_id` を固定する。複数台の本番運用では `ESP32CAM_DEVICE_API_KEYS` を使い、共有キーを使い回さない。
 - 管理者向け削除・設定変更は `Authorization: Bearer <ESP32CAM_ADMIN_TOKEN>` を使う。
 
 API key の比較は `hmac.compare_digest` 相当の定数時間比較を使い、サーバーログ・エラーレスポンス・テスト出力へ key を出さない。HTTP 平文で `X-API-Key` を流さないため、本番デプロイでは reverse proxy などで TLS/HTTPS 終端を必須にする。key のローテーション・失効は `ESP32CAM_DEVICE_API_KEYS` の更新とデバイス再設定で扱い、将来必要になったら key version を追加する。

@@ -60,3 +60,24 @@ def test_camera_upload_rejects_missing_key_when_configured(app_with_per_device_k
         auth_error = _check_camera_upload_auth("cam-a", None)
 
     assert auth_error == {"type": "error", "message": "Unauthorized"}
+
+
+def test_camera_upload_shared_key_is_bound_to_configured_device(tmp_path):
+    app = create_app(
+        {
+            "TESTING": True,
+            "UPLOAD_DIR": tmp_path / "uploads",
+            "DB_PATH": tmp_path / "esp32cam.sqlite3",
+            "INFERENCE_MODE": "sync",
+            "DEVICE_API_KEY": "shared-key",
+            "SHARED_KEY_DEVICE_ID": "cam-a",
+            "RATELIMIT_ENABLED": False,
+        }
+    )
+
+    with app.app_context():
+        own = _check_camera_upload_auth("cam-a", "shared-key")
+        other = _check_camera_upload_auth("cam-b", "shared-key")
+
+    assert own is None
+    assert other == {"type": "error", "message": "Forbidden"}

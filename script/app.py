@@ -100,6 +100,13 @@ def create_app(test_config: dict | None = None) -> Flask:
             "/upload and device endpoints accept requests without authentication. "
             "Set a strong key in production."
         )
+    elif app.config.get("DEVICE_API_KEY", "") and not app.config.get("DEVICE_API_KEYS", {}):
+        if not app.config.get("SHARED_KEY_DEVICE_ID", ""):
+            app.logger.warning(
+                "ESP32CAM_DEVICE_API_KEY is configured without "
+                "ESP32CAM_SHARED_KEY_DEVICE_ID — identity-bearing device endpoints "
+                "will reject requests. Configure per-device keys for multiple cameras."
+            )
 
     storage_backend = app.config.get("STORAGE_BACKEND", "local")
     if storage_backend != "local":

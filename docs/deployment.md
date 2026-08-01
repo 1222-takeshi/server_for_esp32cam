@@ -18,8 +18,13 @@ Set at minimum:
 
 ```dotenv
 ESP32CAM_DEVICE_API_KEY=<strong-random-key>
+ESP32CAM_SHARED_KEY_DEVICE_ID=esp32cam-01
 ESP32CAM_ADMIN_TOKEN=<strong-random-token>
 ```
+
+`ESP32CAM_DEVICE_API_KEY` と `ESP32CAM_SHARED_KEY_DEVICE_ID` の組み合わせは
+1台の固定 `DEVICE_ID` 専用です。複数台を運用する場合は、デバイスごとに
+`ESP32CAM_DEVICE_API_KEYS` を設定してください。
 
 ### 2. Build and start
 
@@ -76,6 +81,7 @@ Minimum production settings:
 ```dotenv
 PORT=8080
 ESP32CAM_DEVICE_API_KEY=<strong-random-key>
+ESP32CAM_SHARED_KEY_DEVICE_ID=esp32cam-01
 ESP32CAM_ADMIN_TOKEN=<strong-random-token>
 ESP32CAM_STORAGE_RETENTION_MAX_AGE_SECONDS=2592000
 ESP32CAM_STORAGE_RETENTION_MAX_BYTES=8589934592
@@ -249,7 +255,8 @@ All variables are optional unless marked **required for production**.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ESP32CAM_DEVICE_API_KEY` | _(empty — auth disabled)_ | **Required for production.** API key devices must send in `X-API-Key`. |
-| `ESP32CAM_DEVICE_API_KEYS` | _(empty)_ | Optional per-device keys as a JSON object (`{"cam-a": "key-a"}`). When set, a device's key is checked against its own device_id instead of any configured key. |
+| `ESP32CAM_SHARED_KEY_DEVICE_ID` | _(empty)_ | Required with `ESP32CAM_DEVICE_API_KEY` for legacy single-device mode; the key is accepted only when the request's `device_id`/`camera_id` exactly matches this value. Without it, identity-bearing device endpoints fail closed. |
+| `ESP32CAM_DEVICE_API_KEYS` | _(empty)_ | Optional per-device keys as a JSON object (`{"cam-a": "key-a"}`). When set, it takes precedence over `ESP32CAM_DEVICE_API_KEY` and each key is checked against its own device_id. |
 | `ESP32CAM_ADMIN_TOKEN` | _(empty — auth disabled)_ | **Required for production.** Bearer token for admin endpoints and `/metrics`. |
 | `ESP32CAM_UPLOAD_DIR` | `./uploads` | Directory to store uploaded JPEG files. |
 | `ESP32CAM_DB_PATH` | `./esp32cam.sqlite3` | Path to the SQLite database. |
@@ -290,6 +297,7 @@ All variables are optional unless marked **required for production**.
 ## Production Checklist
 
 - [ ] `ESP32CAM_DEVICE_API_KEY` is set to a strong random value
+- [ ] Either `ESP32CAM_DEVICE_API_KEYS` maps every production device, or `ESP32CAM_SHARED_KEY_DEVICE_ID` binds the shared key to the single production `DEVICE_ID`
 - [ ] `ESP32CAM_ADMIN_TOKEN` is set to a strong random value
 - [ ] `ESP32CAM_UPLOAD_DIR` points to a persistent volume (not ephemeral container storage)
 - [ ] `ESP32CAM_DB_PATH` points to a persistent volume

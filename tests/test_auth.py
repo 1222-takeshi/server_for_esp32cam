@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import logging
-
 import pytest
 
 from script import config as config_module
+from script.auth import check_device_api_key_for_device
 from script.app import create_app
 from tests.conftest import MINIMAL_JPEG
 
@@ -18,6 +17,7 @@ def app_with_device_key(tmp_path):
             "DB_PATH": tmp_path / "esp32cam.sqlite3",
             "INFERENCE_MODE": "sync",
             "DEVICE_API_KEY": "test-device-key",
+            "SHARED_KEY_DEVICE_ID": "cam-a",
         }
     )
 
@@ -56,12 +56,71 @@ def test_upload_accepts_correct_device_key(app_with_device_key):
         headers={
             "Content-Type": "image/jpeg",
             "X-Captured-At": "2026-01-01T00:00:00Z",
-            "X-Device-Id": "cam-test",
+            "X-Device-Id": "cam-a",
             "X-API-Key": "test-device-key",
         },
     )
     # Auth passes — next validation is JPEG check (400), not 401
     assert response.status_code != 401
+
+
+def test_shared_key_rejects_different_device_id(app_with_device_key):
+    client = app_with_device_key.test_client()
+    response = client.post(
+        "/upload",
+        data=MINIMAL_JPEG,
+        headers={
+            "Content-Type": "image/jpeg",
+            "X-Captured-At": "2026-01-01T00:00:00Z",
+            "X-Device-Id": "cam-b",
+            "X-API-Key": "test-device-key",
+        },
+    )
+
+    assert response.status_code == 403
+
+
+def test_shared_key_without_bound_device_id_fails_closed(tmp_path):
+    app = create_app(
+        {
+            "TESTING": True,
+            "UPLOAD_DIR": tmp_path / "uploads",
+            "DB_PATH": tmp_path / "esp32cam.sqlite3",
+            "INFERENCE_MODE": "sync",
+            "DEVICE_API_KEY": "test-device-key",
+            "RATELIMIT_ENABLED": False,
+        }
+    )
+    response = app.test_client().post(
+        "/upload",
+        data=MINIMAL_JPEG,
+        headers={
+            "Content-Type": "image/jpeg",
+            "X-Captured-At": "2026-01-01T00:00:00Z",
+            "X-Device-Id": "cam-a",
+            "X-API-Key": "test-device-key",
+        },
+    )
+
+    assert response.status_code == 403
+
+
+def test_per_device_keys_take_precedence_over_shared_key(tmp_path):
+    app = create_app(
+        {
+            "TESTING": True,
+            "UPLOAD_DIR": tmp_path / "uploads",
+            "DB_PATH": tmp_path / "esp32cam.sqlite3",
+            "INFERENCE_MODE": "sync",
+            "DEVICE_API_KEY": "shared-key",
+            "SHARED_KEY_DEVICE_ID": "cam-a",
+            "DEVICE_API_KEYS": {"cam-a": "per-device-key"},
+        }
+    )
+
+    with app.app_context():
+        assert not check_device_api_key_for_device("cam-a", "shared-key")
+        assert check_device_api_key_for_device("cam-a", "per-device-key")
 
 
 def test_upload_rejects_wrong_device_key(app_with_device_key):
@@ -148,6 +207,27 @@ def test_status_update_accepts_correct_device_key(app_with_device_key):
     assert response.status_code == 200
 
 
+def test_status_update_rejects_shared_key_for_different_device(app_with_device_key):
+    response = app_with_device_key.test_client().post(
+        "/api/status_update",
+        json={"device_id": "cam-b"},
+        headers={"X-API-Key": "test-device-key"},
+    )
+
+    assert response.status_code == 403
+
+
+def test_status_update_rejects_non_object_or_non_string_device_id(app_with_device_key):
+    client = app_with_device_key.test_client()
+
+    assert client.post("/api/status_update", json=["cam-a"], headers={"X-API-Key": "test-device-key"}).status_code == 400
+    assert client.post(
+        "/api/status_update",
+        json={"device_id": 123},
+        headers={"X-API-Key": "test-device-key"},
+    ).status_code == 400
+
+
 def test_status_update_rejects_valid_key_for_different_device(tmp_path):
     app = create_app(
         {
@@ -190,6 +270,26 @@ def test_log_error_rejects_valid_key_for_different_device(tmp_path):
         headers={"X-API-Key": "key-b"},
     )
     assert response.status_code == 403
+
+
+def test_log_error_rejects_shared_key_for_different_device(app_with_device_key):
+    response = app_with_device_key.test_client().post(
+        "/api/log_error",
+        json={"device_id": "cam-b", "message": "spoofed"},
+        headers={"X-API-Key": "test-device-key"},
+    )
+
+    assert response.status_code == 403
+
+
+def test_log_error_rejects_non_string_message(app_with_device_key):
+    response = app_with_device_key.test_client().post(
+        "/api/log_error",
+        json={"device_id": "cam-a", "message": ["spoofed"]},
+        headers={"X-API-Key": "test-device-key"},
+    )
+
+    assert response.status_code == 400
 
 
 # --- Admin token (delete camera) ---
@@ -284,9 +384,9 @@ def test_validate_auth_config_strips_leading_trailing_whitespace(tmp_path):
     assert app.config["DEVICE_API_KEY"] == "my-key"
 
 
-def test_validate_auth_config_treats_whitespace_only_as_disabled(tmp_path, caplog):
-    with caplog.at_level(logging.WARNING, logger="script.auth"):
-        app = create_app(
+def test_validate_auth_config_rejects_whitespace_only_key(tmp_path):
+    with pytest.raises(ValueError, match="DEVICE_API_KEY"):
+        create_app(
             {
                 "TESTING": True,
                 "UPLOAD_DIR": tmp_path / "uploads",
@@ -295,5 +395,3 @@ def test_validate_auth_config_treats_whitespace_only_as_disabled(tmp_path, caplo
                 "DEVICE_API_KEY": "   ",
             }
         )
-    assert app.config["DEVICE_API_KEY"] == ""
-    assert any("DEVICE_API_KEY" in r.message for r in caplog.records)

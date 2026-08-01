@@ -61,6 +61,7 @@ class Config:
     MAX_WS_CONNECTIONS = int(os.getenv("ESP32CAM_MAX_WS_CONNECTIONS", "50"))
     DEVICE_API_KEY = os.getenv("ESP32CAM_DEVICE_API_KEY", "")
     DEVICE_API_KEYS = _load_device_api_keys()
+    SHARED_KEY_DEVICE_ID = os.getenv("ESP32CAM_SHARED_KEY_DEVICE_ID", "")
     ADMIN_TOKEN = os.getenv("ESP32CAM_ADMIN_TOKEN", "")
     WEBHOOK_URL = os.getenv("ESP32CAM_WEBHOOK_URL", "")
     WEBHOOK_MIN_SCORE = float(os.getenv("ESP32CAM_WEBHOOK_MIN_SCORE", "0.5"))

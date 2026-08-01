@@ -124,6 +124,57 @@ def test_device_get_desired_config_requires_matching_device_key(app):
     assert wrong.status_code == 403
 
 
+def test_shared_key_desired_config_is_bound_to_configured_device(app):
+    app.config["DEVICE_API_KEY"] = "shared-key"
+    app.config["SHARED_KEY_DEVICE_ID"] = "living-room-cam"
+    app.config["ADMIN_TOKEN"] = ADMIN_TOKEN
+    client = app.test_client()
+    client.put(
+        "/api/cameras/living-room-cam/desired-config",
+        json={"config": _valid_config(frame_size="VGA")},
+        headers=_admin_headers(),
+    )
+
+    own = client.get(
+        "/api/devices/living-room-cam/desired-config?current_version=0",
+        headers={"X-API-Key": "shared-key"},
+    )
+    other = client.get(
+        "/api/devices/garage-cam/desired-config?current_version=0",
+        headers={"X-API-Key": "shared-key"},
+    )
+
+    assert own.status_code == 200
+    assert other.status_code == 403
+
+
+def test_shared_key_desired_config_ack_is_bound_to_configured_device(app):
+    app.config["DEVICE_API_KEY"] = "shared-key"
+    app.config["SHARED_KEY_DEVICE_ID"] = "living-room-cam"
+    app.config["ADMIN_TOKEN"] = ADMIN_TOKEN
+    client = app.test_client()
+    created = client.put(
+        "/api/cameras/living-room-cam/desired-config",
+        json={"config": _valid_config()},
+        headers=_admin_headers(),
+    ).get_json()
+    payload = {"version": created["version"], "applied": True}
+
+    own = client.post(
+        "/api/devices/living-room-cam/desired-config/ack",
+        json=payload,
+        headers={"X-API-Key": "shared-key"},
+    )
+    other = client.post(
+        "/api/devices/garage-cam/desired-config/ack",
+        json=payload,
+        headers={"X-API-Key": "shared-key"},
+    )
+
+    assert own.status_code == 200
+    assert other.status_code == 403
+
+
 def test_device_get_desired_config_reports_unchanged_when_version_matches(app):
     _enable_remote_auth(app)
     client = app.test_client()
