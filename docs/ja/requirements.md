@@ -68,7 +68,9 @@
 | デバイス API キー (`X-API-Key`) | 省略可 | **必須** | **必須** |
 | 管理者トークン (Bearer) | 省略可 | **必須** | **必須** |
 | HTTPS | 不要 | 不要 | **必須** (nginx / Caddy 等で終端) |
-| `ESP32CAM_DEVICE_API_KEY` | 未設定 = 認証無効 | 32 バイト以上のランダム値 | 同左 |
+| `ESP32CAM_DEVICE_API_KEY` | 未設定 = 認証無効 | 32 バイト以上のランダム値。単一デバイスでは `ESP32CAM_SHARED_KEY_DEVICE_ID` も必須 | 同左 |
+| `ESP32CAM_SHARED_KEY_DEVICE_ID` | 任意 | 共有キーを固定する実機 `DEVICE_ID` | 同左 |
+| `ESP32CAM_DEVICE_API_KEYS` | 任意 | 複数台ではデバイスごとの `device_id -> key` を設定 | 同左 |
 | `ESP32CAM_ADMIN_TOKEN` | 未設定 = 認証無効 | 32 バイト以上のランダム値 | 同左 |
 
 詳細: [`docs/ja/security.md`](security.md)（脅威モデルと運用チェックリスト）

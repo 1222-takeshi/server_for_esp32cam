@@ -128,6 +128,11 @@ def _validate_camera_id(camera_id: str) -> str | None:
     return None
 
 
+def _get_json_object() -> dict[str, object] | None:
+    body = request.get_json(silent=True)
+    return body if isinstance(body, dict) else None
+
+
 def _validate_jpeg_image(data: bytes) -> str | None:
     """Returns None if the JPEG is valid, or an error message string if invalid."""
     max_dim = current_app.config.get("UPLOAD_MAX_IMAGE_DIMENSION", 4096)
@@ -910,7 +915,9 @@ def api_ack_device_desired_config(device_id: str):
     auth_error = _check_device_matches_path(device_id)
     if auth_error is not None:
         return auth_error
-    body = request.get_json(silent=True) or {}
+    body = _get_json_object()
+    if body is None:
+        return jsonify({"message": "request body must be an object"}), 400
     version = body.get("version")
     applied = body.get("applied")
     message = body.get("message")
@@ -1092,7 +1099,12 @@ def api_detections():
 @require_device_auth
 def api_status_update():
     body = request.get_json(silent=True) or {}
-    device_id = (body.get("device_id") or "").strip()
+    if not isinstance(body, dict):
+        return jsonify({"message": "request body must be an object"}), 400
+    raw_device_id = body.get("device_id")
+    if raw_device_id is not None and not isinstance(raw_device_id, str):
+        return jsonify({"message": "device_id must be a string"}), 400
+    device_id = (raw_device_id or "").strip()
     device_id_error = _validate_device_id(device_id)
     if device_id_error:
         return jsonify({"message": device_id_error}), 400
@@ -1115,9 +1127,20 @@ def api_status_update():
 @require_device_auth
 def api_log_error():
     body = request.get_json(silent=True) or {}
-    device_id = (body.get("device_id") or "").strip()
-    level = (body.get("level") or "error").strip().lower()
-    message = (body.get("message") or "").strip()
+    if not isinstance(body, dict):
+        return jsonify({"message": "request body must be an object"}), 400
+    raw_device_id = body.get("device_id")
+    raw_level = body.get("level")
+    raw_message = body.get("message")
+    if raw_device_id is not None and not isinstance(raw_device_id, str):
+        return jsonify({"message": "device_id must be a string"}), 400
+    if raw_level is not None and not isinstance(raw_level, str):
+        return jsonify({"message": "level must be a string"}), 400
+    if raw_message is not None and not isinstance(raw_message, str):
+        return jsonify({"message": "message must be a string"}), 400
+    device_id = (raw_device_id or "").strip()
+    level = (raw_level or "error").strip().lower()
+    message = (raw_message or "").strip()
 
     device_id_error = _validate_device_id(device_id)
     if device_id_error:

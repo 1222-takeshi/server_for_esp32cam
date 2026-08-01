@@ -13,6 +13,18 @@
 - **デバイス向け**: `X-API-Key` ヘッダーに事前共有キー (`DEVICE_API_KEY`) を付与する
 - **管理者向け**: `Authorization: Bearer <token>` に管理者トークン (`ADMIN_TOKEN`) を付与する
 
+デバイス認証の構成は次のいずれかに限定する。
+
+- 単一デバイス: `DEVICE_API_KEY` と `SHARED_KEY_DEVICE_ID` を設定し、キーをその
+  `DEVICE_ID` に固定する。`SHARED_KEY_DEVICE_ID` 未設定時は、デバイスIDを伴う
+  エンドポイントを fail-closed で拒否する。
+- 複数デバイス: `DEVICE_API_KEYS` に `device_id -> key` の対応を設定する。
+  グローバルキーを複数デバイスで共有しない。
+
+両方の変数を設定した場合は `DEVICE_API_KEYS` が優先され、
+`DEVICE_API_KEY` はデバイスID付きエンドポイントでは使われない。移行中の
+旧ファームウェアを含む場合は、個別キーへ切り替えてからマップを有効化する。
+
 ## 理由
 
 - Arduino SDK は `HTTPClient.addHeader()` で任意ヘッダーを追加できる
@@ -35,3 +47,10 @@
 - DEVICE_API_KEY と ADMIN_TOKEN はそれぞれ 32 バイト以上のランダム値を推奨
 - インターネット公開時は HTTPS が必須（平文通信では API キーが傍受される）
 - 詳細: `docs/ja/security.md`
+
+## 変更履歴: Issue #242
+
+従来のグローバル `DEVICE_API_KEY` は、キーを知る任意のデバイスが別の
+`device_id`/`camera_id` を名乗れる状態だった。現在は単一デバイス用の
+`SHARED_KEY_DEVICE_ID` との完全一致を要求し、複数デバイスでは
+`DEVICE_API_KEYS` の明示的な対応だけを許可する。

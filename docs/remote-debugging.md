@@ -72,13 +72,19 @@ srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 srv.bind(("0.0.0.0", 8080)); srv.listen(1); srv.settimeout(30)
 conn, addr = srv.accept()
 print("connection from", addr)
-print(conn.recv(4096).decode(errors="replace"))
+request = conn.recv(4096).decode(errors="replace")
+for line in request.splitlines():
+    header, separator, _ = line.partition(":")
+    if separator and header.strip().lower() == "x-api-key":
+        print(f"{header}: [REDACTED]")
+    else:
+        print(line)
 EOF
 ```
 
-Within one retry interval (5 s for the WebSocket firmware) you get the full
-request: target host header, path, device ID, and the `X-API-Key` it was
-built with. Compare that key against the server's current
+Within one retry interval (5 s for the WebSocket firmware) you get the request
+metadata: target host header, path, device ID, and a redacted `X-API-Key`
+header. Compare the device's configured key against the server's current
 `ESP32CAM_DEVICE_API_KEY` by hash, never by printing either value:
 
 ```bash
@@ -97,8 +103,20 @@ key to the server's `.env` and restart it:
 ESP32CAM_DEVICE_API_KEYS={"esp32cam-01": "<stale-key>"}
 ```
 
-`check_device_api_key` accepts any key in this mapping, so the device
-recovers immediately. Remove the entry once the device is re-flashed.
+The mapping is checked against the request's `device_id`, so the device
+recovers immediately without allowing the key to impersonate another device.
+Remove the entry once the device is re-flashed.
+
+For a single-device deployment that still uses the legacy global key, set both
+the key and its fixed identity instead:
+
+```dotenv
+ESP32CAM_DEVICE_API_KEY=<current-key>
+ESP32CAM_SHARED_KEY_DEVICE_ID=esp32cam-01
+```
+
+Never use one global key for multiple device IDs; configure
+`ESP32CAM_DEVICE_API_KEYS` for that case.
 
 ### 2.2 Stale address (± stale key) → the bridge proxy
 

@@ -11,19 +11,20 @@ _logger = logging.getLogger(__name__)
 
 
 def validate_auth_config(app: Flask) -> None:
-    """Warn and normalise whitespace-only keys at startup."""
+    """Normalise authentication settings and reject ambiguous credentials."""
     for key in ("DEVICE_API_KEY", "ADMIN_TOKEN"):
         value = app.config.get(key, "")
         stripped = value.strip()
         if value and not stripped:
-            _logger.warning(
-                "Config %s is set to whitespace-only — treating as disabled. "
-                "Set a non-empty value to enable authentication.",
-                key,
-            )
-            app.config[key] = ""
+            raise ValueError(f"Config {key} must not be whitespace-only")
         elif stripped != value:
             app.config[key] = stripped
+
+    shared_key_device_id = app.config.get("SHARED_KEY_DEVICE_ID", "")
+    if isinstance(shared_key_device_id, str):
+        app.config["SHARED_KEY_DEVICE_ID"] = shared_key_device_id.strip()
+    else:
+        app.config["SHARED_KEY_DEVICE_ID"] = ""
 
     device_keys = app.config.get("DEVICE_API_KEYS", {})
     if not isinstance(device_keys, dict):
@@ -55,12 +56,22 @@ def check_device_api_key(provided: str | None) -> bool:
 
 
 def check_device_api_key_for_device(device_id: str, provided: str | None) -> bool:
-    """Return True when the provided device API key may act as this device."""
+    """Return True when the provided device API key may act as this device.
+
+    Per-device keys take precedence when configured. The legacy shared-key mode
+    is intentionally restricted to one explicitly configured device ID so a
+    valid shared key cannot create or impersonate arbitrary camera identities.
+    """
     per_device = current_app.config.get("DEVICE_API_KEYS", {}) or {}
     if per_device:
         required = per_device.get(device_id)
         return bool(required and provided and _constant_time_equal(str(required), provided))
-    return check_device_api_key(provided)
+    if not check_device_api_key(provided):
+        return False
+    if not current_app.config.get("DEVICE_API_KEY", ""):
+        return True
+    expected_device_id = current_app.config.get("SHARED_KEY_DEVICE_ID", "")
+    return bool(expected_device_id) and device_id == expected_device_id
 
 
 def check_admin_token(provided: str | None) -> bool:

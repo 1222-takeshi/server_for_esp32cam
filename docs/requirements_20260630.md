@@ -9,7 +9,7 @@
 - Raspi 上で Docker Compose または systemd によりサーバーを再起動可能にする。
 - サーバーは `0.0.0.0:8080` で待ち受け、LAN 内端末から `/healthz/ready` と Web UI にアクセスできる。
 - Tailscale 経由の URL/IP と確認手順を runbook に記録する。
-- `ESP32CAM_DEVICE_API_KEY(S)` と `ESP32CAM_ADMIN_TOKEN` を本番運用で必須にする。
+- `ESP32CAM_DEVICE_API_KEY(S)` と `ESP32CAM_ADMIN_TOKEN` を本番運用で必須にする。単一デバイスの共有キー運用では `ESP32CAM_SHARED_KEY_DEVICE_ID` を設定し、複数デバイスでは `ESP32CAM_DEVICE_API_KEYS` でデバイスごとにキーを分離する。
 - `ESP32CAM_STORAGE_RETENTION_MAX_BYTES` と `ESP32CAM_VIDEO_RETENTION_MAX_BYTES` で容量上限を設定できる。
 - `ESP32CAM_KEEP_ONLY_DETECTED_SNAPSHOTS=true` のとき、推論成功かつ detection が 0 件の snapshot は保存しない。
 - 推論スキップまたは失敗時は、データ損失を避けるため snapshot を保持する。

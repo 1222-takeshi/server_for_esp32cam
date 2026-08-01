@@ -20,7 +20,7 @@
 
 | 境界 | 信頼レベル | 備考 |
 |-----|----------|------|
-| ESP32-CAM → サーバー (LAN) | デバイス認証あり | `DEVICE_API_KEY` が未設定なら認証なし |
+| ESP32-CAM → サーバー (LAN) | デバイス認証あり | `DEVICE_API_KEY` が未設定なら認証なし。共有キー運用では `SHARED_KEY_DEVICE_ID` との完全一致も必須 |
 | 管理ブラウザ → サーバー (LAN) | 管理者認証あり | `ADMIN_TOKEN` が未設定なら認証なし |
 | サーバー → ファイルシステム | 信頼する | コンテナ内のみ |
 | サーバー → Webhook 先 | 信頼しない | SSRF 対策は利用者責任 |
@@ -35,7 +35,7 @@
 | 項目 | 内容 |
 |-----|------|
 | 脅威 | 認証なしで JPEG をアップロードされ、ストレージが枯渇する |
-| 対策 | `ESP32CAM_DEVICE_API_KEY` 設定で `X-API-Key` ヘッダーを必須化 |
+| 対策 | `ESP32CAM_DEVICE_API_KEY` 設定で `X-API-Key` ヘッダーを必須化し、共有キー運用では `ESP32CAM_SHARED_KEY_DEVICE_ID` と `device_id`/`camera_id` の完全一致を必須化。複数台は `ESP32CAM_DEVICE_API_KEYS` を使う |
 | 設定状況 | **運用時は必須**。未設定の場合、起動時に WARNING ログが出力される |
 | 残存リスク | LAN 内の他ホストが API キーを傍受できる（HTTPS 未使用時） |
 
@@ -113,7 +113,8 @@
 | 要件 | LAN 内 | インターネット公開 |
 |-----|--------|----------------|
 | HTTPS | 不要 | **必須** (nginx / Caddy で終端) |
-| `DEVICE_API_KEY` | 推奨 | **必須** |
+| `DEVICE_API_KEY` + デバイスID固定 | 推奨 | **必須** |
+| `DEVICE_API_KEYS` (複数台) | 複数台では推奨 | 複数台では **必須** |
 | `ADMIN_TOKEN` | 推奨 | **必須** |
 | `/api/docs` の公開 | 可 | 非推奨 (CDN スクリプト読み込みあり) |
 | `/files/` の認証 | 不要 | 推奨 (nginx で追加) |
@@ -129,6 +130,8 @@
   ```bash
   python3 -c "import secrets; print(secrets.token_hex(32))"
   ```
+- [ ] 単一デバイスの共有キー運用では `ESP32CAM_SHARED_KEY_DEVICE_ID` を実機の `DEVICE_ID` に設定する
+- [ ] 複数デバイスの運用では `ESP32CAM_DEVICE_API_KEYS` にデバイスごとのキーを設定し、共有キーを使い回さない
 - [ ] `ADMIN_TOKEN` に 32 バイト以上のランダム値を設定する（上記コマンドを再実行）
 - [ ] `.env` ファイルがバージョン管理に含まれていないことを確認する
 - [ ] インターネット公開時は HTTPS を設定する
