@@ -134,3 +134,9 @@ Julesがタスクを遂行する上で遵守すべき基本方針は以下の通
 - **詳細**: Raspi/古い Docker Compose では object 形式の `env_file` が失敗する場合があるため、`.env` を作成したうえで string 形式の `env_file` を使う。TFLite モデルは host の `./models/` に置き、Compose で `/app/models` に read-only mount する。`ESP32CAM_KEEP_ONLY_DETECTED_SNAPSHOTS=true` の場合、推論成功かつ detection 0 件の snapshot は削除される。
 - **適用条件**: Raspi へ Docker Compose deploy する場合、または detection された snapshot だけを保存したい場合。
 - **例**: `cp .env.example .env && docker compose up -d --build`、`ESP32CAM_MODEL_PATH=/app/models/detect.tflite`、`ESP32CAM_KEEP_ONLY_DETECTED_SNAPSHOTS=true`
+
+### Per-route upload content limits (追記日: 2026-08-02)
+- **概要**: Flask/WerkzeugでHTTP uploadのルート別body上限を設定する際のchunked入力対策。
+- **詳細**: `before_request` で `request.max_content_length` を設定する。Content-Lengthがないchunked入力では、設定値ちょうどだと `LimitedStream` が超過分を切り詰めて正常扱いになる可能性があるため、設定値は `configured_limit + 1` とし、ルート側の `len(data) > configured_limit` 判定で413にする。
+- **適用条件**: Content-Lengthを信用できないupload endpointで、body読込前のメモリ上限をルートごとに分ける場合。
+- **例**: `request.max_content_length = app.config["SNAPSHOT_MAX_CONTENT_LENGTH"] + 1`
