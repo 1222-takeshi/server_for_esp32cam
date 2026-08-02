@@ -288,9 +288,15 @@ All variables are optional unless marked **required for production**.
 | `ESP32CAM_MAX_TRACKED_CAMERAS` | `500` | Maximum distinct `camera_id`s tracked by the in-process upload metrics registry; least-recently-active entries are evicted beyond this cap. Set `0` to disable the cap. |
 | `ESP32CAM_WEBHOOK_URL` | _(empty — disabled)_ | Webhook URL to POST when a person is detected. |
 | `ESP32CAM_WEBHOOK_MIN_SCORE` | `0.5` | Minimum score to trigger the webhook. |
+| `ESP32CAM_WEBHOOK_MAX_ATTEMPTS` | `3` | Total delivery attempts, including the initial request. Retries apply to HTTP 5xx and transport errors; set `1` to disable retry. |
+| `ESP32CAM_WEBHOOK_RETRY_BACKOFF_SECONDS` | `1.0` | Initial retry backoff in seconds. Subsequent retries use exponential backoff. |
 | `ESP32CAM_RATELIMIT_STORAGE_URI` | `memory://` | Flask-Limiter storage. Use `redis://host:6379` for multi-worker deployments. |
 | `ESP32CAM_UPLOAD_WS_MIN_FRAME_INTERVAL_SECONDS` | `1.0` | Minimum seconds between WebSocket frames per connection. |
 | `ESP32CAM_LOG_FORMAT` | `text` | Log output format: `text` (human-readable) or `json` (structured, via python-json-logger). |
+
+Webhook delivery with retries is at-least-once: if the receiver processes an event
+but the response is lost or becomes a 5xx, the same event may be delivered again.
+The receiver should deduplicate events; see [Issue #279](https://github.com/1222-takeshi/server_for_esp32cam/issues/279).
 
 ---
 
