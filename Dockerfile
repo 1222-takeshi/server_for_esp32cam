@@ -6,9 +6,17 @@ WORKDIR /app
 RUN useradd --create-home --shell /bin/sh appuser
 
 COPY pyproject.toml ./
-COPY script/ ./script/
+# Install dependencies against a placeholder package first, so this layer only
+# invalidates when pyproject.toml changes rather than on every script/ edit.
+# setuptools needs a real `script` directory to discover the package, but its
+# content doesn't matter yet -- the actual code is copied in below and, since
+# gunicorn inserts the working directory at the front of sys.path, /app/script
+# shadows this placeholder at runtime.
+RUN mkdir -p script && touch script/__init__.py
 RUN --mount=type=cache,target=/root/.cache/pip pip install ".[server]"
+RUN rm -rf script
 
+COPY script/ ./script/
 COPY templates/ ./templates/
 COPY static/ ./static/
 
