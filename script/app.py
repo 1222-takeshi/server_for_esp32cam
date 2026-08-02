@@ -181,6 +181,14 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     @app.before_request
     def _before_request():
+        if request.endpoint == "server.upload_file":
+            # Read one sentinel byte beyond the configured limit so a chunked
+            # request without Content-Length is rejected instead of silently
+            # being truncated by Werkzeug's LimitedStream.
+            request.max_content_length = app.config["SNAPSHOT_MAX_CONTENT_LENGTH"] + 1
+        elif request.endpoint == "server.api_upload_video":
+            request.max_content_length = app.config["MAX_VIDEO_CONTENT_LENGTH"] + 1
+
         metrics = app.extensions.get("app_metrics")
         if metrics is not None:
             g._esp32cam_request_start = metrics.start_request_timer()

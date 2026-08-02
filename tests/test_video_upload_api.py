@@ -3,6 +3,8 @@ from __future__ import annotations
 from io import BytesIO
 from uuid import uuid4
 
+from flask import request
+
 from script.app import create_app
 
 
@@ -198,6 +200,40 @@ def test_video_upload_rejects_payload_over_video_limit(tmp_path):
     client = app.test_client()
 
     response = client.post("/api/cameras/cam-a/videos", data=_minimal_mp4(), headers=_headers())
+
+    assert response.status_code == 413
+    assert response.get_json()["message"] == "Payload too large"
+
+
+def test_video_upload_sets_video_limit_before_body_read(tmp_path):
+    app = _video_app(tmp_path, MAX_CONTENT_LENGTH=999, MAX_VIDEO_CONTENT_LENGTH=256)
+    observed = {}
+
+    @app.before_request
+    def observe_request_limit():
+        if request.endpoint == "server.api_upload_video":
+            observed["max_content_length"] = request.max_content_length
+
+    response = app.test_client().post(
+        "/api/cameras/cam-a/videos",
+        data=_minimal_mp4(),
+        headers=_headers(),
+    )
+
+    assert response.status_code == 201
+    assert observed["max_content_length"] == 257
+
+
+def test_video_upload_rejects_oversized_terminated_stream_without_content_length(tmp_path):
+    app = _video_app(tmp_path, MAX_VIDEO_CONTENT_LENGTH=64)
+
+    response = app.test_client().open(
+        "/api/cameras/cam-a/videos",
+        method="POST",
+        input_stream=BytesIO(_minimal_mp4() + (b"\x00" * 64)),
+        headers=_headers(),
+        environ_overrides={"CONTENT_LENGTH": None, "wsgi.input_terminated": True},
+    )
 
     assert response.status_code == 413
     assert response.get_json()["message"] == "Payload too large"

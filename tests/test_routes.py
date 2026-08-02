@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime
+from io import BytesIO
 from unittest.mock import patch
+
+from flask import request
 
 from script.app import create_app
 from tests.conftest import MINIMAL_JPEG
@@ -530,12 +533,43 @@ def test_upload_returns_500_when_storage_write_fails(app, client, monkeypatch):
 
 
 def test_upload_returns_413_for_large_payload(app, client):
-    app.config["MAX_CONTENT_LENGTH"] = 8
+    app.config["SNAPSHOT_MAX_CONTENT_LENGTH"] = 8
 
     response = client.post(
         "/upload",
         data=b"\xff\xd8toolarge",
         headers=UPLOAD_HEADERS,
+    )
+
+    assert response.status_code == 413
+    assert response.get_json()["message"] == "Payload too large"
+
+
+def test_upload_sets_snapshot_limit_before_body_read(app, client):
+    app.config["MAX_CONTENT_LENGTH"] = 999
+    app.config["SNAPSHOT_MAX_CONTENT_LENGTH"] = 8
+    observed = {}
+
+    @app.before_request
+    def observe_request_limit():
+        if request.endpoint == "server.upload_file":
+            observed["max_content_length"] = request.max_content_length
+
+    response = client.post("/upload", data=b"0123456789", headers=UPLOAD_HEADERS)
+
+    assert response.status_code == 413
+    assert observed["max_content_length"] == 9
+
+
+def test_upload_rejects_oversized_terminated_stream_without_content_length(app, client):
+    app.config["SNAPSHOT_MAX_CONTENT_LENGTH"] = 8
+
+    response = client.open(
+        "/upload",
+        method="POST",
+        input_stream=BytesIO(b"0123456789"),
+        headers=UPLOAD_HEADERS,
+        environ_overrides={"CONTENT_LENGTH": None, "wsgi.input_terminated": True},
     )
 
     assert response.status_code == 413
