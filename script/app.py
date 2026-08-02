@@ -124,12 +124,29 @@ def create_app(test_config: dict | None = None) -> Flask:
     detector = _create_detector(app)
     webhook_url = app.config.get("WEBHOOK_URL", "")
     webhook_min_score = app.config["WEBHOOK_MIN_SCORE"]
+    webhook_max_attempts = app.config.get("WEBHOOK_MAX_ATTEMPTS", 3)
+    webhook_retry_backoff_seconds = app.config.get("WEBHOOK_RETRY_BACKOFF_SECONDS", 1.0)
     if not (0.0 <= webhook_min_score <= 1.0):
         raise ValueError(
             f"ESP32CAM_WEBHOOK_MIN_SCORE must be between 0.0 and 1.0, got {webhook_min_score}"
         )
+    if webhook_max_attempts < 1:
+        raise ValueError(
+            "ESP32CAM_WEBHOOK_MAX_ATTEMPTS must be at least 1, "
+            f"got {webhook_max_attempts}"
+        )
+    if webhook_retry_backoff_seconds < 0:
+        raise ValueError(
+            "ESP32CAM_WEBHOOK_RETRY_BACKOFF_SECONDS must not be negative, "
+            f"got {webhook_retry_backoff_seconds}"
+        )
     notifier = (
-        WebhookNotifier(webhook_url, min_score=webhook_min_score)
+        WebhookNotifier(
+            webhook_url,
+            min_score=webhook_min_score,
+            max_attempts=webhook_max_attempts,
+            retry_backoff_seconds=webhook_retry_backoff_seconds,
+        )
         if webhook_url
         else DISABLED_NOTIFIER
     )

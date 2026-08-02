@@ -65,6 +65,10 @@ class Config:
     ADMIN_TOKEN = os.getenv("ESP32CAM_ADMIN_TOKEN", "")
     WEBHOOK_URL = os.getenv("ESP32CAM_WEBHOOK_URL", "")
     WEBHOOK_MIN_SCORE = float(os.getenv("ESP32CAM_WEBHOOK_MIN_SCORE", "0.5"))
+    WEBHOOK_MAX_ATTEMPTS = int(os.getenv("ESP32CAM_WEBHOOK_MAX_ATTEMPTS", "3"))
+    WEBHOOK_RETRY_BACKOFF_SECONDS = float(
+        os.getenv("ESP32CAM_WEBHOOK_RETRY_BACKOFF_SECONDS", "1.0")
+    )
     LOG_FORMAT = os.getenv("ESP32CAM_LOG_FORMAT", "text")
     UPLOAD_RATE_LIMIT = os.getenv("ESP32CAM_UPLOAD_RATE_LIMIT", "10 per minute")
     VIDEO_UPLOAD_RATE_LIMIT = os.getenv("ESP32CAM_VIDEO_UPLOAD_RATE_LIMIT", "5 per minute")
