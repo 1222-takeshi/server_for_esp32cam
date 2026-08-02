@@ -137,6 +137,6 @@ Julesがタスクを遂行する上で遵守すべき基本方針は以下の通
 
 ### Per-route upload content limits (追記日: 2026-08-02)
 - **概要**: Flask/WerkzeugでHTTP uploadのルート別body上限を設定する際のchunked入力対策。
-- **詳細**: `before_request` で `request.max_content_length` を設定する。Content-Lengthがないchunked入力では、設定値ちょうどだと `LimitedStream` が超過分を切り詰めて正常扱いになる可能性があるため、設定値は `configured_limit + 1` とし、ルート側の `len(data) > configured_limit` 判定で413にする。
-- **適用条件**: Content-Lengthを信用できないupload endpointで、body読込前のメモリ上限をルートごとに分ける場合。
-- **例**: `request.max_content_length = app.config["SNAPSHOT_MAX_CONTENT_LENGTH"] + 1`
+- **詳細**: Flask/Werkzeug 3.1以降で `before_request` から `request.max_content_length` を設定する。Content-Lengthがないchunked入力では、設定値ちょうどだと `LimitedStream` が超過分を切り詰めて正常扱いになる可能性があるため、設定値は `configured_limit + 1` とし、route側の `len(data) > configured_limit` 判定で413にする。`+1` だけでは上限判定にならないため、必ずroute側の判定と組み合わせる。
+- **適用条件**: Content-Lengthを信用できないupload endpointで、body読込前のメモリ上限をルートごとに分ける場合。Content-Lengthなしのstreaming入力にこの制限を適用するには、WSGIサーバーが `wsgi.input_terminated` を設定する構成であることも確認する。
+- **例**: `request.max_content_length = app.config["SNAPSHOT_MAX_CONTENT_LENGTH"] + 1` と `len(data) > app.config["SNAPSHOT_MAX_CONTENT_LENGTH"]` の組み合わせ。
