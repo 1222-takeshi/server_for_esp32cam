@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import os
 from datetime import datetime, timezone
@@ -491,4 +492,159 @@ def test_save_video_rejects_negative_duration(tmp_path):
             duration_ms=-1,
         )
 
+    assert list(storage.upload_dir.rglob("*")) == []
+
+
+class _BoundedReadStream:
+    """Wraps BytesIO but fails if read() is ever called without an explicit,
+    non-negative size, so tests can prove the implementation always issues
+    bounded reads instead of buffering the whole payload in one
+    `read()`/`read(-1)` call (see #282)."""
+
+    def __init__(self, data: bytes) -> None:
+        self._buf = io.BytesIO(data)
+        self.read_sizes: list[int] = []
+
+    def read(self, size: int = -1) -> bytes:
+        if size is None or size < 0:
+            raise AssertionError(f"expected a bounded read(size), got read({size!r})")
+        self.read_sizes.append(size)
+        return self._buf.read(size)
+
+
+def test_save_video_stream_persists_mp4_without_buffering_whole_payload(tmp_path):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+    captured_at = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+    payload = b"\x00\x00\x00 ftypisom" + b"video-bytes" * 10
+    stream = _BoundedReadStream(payload)
+
+    stored = storage.save_video_stream(
+        stream,
+        "video/mp4",
+        camera_id="esp32cam-01",
+        captured_at=captured_at,
+        duration_ms=5000,
+        max_bytes=1024 * 1024,
+        chunk_size=8,
+    )
+
+    # Proves chunking actually happened (not a single read() call).
+    assert len(stream.read_sizes) > 1
+
+    video_path = storage.upload_dir / stored.relative_path
+    sidecar_path = video_path.with_suffix(".mp4.json")
+    sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+
+    assert stored.name.endswith(".mp4")
+    assert stored.relative_path.startswith("esp32cam-01/videos/")
+    assert stored.size == len(payload)
+    assert stored.camera_id == "esp32cam-01"
+    assert stored.captured_at == captured_at
+    assert stored.duration_ms == 5000
+    assert stored.content_type == "video/mp4"
+    assert len(stored.sha256) == 64
+    assert video_path.read_bytes() == payload
+    assert sidecar["sha256"] == stored.sha256
+
+    # No leftover temp files from the streamed write.
+    assert list(storage.upload_dir.rglob("*.tmp")) == []
+
+
+def test_save_video_stream_matches_save_video_hash_for_same_payload(tmp_path):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+    payload = b"\x00\x00\x00 ftypisom" + b"identical-bytes"
+
+    buffered = storage.save_video(
+        payload,
+        "video/mp4",
+        camera_id="esp32cam-01",
+        captured_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+    )
+    streamed = storage.save_video_stream(
+        _BoundedReadStream(payload),
+        "video/mp4",
+        camera_id="esp32cam-02",
+        captured_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+        max_bytes=1024 * 1024,
+        chunk_size=4,
+    )
+
+    assert streamed.sha256 == buffered.sha256
+
+
+def test_save_video_stream_rejects_empty_stream(tmp_path):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+
+    with pytest.raises(ValueError, match="No data received"):
+        storage.save_video_stream(
+            _BoundedReadStream(b""),
+            "video/mp4",
+            camera_id="esp32cam-01",
+            max_bytes=1024,
+        )
+
+    assert list(storage.upload_dir.rglob("*")) == []
+
+
+def test_save_video_stream_rejects_non_mp4_payload_and_cleans_temporary_file(tmp_path):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+
+    with pytest.raises(ValueError, match="Unsupported video payload"):
+        storage.save_video_stream(
+            _BoundedReadStream(b"not an mp4"),
+            "video/mp4",
+            camera_id="esp32cam-01",
+            max_bytes=1024,
+        )
+
+    assert list(storage.upload_dir.rglob("*")) == []
+
+
+def test_save_video_stream_rejects_payload_over_max_bytes_and_cleans_up(tmp_path):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+    payload = b"\x00\x00\x00 ftypisom" + (b"x" * 100)
+
+    with pytest.raises(ValueError, match="Payload too large"):
+        storage.save_video_stream(
+            _BoundedReadStream(payload),
+            "video/mp4",
+            camera_id="esp32cam-01",
+            max_bytes=16,
+            chunk_size=8,
+        )
+
+    assert list(storage.upload_dir.rglob("*")) == []
+
+
+def test_save_video_stream_rejects_unsafe_camera_id_before_reading_stream(tmp_path):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+    stream = _BoundedReadStream(b"\x00\x00\x00 ftypisom")
+
+    with pytest.raises(ValueError, match="Invalid camera_id"):
+        storage.save_video_stream(
+            stream,
+            "video/mp4",
+            camera_id="../cam",
+            max_bytes=1024,
+        )
+
+    # The stream must not have been touched: validation happens up front.
+    assert stream.read_sizes == []
+    assert list(storage.upload_dir.rglob("*")) == []
+
+
+def test_save_video_stream_rejects_negative_duration_before_reading_stream(tmp_path):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+    stream = _BoundedReadStream(b"\x00\x00\x00 ftypisom")
+
+    with pytest.raises(ValueError, match="duration_ms must be non-negative"):
+        storage.save_video_stream(
+            stream,
+            "video/mp4",
+            camera_id="esp32cam-01",
+            duration_ms=-1,
+            max_bytes=1024,
+        )
+
+    assert stream.read_sizes == []
     assert list(storage.upload_dir.rglob("*")) == []
