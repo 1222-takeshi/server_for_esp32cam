@@ -148,6 +148,17 @@ class Storage(Protocol):
         duration_ms: int | None = None,
     ) -> StoredVideo: ...
 
+    def save_video_stream(
+        self,
+        stream: object,
+        content_type: str,
+        *,
+        camera_id: str,
+        captured_at: datetime | str | None = None,
+        duration_ms: int | None = None,
+        max_bytes: int,
+    ) -> StoredVideo: ...
+
     def list_videos(self, *, include_metadata: bool = True) -> list[StoredVideo]: ...
 
     def read_video_by_relative_path(self, relative_path: str) -> tuple[bytes, str]: ...
@@ -384,6 +395,92 @@ class LocalFilesystemStorage:
                 duration_ms=duration_ms,
                 content_type=content_type,
                 sha256=hashlib.sha256(data).hexdigest(),
+            )
+            self._write_video_metadata(stored)
+            return stored
+        except Exception:
+            temp_path.unlink(missing_ok=True)
+            path.unlink(missing_ok=True)
+            self._metadata_path(path).unlink(missing_ok=True)
+            self._cleanup_empty_parents(path)
+            raise
+
+    def save_video_stream(
+        self,
+        stream: object,
+        content_type: str,
+        *,
+        camera_id: str,
+        captured_at: datetime | str | None = None,
+        duration_ms: int | None = None,
+        max_bytes: int,
+        chunk_size: int = _HASH_CHUNK_SIZE,
+    ) -> StoredVideo:
+        """Write an incoming video upload to disk as it is read.
+
+        Unlike save_video(), which requires the full payload as a single
+        in-memory `bytes` object, this reads `stream` (anything exposing
+        `read(size)` -- the raw WSGI request stream, or a multipart
+        FileStorage.stream) in bounded chunks, hashing incrementally with the
+        same running-sha256 pattern _sha256_file() already uses for on-disk
+        rehashing, so peak memory per upload is bounded by `chunk_size`
+        instead of the full payload size (see #282 / #250). `chunk_size` only
+        exists so tests can exercise multi-chunk behavior with small payloads;
+        callers normally leave it at the default.
+        """
+        if duration_ms is not None and duration_ms < 0:
+            raise ValueError("duration_ms must be non-negative")
+        stored_camera_id = _validate_camera_id(camera_id)
+        if content_type != "video/mp4":
+            raise ValueError(f"Unsupported content type: {content_type}")
+        stored_captured_at = _normalize_captured_at(captured_at)
+
+        video_dir = self._camera_video_dir(stored_camera_id)
+        video_dir.mkdir(parents=True, exist_ok=True)
+        timestamp_source = stored_captured_at or datetime.now(tz=timezone.utc)
+        timestamp = timestamp_source.strftime("%Y%m%dT%H%M%S%f")
+        filename = f"video_{timestamp}_{uuid4().hex}.mp4"
+        path = video_dir / filename
+        temp_path = video_dir / f".{filename}.{uuid4().hex}.tmp"
+
+        digest = hashlib.sha256()
+        header = bytearray()
+        total = 0
+        try:
+            with temp_path.open("wb") as handle:
+                while True:
+                    chunk = stream.read(chunk_size)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > max_bytes:
+                        # Mirrors the existing len(data) > max_bytes check in
+                        # routes.py: a chunked request without Content-Length
+                        # can otherwise have its excess silently truncated by
+                        # Werkzeug's LimitedStream instead of rejected.
+                        raise ValueError("Payload too large")
+                    digest.update(chunk)
+                    if len(header) < 12:
+                        header.extend(chunk[: 12 - len(header)])
+                    handle.write(chunk)
+
+            if total == 0:
+                raise ValueError("No data received")
+            if len(header) < 12 or bytes(header[4:8]) != b"ftyp":
+                raise ValueError("Unsupported video payload")
+
+            os.replace(temp_path, path)
+            stat = path.stat()
+            stored = StoredVideo(
+                name=filename,
+                relative_path=path.relative_to(self.upload_dir).as_posix(),
+                size=stat.st_size,
+                camera_id=stored_camera_id,
+                captured_at=stored_captured_at,
+                stored_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+                duration_ms=duration_ms,
+                content_type=content_type,
+                sha256=digest.hexdigest(),
             )
             self._write_video_metadata(stored)
             return stored

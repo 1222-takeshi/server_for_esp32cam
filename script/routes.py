@@ -335,13 +335,25 @@ def _parse_optional_captured_at(value: str | None) -> tuple[datetime | None, str
         return None, "Invalid captured_at metadata"
 
 
-def _read_video_upload_payload() -> tuple[bytes | None, str | None, datetime | None, int | None, tuple[Response, int] | None]:
+def _read_video_upload_payload() -> tuple[object | None, str | None, datetime | None, int | None, tuple[Response, int] | None]:
+    """Resolve the readable stream + metadata for an incoming video upload.
+
+    Returns a `stream` object (anything exposing `read(size)`) instead of a
+    fully-buffered `bytes` payload -- `request.stream` for raw video/mp4
+    bodies, or the multipart FileStorage's own `.stream` -- so the caller can
+    hand it to `Storage.save_video_stream()` and write it to disk in bounded
+    chunks rather than materializing the whole upload in memory first (see
+    #282 / #250). Content-Length is still checked up front as a fast-path
+    rejection; the storage layer separately enforces `max_bytes` while
+    reading, since a chunked request without Content-Length can't be checked
+    here before any bytes are read.
+    """
     max_bytes = current_app.config.get("MAX_VIDEO_CONTENT_LENGTH", 10 * 1024 * 1024)
     if request.content_length is not None and request.content_length > max_bytes:
         return None, None, None, None, (jsonify({"message": "Payload too large"}), 413)
 
     if request.mimetype == "video/mp4":
-        data = request.get_data(cache=False)
+        stream = request.stream
         content_type = request.mimetype
         captured_at, captured_error = _parse_optional_captured_at(request.headers.get("X-Captured-At"))
         duration_ms, duration_error = _parse_video_duration_ms(request.headers.get("X-Duration-Ms"))
@@ -352,7 +364,7 @@ def _read_video_upload_payload() -> tuple[bytes | None, str | None, datetime | N
         content_type = upload.mimetype or ""
         if content_type != "video/mp4":
             return None, None, None, None, (jsonify({"message": "Unsupported content type"}), 415)
-        data = upload.read()
+        stream = upload.stream
         captured_at, captured_error = _parse_optional_captured_at(request.form.get("captured_at"))
         duration_ms, duration_error = _parse_video_duration_ms(request.form.get("duration_ms"))
     else:
@@ -362,11 +374,7 @@ def _read_video_upload_payload() -> tuple[bytes | None, str | None, datetime | N
         return None, None, None, None, (jsonify({"message": captured_error}), 400)
     if duration_error:
         return None, None, None, None, (jsonify({"message": duration_error}), 400)
-    if not data:
-        return None, None, None, None, (jsonify({"message": "No data received"}), 400)
-    if len(data) > max_bytes:
-        return None, None, None, None, (jsonify({"message": "Payload too large"}), 413)
-    return data, content_type, captured_at, duration_ms, None
+    return stream, content_type, captured_at, duration_ms, None
 
 
 @server.route("/")
@@ -694,18 +702,20 @@ def api_upload_video(camera_id: str):
     if auth_error is not None:
         return auth_error
 
-    data, content_type, captured_at, duration_ms, payload_error = _read_video_upload_payload()
+    stream, content_type, captured_at, duration_ms, payload_error = _read_video_upload_payload()
     if payload_error is not None:
         return payload_error
 
+    max_bytes = current_app.config.get("MAX_VIDEO_CONTENT_LENGTH", 10 * 1024 * 1024)
     stored = None
     try:
-        stored = _storage().save_video(
-            data or b"",
+        stored = _storage().save_video_stream(
+            stream,
             content_type or "",
             camera_id=camera_id,
             captured_at=captured_at,
             duration_ms=duration_ms,
+            max_bytes=max_bytes,
         )
         video = _metadata_store().record_video(stored)
         apply_video_upload_retention(stored)
@@ -717,6 +727,8 @@ def api_upload_video(camera_id: str):
         status = 415 if message.startswith("Unsupported") else 400
         if message == "Unsupported video payload":
             status = 415
+        elif message == "Payload too large":
+            status = 413
         current_app.logger.error("Video upload validation failed: %s", message)
         return jsonify({"message": message}), status
     except Exception as exc:  # pragma: no cover
