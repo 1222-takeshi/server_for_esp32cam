@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import os
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -157,6 +158,7 @@ def test_video_upload_triggers_retention_and_deletes_old_video(tmp_path):
         VIDEO_RETENTION_MAX_AGE_SECONDS=1,
     )
     storage = app.extensions["storage"]
+    metadata_store = app.extensions["metadata_store"]
 
     old = storage.save_video(
         _mp4(),
@@ -166,6 +168,14 @@ def test_video_upload_triggers_retention_and_deletes_old_video(tmp_path):
     )
     old_path = storage.upload_dir / old.relative_path
     _pin_mtime(storage, old, 1_000_000_000)
+    # Retention candidates now come from the SQLite index (#200/#225/#246/#260)
+    # instead of a filesystem walk, so the video needs a matching DB row --
+    # mirroring what the real /api/cameras/<camera_id>/videos route does via
+    # record_video() right after save_video_stream(). The recorded stored_at
+    # must reflect the pinned (old) mtime, not whatever save_video() saw.
+    metadata_store.record_video(
+        replace(old, stored_at=datetime.fromtimestamp(1_000_000_000, tz=timezone.utc))
+    )
 
     with app.test_client() as client:
         response = client.post(

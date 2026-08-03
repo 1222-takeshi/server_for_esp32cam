@@ -922,3 +922,149 @@ def test_metadata_store_gets_video_by_id_and_camera(tmp_path):
     assert store.get_video(record.id, camera_id="cam-a") == record
     assert store.get_video(record.id, camera_id="other-cam") is None
     assert store.get_video(record.id + 1, camera_id="cam-a") is None
+
+
+# ---------------------------------------------------------------------------
+# Retention candidates sourced from SQLite instead of a filesystem rglob()
+# walk (#200 / #225 / #246 / #260).
+# ---------------------------------------------------------------------------
+
+
+def test_list_snapshot_retention_candidates_orders_oldest_first(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    older = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    newer = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    store.record_snapshot(
+        _stored_image(
+            name="new.jpg",
+            relative_path="cam-a/images/new.jpg",
+            camera_id="cam-a",
+            captured_at=newer,
+            stored_at=newer,
+        )
+    )
+    store.record_snapshot(
+        _stored_image(
+            name="old.jpg",
+            relative_path="cam-a/images/old.jpg",
+            camera_id="cam-a",
+            captured_at=older,
+            stored_at=older,
+        )
+    )
+
+    candidates, total_bytes = store.list_snapshot_retention_candidates()
+
+    assert [relative_path for relative_path, _size, _stored_at in candidates] == [
+        "cam-a/images/old.jpg",
+        "cam-a/images/new.jpg",
+    ]
+    assert total_bytes == 246  # two 123-byte snapshots (see _stored_image())
+
+
+def test_list_snapshot_retention_candidates_excludes_paths_but_keeps_their_bytes(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    store.record_snapshot(
+        _stored_image(
+            name="excluded.jpg",
+            relative_path="cam-a/images/excluded.jpg",
+            camera_id="cam-a",
+            captured_at=stored_at,
+            stored_at=stored_at,
+        )
+    )
+    store.record_snapshot(
+        _stored_image(
+            name="kept.jpg",
+            relative_path="cam-a/images/kept.jpg",
+            camera_id="cam-a",
+            captured_at=stored_at,
+            stored_at=stored_at,
+        )
+    )
+
+    candidates, total_bytes = store.list_snapshot_retention_candidates(
+        exclude_relative_paths={"cam-a/images/excluded.jpg"}
+    )
+
+    # The excluded (just-uploaded) file must never be a deletion candidate,
+    # but its bytes still count toward total_bytes for max_bytes accounting,
+    # matching what a full filesystem listing would have summed.
+    assert [relative_path for relative_path, _size, _stored_at in candidates] == [
+        "cam-a/images/kept.jpg"
+    ]
+    assert total_bytes == 246
+
+
+def test_list_snapshot_retention_candidates_empty_store(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+
+    candidates, total_bytes = store.list_snapshot_retention_candidates()
+
+    assert candidates == []
+    assert total_bytes == 0
+
+
+def test_list_video_retention_candidates_orders_oldest_first(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    older = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    newer = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    store.record_video(
+        _stored_video(
+            name="new.mp4",
+            relative_path="cam-a/videos/new.mp4",
+            camera_id="cam-a",
+            captured_at=newer,
+            stored_at=newer,
+        )
+    )
+    store.record_video(
+        _stored_video(
+            name="old.mp4",
+            relative_path="cam-a/videos/old.mp4",
+            camera_id="cam-a",
+            captured_at=older,
+            stored_at=older,
+        )
+    )
+
+    candidates, total_bytes = store.list_video_retention_candidates()
+
+    assert [relative_path for relative_path, _size, _stored_at in candidates] == [
+        "cam-a/videos/old.mp4",
+        "cam-a/videos/new.mp4",
+    ]
+    assert total_bytes == 912  # two 456-byte videos (see _stored_video())
+
+
+def test_list_video_retention_candidates_excludes_paths_but_keeps_their_bytes(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    store.record_video(
+        _stored_video(
+            name="excluded.mp4",
+            relative_path="cam-a/videos/excluded.mp4",
+            camera_id="cam-a",
+            captured_at=stored_at,
+            stored_at=stored_at,
+        )
+    )
+    store.record_video(
+        _stored_video(
+            name="kept.mp4",
+            relative_path="cam-a/videos/kept.mp4",
+            camera_id="cam-a",
+            captured_at=stored_at,
+            stored_at=stored_at,
+        )
+    )
+
+    candidates, total_bytes = store.list_video_retention_candidates(
+        exclude_relative_paths={"cam-a/videos/excluded.mp4"}
+    )
+
+    assert [relative_path for relative_path, _size, _stored_at in candidates] == [
+        "cam-a/videos/kept.mp4"
+    ]
+    assert total_bytes == 912

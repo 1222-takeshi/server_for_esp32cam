@@ -1,12 +1,15 @@
-"""Unit tests for the retention-scan gate (issue #196).
+"""Unit tests for the retention-scan gate (issue #196) and the SQLite-backed
+retention scan itself (#200 / #225 / #246 / #260).
 
-`apply_retention()` / `apply_video_retention()` walk the entire upload
-directory, so `RetentionScanGate` exists to avoid paying that cost on every
-single upload. These tests cover the gate's scan/skip schedule in isolation,
-that the `apply_*_upload_retention` wrappers honor it (skipping the storage
-scan entirely when the gate declines), and an end-to-end route-level test
-that retention is still eventually enforced even though intermediate uploads
-skip the scan.
+Retention candidates are sourced from the SQLite index
+(`SQLiteMetadataStore.list_snapshot_retention_candidates()` /
+`list_video_retention_candidates()`) instead of a filesystem `rglob()` walk,
+so `RetentionScanGate` exists to avoid paying even that indexed-query cost on
+every single upload. These tests cover the gate's scan/skip schedule in
+isolation, that the `apply_*_upload_retention` wrappers honor it (skipping
+the metadata-store query entirely when the gate declines), and an end-to-end
+route-level test that retention is still eventually enforced even though
+intermediate uploads skip the scan.
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ from script.retention import (
     apply_video_upload_retention,
 )
 from script.app import create_app
-from script.storage import StorageRetentionPolicy, StorageRetentionResult, StoredImage, StoredVideo
+from script.storage import StorageRetentionPolicy, StoredImage, StoredVideo
 from tests.conftest import MINIMAL_JPEG
 
 import pytest
@@ -130,30 +133,30 @@ def _stored_video() -> StoredVideo:
     )
 
 
-def test_apply_upload_retention_skips_storage_scan_when_gate_declines(app):
-    fake_storage = MagicMock()
-    app.extensions["storage"] = fake_storage
+def test_apply_upload_retention_skips_metadata_query_when_gate_declines(app):
+    fake_metadata_store = MagicMock()
+    app.extensions["metadata_store"] = fake_metadata_store
     app.extensions["storage_retention_scan_gate"] = MagicMock(should_scan=MagicMock(return_value=False))
 
     with app.app_context():
         result = apply_upload_retention(_stored_image())
 
     assert result == []
-    fake_storage.apply_retention.assert_not_called()
+    fake_metadata_store.list_snapshot_retention_candidates.assert_not_called()
 
 
-def test_apply_upload_retention_runs_storage_scan_when_gate_allows(app):
-    fake_storage = MagicMock()
-    fake_storage.apply_retention.return_value = StorageRetentionResult(
-        deleted_relative_paths=[], deleted_bytes=0
-    )
-    app.extensions["storage"] = fake_storage
+def test_apply_upload_retention_runs_metadata_query_when_gate_allows(app):
+    fake_metadata_store = MagicMock()
+    fake_metadata_store.list_snapshot_retention_candidates.return_value = ([], 0)
+    app.extensions["metadata_store"] = fake_metadata_store
     app.extensions["storage_retention_scan_gate"] = MagicMock(should_scan=MagicMock(return_value=True))
 
     with app.app_context():
         apply_upload_retention(_stored_image())
 
-    fake_storage.apply_retention.assert_called_once()
+    fake_metadata_store.list_snapshot_retention_candidates.assert_called_once_with(
+        exclude_relative_paths={_stored_image().relative_path}
+    )
 
 
 def test_apply_upload_retention_disabled_policy_never_consults_gate(app):
@@ -169,32 +172,32 @@ def test_apply_upload_retention_disabled_policy_never_consults_gate(app):
     gate.should_scan.assert_not_called()
 
 
-def test_apply_video_upload_retention_skips_storage_scan_when_gate_declines(app):
+def test_apply_video_upload_retention_skips_metadata_query_when_gate_declines(app):
     app.extensions["video_retention_policy"] = StorageRetentionPolicy(max_bytes=1000)
-    fake_storage = MagicMock()
-    app.extensions["storage"] = fake_storage
+    fake_metadata_store = MagicMock()
+    app.extensions["metadata_store"] = fake_metadata_store
     app.extensions["video_retention_scan_gate"] = MagicMock(should_scan=MagicMock(return_value=False))
 
     with app.app_context():
         result = apply_video_upload_retention(_stored_video())
 
     assert result == []
-    fake_storage.apply_video_retention.assert_not_called()
+    fake_metadata_store.list_video_retention_candidates.assert_not_called()
 
 
-def test_apply_video_upload_retention_runs_storage_scan_when_gate_allows(app):
+def test_apply_video_upload_retention_runs_metadata_query_when_gate_allows(app):
     app.extensions["video_retention_policy"] = StorageRetentionPolicy(max_bytes=1000)
-    fake_storage = MagicMock()
-    fake_storage.apply_video_retention.return_value = StorageRetentionResult(
-        deleted_relative_paths=[], deleted_bytes=0
-    )
-    app.extensions["storage"] = fake_storage
+    fake_metadata_store = MagicMock()
+    fake_metadata_store.list_video_retention_candidates.return_value = ([], 0)
+    app.extensions["metadata_store"] = fake_metadata_store
     app.extensions["video_retention_scan_gate"] = MagicMock(should_scan=MagicMock(return_value=True))
 
     with app.app_context():
         apply_video_upload_retention(_stored_video())
 
-    fake_storage.apply_video_retention.assert_called_once()
+    fake_metadata_store.list_video_retention_candidates.assert_called_once_with(
+        exclude_relative_paths={_stored_video().relative_path}
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +262,42 @@ def test_retention_scan_interval_default_matches_prior_every_upload_behavior(app
     resp2 = _upload(client, device_id="cam-ret", captured_at="2026-01-01T01:00:00Z")
     snap2 = resp2.get_json()
 
+    assert client.get(f"/files/{snap2['filename']}").status_code == 200
+    assert client.get(f"/files/{snap1['filename']}").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Retention no longer walks the filesystem (#200 / #225 / #246 / #260):
+# candidates now come from the SQLite index, not `Path.rglob()`.
+# ---------------------------------------------------------------------------
+
+
+def test_upload_retention_does_not_walk_the_filesystem(app_factory, monkeypatch):
+    from pathlib import Path
+
+    # Build the app (and its startup sync_storage_index() rglob) *before*
+    # patching, since that one-time startup sync is intentionally
+    # filesystem-based; only the per-upload retention path must avoid it.
+    app = app_factory(STORAGE_RETENTION_MAX_BYTES=1000)
+    client = app.test_client()
+
+    def _fail_rglob(self, *args, **kwargs):
+        raise AssertionError(
+            "retention must source candidates from SQLite, not Path.rglob()"
+        )
+
+    monkeypatch.setattr(Path, "rglob", _fail_rglob)
+
+    resp1 = _upload(client, device_id="cam-ret", captured_at="2026-01-01T00:00:00Z")
+    assert resp1.status_code == 200
+    snap1 = resp1.get_json()
+
+    resp2 = _upload(client, device_id="cam-ret", captured_at="2026-01-01T01:00:00Z")
+    assert resp2.status_code == 200
+    snap2 = resp2.get_json()
+
+    # Retention still ran and evicted the oldest snapshot -- it just did so
+    # without ever calling Path.rglob().
     assert client.get(f"/files/{snap2['filename']}").status_code == 200
     assert client.get(f"/files/{snap1['filename']}").status_code == 404
 
