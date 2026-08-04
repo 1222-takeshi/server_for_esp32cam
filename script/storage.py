@@ -167,6 +167,8 @@ class Storage(Protocol):
 
     def delete_video(self, stored: StoredVideo) -> None: ...
 
+    def delete_video_by_relative_path(self, relative_path: str) -> int: ...
+
     def delete_camera_files(self, camera_id: str) -> None: ...
 
 
@@ -529,6 +531,22 @@ class LocalFilesystemStorage:
         self._metadata_path(path).unlink(missing_ok=True)
         path.unlink(missing_ok=True)
         self._cleanup_empty_parents(path)
+
+    def delete_video_by_relative_path(self, relative_path: str) -> int:
+        """Delete a video (and its sidecar) given only its relative_path.
+
+        Mirrors delete_image_by_relative_path(): retention candidates sourced
+        from the SQLite index (script/metadata.py) already carry
+        relative_path/size, so callers don't need to reconstruct a full
+        StoredVideo (camera_id/captured_at/duration_ms/sha256/...) just to
+        call delete_video(). Raises FileNotFoundError if the file is missing.
+        """
+        path = self._resolve_video_relative_path(relative_path)
+        size = path.stat().st_size
+        self._metadata_path(path).unlink(missing_ok=True)
+        path.unlink(missing_ok=True)
+        self._cleanup_empty_parents(path)
+        return size
 
     def _stored_video(self, path: Path, *, include_metadata: bool = True) -> StoredVideo:
         stat = path.stat()

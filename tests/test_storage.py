@@ -459,6 +459,34 @@ def test_list_videos_returns_latest_first(tmp_path):
     assert videos[0].camera_id == "cam-b"
 
 
+def test_delete_video_by_relative_path_removes_file_and_sidecar(tmp_path):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+    payload = b"\x00\x00\x00 ftypisom" + b"video-bytes"
+    stored = storage.save_video(
+        payload,
+        "video/mp4",
+        camera_id="esp32cam-01",
+        captured_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+    )
+    video_path = storage.upload_dir / stored.relative_path
+    sidecar_path = video_path.with_suffix(".mp4.json")
+    assert video_path.exists()
+    assert sidecar_path.exists()
+
+    size = storage.delete_video_by_relative_path(stored.relative_path)
+
+    assert size == len(payload)
+    assert not video_path.exists()
+    assert not sidecar_path.exists()
+
+
+def test_delete_video_by_relative_path_raises_for_missing_file(tmp_path):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+
+    with pytest.raises(FileNotFoundError):
+        storage.delete_video_by_relative_path("cam-a/videos/missing.mp4")
+
+
 def test_delete_camera_files_removes_images_and_videos(tmp_path):
     storage = LocalFilesystemStorage(tmp_path / "uploads")
     storage.save_image(

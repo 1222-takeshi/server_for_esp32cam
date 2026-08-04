@@ -532,6 +532,63 @@ class SQLiteMetadataStore:
             )
         return int(cursor.rowcount)
 
+    def list_snapshot_retention_candidates(
+        self, *, exclude_relative_paths: set[str] | None = None
+    ) -> tuple[list[tuple[str, int, datetime]], int]:
+        """Snapshot rows for retention decisions, sourced from the index
+        instead of a filesystem walk (#200 / #225 / #246 / #260).
+
+        Returns ``(candidates, total_bytes)``: ``candidates`` is
+        ``(relative_path, size, stored_at)`` for every indexed snapshot
+        except ``exclude_relative_paths`` (the file that just triggered the
+        scan, which retention must never evict on its own upload), ordered
+        oldest-first by ``stored_at`` so callers can evict from the front
+        until they're back under quota/age limits. ``total_bytes`` sums
+        *every* indexed snapshot's size, including excluded ones, matching
+        what a full `list_images()` walk would have summed.
+        """
+        conn = self._get_connection()
+        total_row = conn.execute("SELECT COALESCE(SUM(size), 0) AS total FROM snapshots").fetchone()
+        total_bytes = int(total_row["total"])
+
+        exclude = exclude_relative_paths or set()
+        rows = conn.execute(
+            "SELECT relative_path, size, stored_at FROM snapshots ORDER BY stored_at ASC, id ASC"
+        ).fetchall()
+        candidates = [
+            (
+                row["relative_path"],
+                row["size"],
+                _parse_datetime(row["stored_at"]) or datetime.now(tz=timezone.utc),
+            )
+            for row in rows
+            if row["relative_path"] not in exclude
+        ]
+        return candidates, total_bytes
+
+    def list_video_retention_candidates(
+        self, *, exclude_relative_paths: set[str] | None = None
+    ) -> tuple[list[tuple[str, int, datetime]], int]:
+        """Video counterpart of list_snapshot_retention_candidates()."""
+        conn = self._get_connection()
+        total_row = conn.execute("SELECT COALESCE(SUM(size), 0) AS total FROM videos").fetchone()
+        total_bytes = int(total_row["total"])
+
+        exclude = exclude_relative_paths or set()
+        rows = conn.execute(
+            "SELECT relative_path, size, stored_at FROM videos ORDER BY stored_at ASC, id ASC"
+        ).fetchall()
+        candidates = [
+            (
+                row["relative_path"],
+                row["size"],
+                _parse_datetime(row["stored_at"]) or datetime.now(tz=timezone.utc),
+            )
+            for row in rows
+            if row["relative_path"] not in exclude
+        ]
+        return candidates, total_bytes
+
     def sync_storage_index(
         self,
         images: list[StoredImage],
