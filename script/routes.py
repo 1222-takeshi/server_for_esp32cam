@@ -538,7 +538,7 @@ def list_files():
     try:
         store = _metadata_store()
         total = store.count_snapshots()
-        files = store.list_recent_snapshots(limit=limit, offset=offset)
+        files = store.list_recent_snapshots(limit=limit, offset=offset, include_detections=False)
         total_pages = max(1, (total + limit - 1) // limit)
         return render_template(
             "files.html",
@@ -614,7 +614,9 @@ def mjpeg_stream(camera_id: str):
     try:
         unsubscribe = publisher.subscribe(on_event, camera_id=camera_id)
 
-        latest = _metadata_store().list_recent_snapshots(camera_id=camera_id, limit=1)
+        latest = _metadata_store().list_recent_snapshots(
+            camera_id=camera_id, limit=1, include_detections=False
+        )
         initial_frame: bytes | None = None
         if latest:
             try:

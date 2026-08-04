@@ -648,6 +648,7 @@ class SQLiteMetadataStore:
         camera_id: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
+        include_detections: bool = True,
     ) -> list[SnapshotRecord]:
         query = "SELECT * FROM snapshots WHERE 1 = 1"
         params: list[object] = []
@@ -666,7 +667,11 @@ class SQLiteMetadataStore:
             params.extend([limit, offset])
         conn = self._get_connection()
         rows = conn.execute(query, tuple(params)).fetchall()
-        detections = self._detections_by_snapshot_id([row["id"] for row in rows])
+        detections = (
+            self._detections_by_snapshot_id([row["id"] for row in rows])
+            if include_detections
+            else {}
+        )
         return [self._snapshot_from_row(row, detections.get(row["id"], ())) for row in rows]
 
     def get_camera(self, camera_id: str) -> CameraRecord | None:
