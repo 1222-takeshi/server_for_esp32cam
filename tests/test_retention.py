@@ -309,6 +309,44 @@ def test_upload_retention_does_not_walk_the_filesystem(app_factory, monkeypatch)
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# _run_retention_scan(): a candidate sourced from the SQLite index can point
+# at a file that's already missing from disk (removed out-of-band, or left
+# behind by a prior partial failure). The scan must still report it as
+# evicted so the caller purges the now-orphaned metadata row -- otherwise
+# the same missing-file candidate is silently re-evaluated (and silently
+# skipped) on every future scan, permanently drifting the index from disk
+# reality.
+# ---------------------------------------------------------------------------
+
+
+def test_run_retention_scan_reports_missing_file_candidates_as_deleted():
+    from script.retention import _run_retention_scan
+
+    policy = StorageRetentionPolicy(max_bytes=1)
+    candidates = [
+        ("cam-a/missing.jpg", 100, datetime(2026, 1, 1, tzinfo=timezone.utc)),
+        ("cam-a/present.jpg", 50, datetime(2026, 1, 2, tzinfo=timezone.utc)),
+    ]
+
+    def delete_file(relative_path: str) -> int:
+        if relative_path == "cam-a/missing.jpg":
+            raise FileNotFoundError(relative_path)
+        return 50
+
+    deleted, deleted_bytes = _run_retention_scan(
+        policy=policy,
+        candidates=candidates,
+        total_bytes=150,
+        delete_file=delete_file,
+    )
+
+    # Both candidates are reported as deleted (so the caller purges both
+    # metadata rows), but deleted_bytes only counts the file actually freed.
+    assert deleted == ["cam-a/missing.jpg", "cam-a/present.jpg"]
+    assert deleted_bytes == 50
+
+
 def test_disk_usage_check_default_interval_runs_every_upload(app_factory):
     app = app_factory()
     client = app.test_client()

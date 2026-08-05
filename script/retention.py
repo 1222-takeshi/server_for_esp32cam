@@ -58,6 +58,14 @@ def _run_retention_scan(
     walk (#200 / #225 / #246 / #260); the eviction decision itself mirrors
     the loop `LocalFilesystemStorage.apply_retention()` /
     `apply_video_retention()` still use directly.
+
+    The returned ``deleted`` list drives the caller's metadata-row cleanup
+    (``delete_snapshots_by_relative_paths()`` / ``delete_videos_by_relative_paths()``),
+    so it includes candidates chosen for eviction even when ``delete_file()``
+    finds nothing on disk to remove (``FileNotFoundError``) -- an index row
+    with no backing file is exactly the kind of drift this scan should
+    self-heal, not leave behind for every future scan to silently re-skip.
+    ``deleted_bytes`` only counts bytes actually freed from disk.
     """
     reference = datetime.now(tz=timezone.utc)
     deleted: list[str] = []
@@ -77,8 +85,14 @@ def _run_retention_scan(
         try:
             deleted_bytes += delete_file(relative_path)
         except FileNotFoundError:
-            total_bytes -= size
-            continue
+            # The index says this candidate should be evicted, but the file
+            # is already gone from disk (e.g. removed out-of-band, or left
+            # behind by a prior partial failure). Nothing to delete, but the
+            # SQLite row is now stale and must still be purged below --
+            # otherwise this same missing-file candidate gets silently
+            # re-evaluated (and silently skipped) on every future scan
+            # forever, permanently drifting the index from disk reality.
+            pass
         deleted.append(relative_path)
         total_bytes -= size
 
