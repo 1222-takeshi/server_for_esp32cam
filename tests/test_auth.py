@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from script import config as config_module
-from script.auth import check_device_api_key_for_device
+from script.auth import check_device_api_key, check_device_api_key_for_device
 from script.app import create_app
 from tests.conftest import MINIMAL_JPEG
 
@@ -121,6 +121,69 @@ def test_per_device_keys_take_precedence_over_shared_key(tmp_path):
     with app.app_context():
         assert not check_device_api_key_for_device("cam-a", "shared-key")
         assert check_device_api_key_for_device("cam-a", "per-device-key")
+
+
+# --- check_device_api_key() coarse pre-check / value-set cache (#205 / #226) ---
+
+
+def test_check_device_api_key_accepts_any_configured_per_device_key(tmp_path):
+    app = create_app(
+        {
+            "TESTING": True,
+            "UPLOAD_DIR": tmp_path / "uploads",
+            "DB_PATH": tmp_path / "esp32cam.sqlite3",
+            "INFERENCE_MODE": "sync",
+            "DEVICE_API_KEYS": {"cam-a": "key-a", "cam-b": "key-b"},
+        }
+    )
+    with app.app_context():
+        assert check_device_api_key("key-a")
+        assert check_device_api_key("key-b")
+        assert not check_device_api_key("key-c")
+        assert not check_device_api_key(None)
+        assert not check_device_api_key("")
+
+
+def test_check_device_api_key_cache_survives_repeated_calls(tmp_path):
+    # Regression guard for the frozenset cache: calling check_device_api_key()
+    # multiple times against the same DEVICE_API_KEYS dict object must keep
+    # returning results consistent with that dict, not a stale snapshot.
+    app = create_app(
+        {
+            "TESTING": True,
+            "UPLOAD_DIR": tmp_path / "uploads",
+            "DB_PATH": tmp_path / "esp32cam.sqlite3",
+            "INFERENCE_MODE": "sync",
+            "DEVICE_API_KEYS": {"cam-a": "key-a"},
+        }
+    )
+    with app.app_context():
+        for _ in range(3):
+            assert check_device_api_key("key-a")
+            assert not check_device_api_key("key-b")
+
+
+def test_check_device_api_key_cache_invalidates_on_config_reassignment(tmp_path):
+    # DEVICE_API_KEYS can be swapped out for a new dict object after app
+    # creation (tests do this directly; see test_remote_control_api.py). The
+    # cached value-set must not leak the old dict's keys nor miss the new
+    # dict's keys once that reassignment happens.
+    app = create_app(
+        {
+            "TESTING": True,
+            "UPLOAD_DIR": tmp_path / "uploads",
+            "DB_PATH": tmp_path / "esp32cam.sqlite3",
+            "INFERENCE_MODE": "sync",
+            "DEVICE_API_KEYS": {"cam-a": "old-key"},
+        }
+    )
+    with app.app_context():
+        assert check_device_api_key("old-key")
+
+        app.config["DEVICE_API_KEYS"] = {"cam-a": "new-key"}
+
+        assert check_device_api_key("new-key")
+        assert not check_device_api_key("old-key")
 
 
 def test_upload_rejects_wrong_device_key(app_with_device_key):

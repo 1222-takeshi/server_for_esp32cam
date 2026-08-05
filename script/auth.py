@@ -42,12 +42,55 @@ def _constant_time_equal(a: str, b: str) -> bool:
     return hmac.compare_digest(a.encode(), b.encode())
 
 
+def _device_api_key_value_set(per_device: dict[str, str]) -> frozenset[str]:
+    """O(1)-amortized membership set backing check_device_api_key()'s
+    coarse "is this key valid for *some* device" pre-check.
+
+    check_device_api_key() previously ran an O(n_devices) hmac.compare_digest
+    scan over every configured per-device key on *every* call -- and it is
+    called on every /upload, /api/status_update and /api/log_error request
+    (via require_device_auth), plus once more per request just to pick the
+    upload rate-limit bucket key (routes._upload_rate_limit_key()), so a
+    deployment with many cameras paid that scan twice per request (#205 /
+    #226). Building a frozenset of the configured keys is O(n_devices) once;
+    membership tests against it are O(1) average afterwards.
+
+    This intentionally trades the per-key hmac.compare_digest() used here
+    for hash-based set membership: Python's string hashing (SipHash, salted
+    per-process) processes the whole key in roughly length-proportional
+    time regardless of content, so it does not reintroduce a
+    content-dependent timing oracle the way a naive `==` scan would. The
+    check that actually authorizes an action for a specific device --
+    check_device_api_key_for_device() -- still does a single
+    hmac.compare_digest() against exactly that device's key, so the
+    security-sensitive comparison is unchanged; this function only backs
+    the coarse existence check used for fail-fast auth and rate-limit
+    bucketing.
+
+    The cache is stored on the Flask app (current_app.extensions) keyed by
+    the `per_device` dict object's *identity*, not a copy of it or its
+    id(). That means it is rebuilt exactly when
+    app.config["DEVICE_API_KEYS"] is reassigned to a new dict (including
+    directly in tests, which bypass validate_auth_config()) and reused for
+    the common case where the same dict object serves every request.
+    Keeping a reference to the dict itself (rather than caching by id())
+    also avoids a false cache hit if an old dict were garbage collected and
+    a new, unrelated one happened to reuse the same address.
+    """
+    cached = current_app.extensions.get("_device_api_key_value_set")
+    if cached is not None and cached[0] is per_device:
+        return cached[1]
+    value_set = frozenset(per_device.values())
+    current_app.extensions["_device_api_key_value_set"] = (per_device, value_set)
+    return value_set
+
+
 def check_device_api_key(provided: str | None) -> bool:
     """Return True if device auth passes (key matches or auth is disabled)."""
     required = current_app.config.get("DEVICE_API_KEY", "")
     per_device = current_app.config.get("DEVICE_API_KEYS", {}) or {}
     if per_device:
-        return bool(provided) and any(_constant_time_equal(str(key), provided) for key in per_device.values())
+        return bool(provided) and provided in _device_api_key_value_set(per_device)
     if not required:
         return True
     if not provided:
