@@ -15,7 +15,7 @@ Contributions to this project are welcome! If you'd like to contribute, please f
     Implement your feature or bug fix.
     *   Ensure your code follows the existing style and structure.
     *   If you add new features, consider adding relevant documentation or examples.
-    *   If you add new Python dependencies, update `requirements.txt` (if one exists, or consider creating one).
+    *   If you add or change a Python dependency in `pyproject.toml`, regenerate the pinned lockfile: `uv pip compile pyproject.toml --extra dev --extra server --extra ml --generate-hashes -o requirements.lock.txt`.
 
 4.  **Test Your Changes:**
     Thoroughly test your changes to ensure they work as expected and do not introduce new issues.

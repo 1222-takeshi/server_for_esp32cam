@@ -15,7 +15,7 @@
     機能またはバグ修正を実装します。
     *   コードが既存のスタイルと構造に従っていることを確認してください。
     *   新しい機能を追加する場合は、関連するドキュメントや例を追加することを検討してください。
-    *   新しいPythonの依存関係を追加する場合は、`requirements.txt` (存在する場合、または作成を検討) を更新してください。
+    *   `pyproject.toml` のPython依存関係を追加・変更した場合は、固定済みロックファイルを再生成してください: `uv pip compile pyproject.toml --extra dev --extra server --extra ml --generate-hashes -o requirements.lock.txt`
 
 4.  **変更のテスト:**
     変更が期待どおりに機能し、新しい問題が発生しないことを確認するために、変更を徹底的にテストしてください。
