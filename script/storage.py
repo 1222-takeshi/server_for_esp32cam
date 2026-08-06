@@ -58,12 +58,6 @@ class StorageRetentionPolicy:
         )
 
 
-@dataclass(frozen=True)
-class StorageRetentionResult:
-    deleted_relative_paths: list[str]
-    deleted_bytes: int
-
-
 def _normalize_device_id(value: str | None) -> str | None:
     if value is None:
         return None
@@ -121,22 +115,6 @@ class Storage(Protocol):
     def read_image_path_by_relative_path(self, relative_path: str) -> Path: ...
 
     def delete_image_by_relative_path(self, relative_path: str) -> int: ...
-
-    def apply_retention(
-        self,
-        policy: StorageRetentionPolicy,
-        *,
-        now: datetime | None = None,
-        preserve_relative_paths: set[str] | None = None,
-    ) -> StorageRetentionResult: ...
-
-    def apply_video_retention(
-        self,
-        policy: StorageRetentionPolicy,
-        *,
-        now: datetime | None = None,
-        preserve_relative_paths: set[str] | None = None,
-    ) -> StorageRetentionResult: ...
 
     def save_video(
         self,
@@ -621,100 +599,3 @@ class LocalFilesystemStorage:
 
     def _delete_image(self, image: StoredImage) -> int:
         return self.delete_image_by_relative_path(image.relative_path)
-
-    def apply_retention(
-        self,
-        policy: StorageRetentionPolicy,
-        *,
-        now: datetime | None = None,
-        preserve_relative_paths: set[str] | None = None,
-    ) -> StorageRetentionResult:
-        if not policy.enabled:
-            return StorageRetentionResult(deleted_relative_paths=[], deleted_bytes=0)
-
-        preserved = preserve_relative_paths or set()
-        reference = now or datetime.now(tz=timezone.utc)
-        # Retention decisions only use relative_path/size/created_at (file
-        # mtime), never device_id/captured_at, so skip the per-image JSON
-        # sidecar read+parse that list_images() does by default.
-        images = self.list_images(include_metadata=False)
-        candidates = sorted(
-            [image for image in images if image.relative_path not in preserved],
-            key=lambda item: item.created_at,
-        )
-        total_bytes = sum(image.size for image in images)
-        deleted: list[str] = []
-        deleted_bytes = 0
-
-        for image in candidates:
-            age_expired = (
-                policy.max_age_seconds is not None
-                and policy.max_age_seconds > 0
-                and (reference - image.created_at).total_seconds() > policy.max_age_seconds
-            )
-            over_quota = (
-                policy.max_bytes is not None
-                and policy.max_bytes > 0
-                and total_bytes > policy.max_bytes
-            )
-            if not age_expired and not over_quota:
-                continue
-            try:
-                deleted_bytes += self._delete_image(image)
-            except FileNotFoundError:
-                total_bytes -= image.size
-                continue
-            deleted.append(image.relative_path)
-            total_bytes -= image.size
-
-        return StorageRetentionResult(deleted_relative_paths=deleted, deleted_bytes=deleted_bytes)
-
-    def apply_video_retention(
-        self,
-        policy: StorageRetentionPolicy,
-        *,
-        now: datetime | None = None,
-        preserve_relative_paths: set[str] | None = None,
-    ) -> StorageRetentionResult:
-        if not policy.enabled:
-            return StorageRetentionResult(deleted_relative_paths=[], deleted_bytes=0)
-
-        preserved = preserve_relative_paths or set()
-        reference = now or datetime.now(tz=timezone.utc)
-        # Retention decisions only use relative_path/size/stored_at/camera_id,
-        # never captured_at/duration_ms/sha256, so skip the per-video JSON
-        # sidecar read (and legacy sha256 backfill) that list_videos() does
-        # by default. Mirrors the same fix already applied to apply_retention().
-        videos = self.list_videos(include_metadata=False)
-        candidates = sorted(
-            [v for v in videos if v.relative_path not in preserved],
-            key=lambda item: item.stored_at,
-        )
-        total_bytes = sum(v.size for v in videos)
-        deleted: list[str] = []
-        deleted_bytes = 0
-
-        for v in candidates:
-            age_expired = (
-                policy.max_age_seconds is not None
-                and policy.max_age_seconds > 0
-                and (reference - v.stored_at).total_seconds() > policy.max_age_seconds
-            )
-            over_quota = (
-                policy.max_bytes is not None
-                and policy.max_bytes > 0
-                and total_bytes > policy.max_bytes
-            )
-            if not age_expired and not over_quota:
-                continue
-            try:
-                size = (self.upload_dir / v.relative_path).stat().st_size
-                self.delete_video(v)
-                deleted_bytes += size
-            except (FileNotFoundError, OSError):
-                total_bytes -= v.size
-                continue
-            deleted.append(v.relative_path)
-            total_bytes -= v.size
-
-        return StorageRetentionResult(deleted_relative_paths=deleted, deleted_bytes=deleted_bytes)

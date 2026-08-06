@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from script.storage import LocalFilesystemStorage, StorageRetentionPolicy
+from script.storage import LocalFilesystemStorage
 
 
 def test_storage_creates_upload_directory(tmp_path):
@@ -213,76 +213,6 @@ def test_storage_read_image_path_by_relative_path_returns_resolved_path(tmp_path
     assert path.read_bytes() == b"\xff\xd8jpeg"
 
 
-def test_apply_retention_deletes_images_older_than_max_age(tmp_path):
-    storage = LocalFilesystemStorage(tmp_path / "uploads")
-    captured_at = datetime(2026, 5, 9, 12, 0, tzinfo=timezone.utc)
-    old = storage.save_image(
-        b"\xff\xd8old", "image/jpeg", device_id="cam-a", captured_at=captured_at
-    )
-    keep = storage.save_image(
-        b"\xff\xd8keep", "image/jpeg", device_id="cam-a", captured_at=captured_at
-    )
-
-    old_path = storage.upload_dir / old.relative_path
-    keep_path = storage.upload_dir / keep.relative_path
-    os.utime(old_path, (1_800_000_000, 1_800_000_000))
-    os.utime(keep_path, (1_800_000_120, 1_800_000_120))
-
-    result = storage.apply_retention(
-        StorageRetentionPolicy(max_age_seconds=60),
-        now=datetime.fromtimestamp(1_800_000_120, tz=timezone.utc),
-        preserve_relative_paths={keep.relative_path},
-    )
-
-    assert result.deleted_relative_paths == [old.relative_path]
-    assert result.deleted_bytes == old.size
-    assert not old_path.exists()
-    assert not storage._metadata_path(old_path).exists()
-    assert keep_path.exists()
-
-
-def test_apply_retention_does_not_read_metadata_sidecars(tmp_path, monkeypatch):
-    storage = LocalFilesystemStorage(tmp_path / "uploads")
-    captured_at = datetime(2026, 5, 9, 12, 0, tzinfo=timezone.utc)
-    old = storage.save_image(
-        b"\xff\xd8old", "image/jpeg", device_id="cam-a", captured_at=captured_at
-    )
-    old_path = storage.upload_dir / old.relative_path
-    os.utime(old_path, (1_800_000_000, 1_800_000_000))
-
-    def fail_if_called(*_args, **_kwargs):
-        raise AssertionError("apply_retention must not read metadata sidecars")
-
-    monkeypatch.setattr(storage, "_read_metadata", fail_if_called)
-
-    result = storage.apply_retention(
-        StorageRetentionPolicy(max_age_seconds=60),
-        now=datetime.fromtimestamp(1_800_000_120, tz=timezone.utc),
-    )
-
-    assert result.deleted_relative_paths == [old.relative_path]
-
-
-def test_apply_retention_ignores_stale_candidates_that_were_already_deleted(tmp_path, monkeypatch):
-    storage = LocalFilesystemStorage(tmp_path / "uploads")
-    captured_at = datetime(2026, 5, 9, 12, 0, tzinfo=timezone.utc)
-    stale = storage.save_image(
-        b"\xff\xd8old", "image/jpeg", device_id="cam-a", captured_at=captured_at
-    )
-    stale_path = storage.upload_dir / stale.relative_path
-    storage._metadata_path(stale_path).unlink()
-    stale_path.unlink()
-    monkeypatch.setattr(storage, "list_images", lambda **_: [stale])
-
-    result = storage.apply_retention(
-        StorageRetentionPolicy(max_age_seconds=60),
-        now=datetime.fromtimestamp(1_800_000_120, tz=timezone.utc),
-    )
-
-    assert result.deleted_relative_paths == []
-    assert result.deleted_bytes == 0
-
-
 def test_delete_camera_files_removes_camera_directory(tmp_path):
     storage = LocalFilesystemStorage(tmp_path / "uploads")
     storage.save_image(
@@ -310,35 +240,6 @@ def test_delete_camera_files_rejects_path_traversal(tmp_path):
 
     with pytest.raises(ValueError):
         storage.delete_camera_files("../secret")
-
-
-def test_apply_retention_deletes_oldest_images_until_under_max_bytes(tmp_path):
-    storage = LocalFilesystemStorage(tmp_path / "uploads")
-    captured_at = datetime(2026, 5, 9, 12, 0, tzinfo=timezone.utc)
-    oldest = storage.save_image(
-        b"\xff\xd8" + (b"a" * 8), "image/jpeg", device_id="cam-a", captured_at=captured_at
-    )
-    middle = storage.save_image(
-        b"\xff\xd8" + (b"b" * 18), "image/jpeg", device_id="cam-a", captured_at=captured_at
-    )
-    newest = storage.save_image(
-        b"\xff\xd8" + (b"c" * 28), "image/jpeg", device_id="cam-a", captured_at=captured_at
-    )
-
-    for offset, image in enumerate([oldest, middle, newest]):
-        path = storage.upload_dir / image.relative_path
-        os.utime(path, (1_800_000_000 + offset, 1_800_000_000 + offset))
-
-    result = storage.apply_retention(
-        StorageRetentionPolicy(max_bytes=55),
-        preserve_relative_paths={newest.relative_path},
-    )
-
-    assert result.deleted_relative_paths == [oldest.relative_path]
-    assert result.deleted_bytes == oldest.size
-    assert not (storage.upload_dir / oldest.relative_path).exists()
-    assert (storage.upload_dir / middle.relative_path).exists()
-    assert (storage.upload_dir / newest.relative_path).exists()
 
 
 def test_save_video_persists_mp4_in_camera_video_directory_with_sidecar(tmp_path):
