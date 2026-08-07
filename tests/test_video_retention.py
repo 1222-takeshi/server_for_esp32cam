@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 from dataclasses import replace
 import os
 from datetime import datetime, timezone
@@ -44,11 +45,13 @@ def test_video_upload_triggers_retention_and_deletes_old_video(tmp_path):
     storage = app.extensions["storage"]
     metadata_store = app.extensions["metadata_store"]
 
-    old = storage.save_video(
-        _mp4(),
+    old_payload = _mp4()
+    old = storage.save_video_stream(
+        io.BytesIO(old_payload),
         "video/mp4",
         camera_id="cam-a",
         captured_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        max_bytes=len(old_payload) + 1024,
     )
     old_path = storage.upload_dir / old.relative_path
     _pin_mtime(storage, old, 1_000_000_000)
@@ -56,7 +59,7 @@ def test_video_upload_triggers_retention_and_deletes_old_video(tmp_path):
     # instead of a filesystem walk, so the video needs a matching DB row --
     # mirroring what the real /api/cameras/<camera_id>/videos route does via
     # record_video() right after save_video_stream(). The recorded stored_at
-    # must reflect the pinned (old) mtime, not whatever save_video() saw.
+    # must reflect the pinned (old) mtime, not whatever save_video_stream() saw.
     metadata_store.record_video(
         replace(old, stored_at=datetime.fromtimestamp(1_000_000_000, tz=timezone.utc))
     )
