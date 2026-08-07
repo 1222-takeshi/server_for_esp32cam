@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 from dataclasses import replace
 import os
 from datetime import datetime, timezone
@@ -14,11 +15,13 @@ def _mp4() -> bytes:
 
 
 def _save_video(storage: LocalFilesystemStorage, camera_id: str = "cam-a") -> object:
-    return storage.save_video(
-        _mp4(),
+    payload = _mp4()
+    return storage.save_video_stream(
+        io.BytesIO(payload),
         "video/mp4",
         camera_id=camera_id,
         captured_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+        max_bytes=len(payload) + 1024,
     )
 
 
@@ -51,23 +54,29 @@ def test_apply_video_retention_age_deletes_old_video(tmp_path):
 
 def test_apply_video_retention_bytes_deletes_oldest_until_under_limit(tmp_path):
     storage = LocalFilesystemStorage(tmp_path / "uploads")
-    oldest = storage.save_video(
-        b"\x00\x00\x00 ftypisom" + b"a" * 20,
+    oldest_payload = b"\x00\x00\x00 ftypisom" + b"a" * 20
+    oldest = storage.save_video_stream(
+        io.BytesIO(oldest_payload),
         "video/mp4",
         camera_id="cam-a",
         captured_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+        max_bytes=len(oldest_payload) + 1024,
     )
-    middle = storage.save_video(
-        b"\x00\x00\x00 ftypisom" + b"b" * 30,
+    middle_payload = b"\x00\x00\x00 ftypisom" + b"b" * 30
+    middle = storage.save_video_stream(
+        io.BytesIO(middle_payload),
         "video/mp4",
         camera_id="cam-a",
         captured_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+        max_bytes=len(middle_payload) + 1024,
     )
-    newest = storage.save_video(
-        b"\x00\x00\x00 ftypisom" + b"c" * 40,
+    newest_payload = b"\x00\x00\x00 ftypisom" + b"c" * 40
+    newest = storage.save_video_stream(
+        io.BytesIO(newest_payload),
         "video/mp4",
         camera_id="cam-a",
         captured_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+        max_bytes=len(newest_payload) + 1024,
     )
     for offset, v in enumerate([oldest, middle, newest]):
         _pin_mtime(storage, v, 1_800_000_000 + offset)
@@ -160,11 +169,13 @@ def test_video_upload_triggers_retention_and_deletes_old_video(tmp_path):
     storage = app.extensions["storage"]
     metadata_store = app.extensions["metadata_store"]
 
-    old = storage.save_video(
-        _mp4(),
+    old_payload = _mp4()
+    old = storage.save_video_stream(
+        io.BytesIO(old_payload),
         "video/mp4",
         camera_id="cam-a",
         captured_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        max_bytes=len(old_payload) + 1024,
     )
     old_path = storage.upload_dir / old.relative_path
     _pin_mtime(storage, old, 1_000_000_000)
@@ -172,7 +183,7 @@ def test_video_upload_triggers_retention_and_deletes_old_video(tmp_path):
     # instead of a filesystem walk, so the video needs a matching DB row --
     # mirroring what the real /api/cameras/<camera_id>/videos route does via
     # record_video() right after save_video_stream(). The recorded stored_at
-    # must reflect the pinned (old) mtime, not whatever save_video() saw.
+    # must reflect the pinned (old) mtime, not whatever save_video_stream() saw.
     metadata_store.record_video(
         replace(old, stored_at=datetime.fromtimestamp(1_000_000_000, tz=timezone.utc))
     )
