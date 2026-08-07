@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
@@ -346,12 +347,13 @@ def test_save_video_persists_mp4_in_camera_video_directory_with_sidecar(tmp_path
     captured_at = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
     payload = b"\x00\x00\x00 ftypisom" + b"video-bytes"
 
-    stored = storage.save_video(
-        payload,
+    stored = storage.save_video_stream(
+        _BoundedReadStream(payload),
         "video/mp4",
         camera_id="esp32cam-01",
         captured_at=captured_at,
         duration_ms=5000,
+        max_bytes=len(payload) + 1024,
     )
 
     video_path = storage.upload_dir / stored.relative_path
@@ -389,11 +391,12 @@ def test_save_video_rejects_unsafe_camera_id_before_creating_paths(tmp_path):
 
     for camera_id in ["", "../cam", "cam/one", "cam one", "cam%2Fone", "cam\none"]:
         with pytest.raises(ValueError, match="Invalid camera_id"):
-            storage.save_video(
-                b"\x00\x00\x00 ftypisom",
+            storage.save_video_stream(
+                _BoundedReadStream(b"\x00\x00\x00 ftypisom"),
                 "video/mp4",
                 camera_id=camera_id,
                 captured_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+                max_bytes=1024,
             )
 
     assert list(storage.upload_dir.rglob("*")) == []
@@ -403,11 +406,12 @@ def test_save_video_rejects_non_mp4_payload_and_cleans_temporary_file(tmp_path):
     storage = LocalFilesystemStorage(tmp_path / "uploads")
 
     with pytest.raises(ValueError, match="Unsupported video payload"):
-        storage.save_video(
-            b"not an mp4",
+        storage.save_video_stream(
+            _BoundedReadStream(b"not an mp4"),
             "video/mp4",
             camera_id="esp32cam-01",
             captured_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+            max_bytes=1024,
         )
 
     assert list(storage.upload_dir.rglob("*")) == []
@@ -416,11 +420,12 @@ def test_save_video_rejects_non_mp4_payload_and_cleans_temporary_file(tmp_path):
 def test_list_videos_backfills_sha256_for_legacy_sidecar_missing_hash(tmp_path):
     storage = LocalFilesystemStorage(tmp_path / "uploads")
     payload = b"\x00\x00\x00 ftypisom" + b"legacy-video-bytes"
-    stored = storage.save_video(
-        payload,
+    stored = storage.save_video_stream(
+        _BoundedReadStream(payload),
         "video/mp4",
         camera_id="esp32cam-01",
         captured_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+        max_bytes=len(payload) + 1024,
     )
     video_path = storage.upload_dir / stored.relative_path
     sidecar_path = video_path.with_suffix(".mp4.json")
@@ -438,19 +443,23 @@ def test_list_videos_backfills_sha256_for_legacy_sidecar_missing_hash(tmp_path):
 
 def test_list_videos_returns_latest_first(tmp_path):
     storage = LocalFilesystemStorage(tmp_path / "uploads")
-    first = storage.save_video(
-        b"\x00\x00\x00 ftypisom" + b"first",
+    first_payload = b"\x00\x00\x00 ftypisom" + b"first"
+    first = storage.save_video_stream(
+        _BoundedReadStream(first_payload),
         "video/mp4",
         camera_id="cam-a",
         captured_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+        max_bytes=len(first_payload) + 1024,
     )
     first_path = storage.upload_dir / first.relative_path
     os.utime(first_path, (1_700_000_000, 1_700_000_000))
-    second = storage.save_video(
-        b"\x00\x00\x00 ftypisom" + b"second",
+    second_payload = b"\x00\x00\x00 ftypisom" + b"second"
+    second = storage.save_video_stream(
+        _BoundedReadStream(second_payload),
         "video/mp4",
         camera_id="cam-b",
         captured_at=datetime(2026, 6, 1, 12, 1, tzinfo=timezone.utc),
+        max_bytes=len(second_payload) + 1024,
     )
 
     videos = storage.list_videos()
@@ -462,11 +471,12 @@ def test_list_videos_returns_latest_first(tmp_path):
 def test_delete_video_by_relative_path_removes_file_and_sidecar(tmp_path):
     storage = LocalFilesystemStorage(tmp_path / "uploads")
     payload = b"\x00\x00\x00 ftypisom" + b"video-bytes"
-    stored = storage.save_video(
-        payload,
+    stored = storage.save_video_stream(
+        _BoundedReadStream(payload),
         "video/mp4",
         camera_id="esp32cam-01",
         captured_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+        max_bytes=len(payload) + 1024,
     )
     video_path = storage.upload_dir / stored.relative_path
     sidecar_path = video_path.with_suffix(".mp4.json")
@@ -495,11 +505,13 @@ def test_delete_camera_files_removes_images_and_videos(tmp_path):
         device_id="cam-to-delete",
         captured_at=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc),
     )
-    storage.save_video(
-        b"\x00\x00\x00 ftypisom" + b"video",
+    video_payload = b"\x00\x00\x00 ftypisom" + b"video"
+    storage.save_video_stream(
+        _BoundedReadStream(video_payload),
         "video/mp4",
         camera_id="cam-to-delete",
         captured_at=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc),
+        max_bytes=len(video_payload) + 1024,
     )
     camera_dir = tmp_path / "uploads" / "cam-to-delete"
 
@@ -512,12 +524,13 @@ def test_save_video_rejects_negative_duration(tmp_path):
     storage = LocalFilesystemStorage(tmp_path / "uploads")
 
     with pytest.raises(ValueError, match="duration_ms must be non-negative"):
-        storage.save_video(
-            b"\x00\x00\x00 ftypisom",
+        storage.save_video_stream(
+            _BoundedReadStream(b"\x00\x00\x00 ftypisom"),
             "video/mp4",
             camera_id="esp32cam-01",
             captured_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
             duration_ms=-1,
+            max_bytes=1024,
         )
 
     assert list(storage.upload_dir.rglob("*")) == []
@@ -578,16 +591,10 @@ def test_save_video_stream_persists_mp4_without_buffering_whole_payload(tmp_path
     assert list(storage.upload_dir.rglob("*.tmp")) == []
 
 
-def test_save_video_stream_matches_save_video_hash_for_same_payload(tmp_path):
+def test_save_video_stream_hash_matches_sha256_of_original_payload(tmp_path):
     storage = LocalFilesystemStorage(tmp_path / "uploads")
     payload = b"\x00\x00\x00 ftypisom" + b"identical-bytes"
 
-    buffered = storage.save_video(
-        payload,
-        "video/mp4",
-        camera_id="esp32cam-01",
-        captured_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
-    )
     streamed = storage.save_video_stream(
         _BoundedReadStream(payload),
         "video/mp4",
@@ -597,7 +604,7 @@ def test_save_video_stream_matches_save_video_hash_for_same_payload(tmp_path):
         chunk_size=4,
     )
 
-    assert streamed.sha256 == buffered.sha256
+    assert streamed.sha256 == hashlib.sha256(payload).hexdigest()
 
 
 def test_save_video_stream_rejects_empty_stream(tmp_path):
