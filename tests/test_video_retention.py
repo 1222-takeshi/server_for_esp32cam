@@ -7,22 +7,11 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from script.app import create_app
-from script.storage import LocalFilesystemStorage, StorageRetentionPolicy
+from script.storage import LocalFilesystemStorage
 
 
 def _mp4() -> bytes:
     return b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom" + b"\x00\x00\x00\x08mdat"
-
-
-def _save_video(storage: LocalFilesystemStorage, camera_id: str = "cam-a") -> object:
-    payload = _mp4()
-    return storage.save_video_stream(
-        io.BytesIO(payload),
-        "video/mp4",
-        camera_id=camera_id,
-        captured_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
-        max_bytes=len(payload) + 1024,
-    )
 
 
 def _pin_mtime(storage: LocalFilesystemStorage, video, ts: float) -> None:
@@ -31,119 +20,6 @@ def _pin_mtime(storage: LocalFilesystemStorage, video, ts: float) -> None:
     sidecar = storage._metadata_path(path)
     if sidecar.exists():
         os.utime(sidecar, (ts, ts))
-
-
-def test_apply_video_retention_age_deletes_old_video(tmp_path):
-    storage = LocalFilesystemStorage(tmp_path / "uploads")
-    old = _save_video(storage)
-    keep = _save_video(storage)
-    _pin_mtime(storage, old, 1_800_000_000)
-    _pin_mtime(storage, keep, 1_800_000_120)
-
-    result = storage.apply_video_retention(
-        StorageRetentionPolicy(max_age_seconds=60),
-        now=datetime.fromtimestamp(1_800_000_120, tz=timezone.utc),
-        preserve_relative_paths={keep.relative_path},
-    )
-
-    assert result.deleted_relative_paths == [old.relative_path]
-    assert result.deleted_bytes == old.size
-    assert not (storage.upload_dir / old.relative_path).exists()
-    assert (storage.upload_dir / keep.relative_path).exists()
-
-
-def test_apply_video_retention_bytes_deletes_oldest_until_under_limit(tmp_path):
-    storage = LocalFilesystemStorage(tmp_path / "uploads")
-    oldest_payload = b"\x00\x00\x00 ftypisom" + b"a" * 20
-    oldest = storage.save_video_stream(
-        io.BytesIO(oldest_payload),
-        "video/mp4",
-        camera_id="cam-a",
-        captured_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
-        max_bytes=len(oldest_payload) + 1024,
-    )
-    middle_payload = b"\x00\x00\x00 ftypisom" + b"b" * 30
-    middle = storage.save_video_stream(
-        io.BytesIO(middle_payload),
-        "video/mp4",
-        camera_id="cam-a",
-        captured_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
-        max_bytes=len(middle_payload) + 1024,
-    )
-    newest_payload = b"\x00\x00\x00 ftypisom" + b"c" * 40
-    newest = storage.save_video_stream(
-        io.BytesIO(newest_payload),
-        "video/mp4",
-        camera_id="cam-a",
-        captured_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
-        max_bytes=len(newest_payload) + 1024,
-    )
-    for offset, v in enumerate([oldest, middle, newest]):
-        _pin_mtime(storage, v, 1_800_000_000 + offset)
-
-    total = oldest.size + middle.size + newest.size
-    limit = total - oldest.size
-
-    result = storage.apply_video_retention(
-        StorageRetentionPolicy(max_bytes=limit),
-        preserve_relative_paths={newest.relative_path},
-    )
-
-    assert oldest.relative_path in result.deleted_relative_paths
-    assert not (storage.upload_dir / oldest.relative_path).exists()
-    assert (storage.upload_dir / middle.relative_path).exists()
-    assert (storage.upload_dir / newest.relative_path).exists()
-
-
-def test_apply_video_retention_preserve_skips_current_upload(tmp_path):
-    storage = LocalFilesystemStorage(tmp_path / "uploads")
-    v1 = _save_video(storage)
-    v2 = _save_video(storage)
-    _pin_mtime(storage, v1, 1_700_000_000)
-    _pin_mtime(storage, v2, 1_700_001_000)
-
-    result = storage.apply_video_retention(
-        StorageRetentionPolicy(max_age_seconds=1),
-        now=datetime.fromtimestamp(1_700_002_000, tz=timezone.utc),
-        preserve_relative_paths={v2.relative_path},
-    )
-
-    assert v2.relative_path not in result.deleted_relative_paths
-    assert (storage.upload_dir / v2.relative_path).exists()
-
-
-def test_apply_video_retention_does_not_read_metadata_sidecars(tmp_path, monkeypatch):
-    storage = LocalFilesystemStorage(tmp_path / "uploads")
-    old = _save_video(storage)
-    _pin_mtime(storage, old, 1_800_000_000)
-
-    def fail_if_called(*_args, **_kwargs):
-        raise AssertionError("apply_video_retention must not read metadata sidecars")
-
-    monkeypatch.setattr(storage, "_read_video_metadata", fail_if_called)
-    monkeypatch.setattr("script.storage._sha256_file", fail_if_called)
-
-    result = storage.apply_video_retention(
-        StorageRetentionPolicy(max_age_seconds=60),
-        now=datetime.fromtimestamp(1_800_000_120, tz=timezone.utc),
-    )
-
-    assert result.deleted_relative_paths == [old.relative_path]
-
-
-def test_apply_video_retention_disabled_policy_returns_empty(tmp_path):
-    storage = LocalFilesystemStorage(tmp_path / "uploads")
-    v = _save_video(storage)
-    _pin_mtime(storage, v, 1_000_000_000)
-
-    result = storage.apply_video_retention(
-        StorageRetentionPolicy(),
-        now=datetime.fromtimestamp(2_000_000_000, tz=timezone.utc),
-    )
-
-    assert result.deleted_relative_paths == []
-    assert result.deleted_bytes == 0
-    assert (storage.upload_dir / v.relative_path).exists()
 
 
 def _video_app(tmp_path, **overrides):

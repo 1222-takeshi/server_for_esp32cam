@@ -56,8 +56,8 @@ def _run_retention_scan(
     (`SQLiteMetadataStore.list_snapshot_retention_candidates()` /
     `list_video_retention_candidates()`) rather than a filesystem `rglob()`
     walk (#200 / #225 / #246 / #260); the eviction decision itself mirrors
-    the loop `LocalFilesystemStorage.apply_retention()` /
-    `apply_video_retention()` still use directly.
+    the loop the now-removed `LocalFilesystemStorage.apply_retention()` /
+    `apply_video_retention()` used to run directly.
 
     The returned ``deleted`` list drives the caller's metadata-row cleanup
     (``delete_snapshots_by_relative_paths()`` / ``delete_videos_by_relative_paths()``),
