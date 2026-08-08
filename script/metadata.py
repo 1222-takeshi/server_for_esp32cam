@@ -141,6 +141,17 @@ def _camera_status(
 
 
 class SQLiteMetadataStore:
+    # Each OS thread (and, under a monkey-patched gevent worker, each
+    # greenlet -- see _get_connection() below) gets its own sqlite3
+    # connection, so concurrent writers are common: an upload's
+    # record_snapshot()/apply_upload_retention() can race a retention scan
+    # or another camera's upload. WAL mode still serializes writers, and
+    # without busy_timeout set, SQLite's default is to raise "database is
+    # locked" (SQLITE_BUSY) immediately instead of retrying -- turning a
+    # transient lock into a failed request (and, on /upload, a wasted
+    # device wake/retry cycle) instead of a few milliseconds of wait.
+    _BUSY_TIMEOUT_MS = 5000
+
     def __init__(self, db_path: str | Path, *, default_expected_interval_seconds: int = 300):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -157,6 +168,7 @@ class SQLiteMetadataStore:
             init_conn.row_factory = sqlite3.Row
             init_conn.execute("PRAGMA journal_mode = WAL")
             init_conn.execute("PRAGMA synchronous = NORMAL")
+            init_conn.execute(f"PRAGMA busy_timeout = {self._BUSY_TIMEOUT_MS}")
             with init_conn:
                 init_conn.execute("PRAGMA foreign_keys = ON")
             self._initialize_schema(init_conn)
@@ -174,6 +186,7 @@ class SQLiteMetadataStore:
             conn.execute("PRAGMA journal_mode = WAL")
             conn.execute("PRAGMA synchronous = NORMAL")
             conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute(f"PRAGMA busy_timeout = {self._BUSY_TIMEOUT_MS}")
             self._local.connection = conn
         return conn
 
