@@ -15,14 +15,6 @@ from script.validation import is_valid_camera_id
 _HASH_CHUNK_SIZE = 1024 * 1024
 
 
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(_HASH_CHUNK_SIZE), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 @dataclass(frozen=True)
 class StoredImage:
     name: str
@@ -126,8 +118,6 @@ class Storage(Protocol):
         duration_ms: int | None = None,
         max_bytes: int,
     ) -> StoredVideo: ...
-
-    def list_videos(self, *, include_metadata: bool = True) -> list[StoredVideo]: ...
 
     def read_video_path_by_relative_path(self, relative_path: str) -> tuple[Path, str]: ...
 
@@ -299,29 +289,6 @@ class LocalFilesystemStorage:
         finally:
             temp_path.unlink(missing_ok=True)
 
-    def _read_video_metadata(
-        self, video_path: Path
-    ) -> tuple[datetime | None, int | None, str, str | None]:
-        metadata_path = self._metadata_path(video_path)
-        if not metadata_path.exists() or not metadata_path.is_file():
-            return None, None, "video/mp4", None
-        try:
-            payload = json.loads(metadata_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            return None, None, "video/mp4", None
-        if not isinstance(payload, dict):
-            return None, None, "video/mp4", None
-        captured_at = payload.get("captured_at")
-        duration_ms = payload.get("duration_ms")
-        content_type = payload.get("content_type")
-        sha256 = payload.get("sha256")
-        return (
-            _normalize_captured_at(captured_at) if isinstance(captured_at, str) else None,
-            duration_ms if isinstance(duration_ms, int) else None,
-            content_type if isinstance(content_type, str) else "video/mp4",
-            sha256 if isinstance(sha256, str) else None,
-        )
-
     def save_video_stream(
         self,
         stream: object,
@@ -337,12 +304,10 @@ class LocalFilesystemStorage:
 
         This reads `stream` (anything exposing `read(size)` -- the raw WSGI
         request stream, or a multipart FileStorage.stream) in bounded chunks,
-        hashing incrementally with the same running-sha256 pattern
-        _sha256_file() already uses for on-disk rehashing, so peak memory per
-        upload is bounded by `chunk_size` instead of the full payload size
-        (see #282 / #250). `chunk_size` only exists so tests can exercise
-        multi-chunk behavior with small payloads; callers normally leave it
-        at the default.
+        hashing incrementally so peak memory per upload is bounded by
+        `chunk_size` instead of the full payload size (see #282 / #250).
+        `chunk_size` only exists so tests can exercise multi-chunk behavior
+        with small payloads; callers normally leave it at the default.
         """
         if duration_ms is not None and duration_ms < 0:
             raise ValueError("duration_ms must be non-negative")
@@ -407,14 +372,6 @@ class LocalFilesystemStorage:
             self._cleanup_empty_parents(path)
             raise
 
-    def list_videos(self, *, include_metadata: bool = True) -> list[StoredVideo]:
-        videos = [
-            self._stored_video(path, include_metadata=include_metadata)
-            for path in self.upload_dir.rglob("*.mp4")
-            if path.is_file() and path.parent.name == "videos"
-        ]
-        return sorted(videos, key=lambda video: video.stored_at, reverse=True)
-
     def _resolve_video_relative_path(self, relative_path: str) -> Path:
         normalized = Path(relative_path)
         if normalized.is_absolute() or ".." in normalized.parts:
@@ -457,56 +414,6 @@ class LocalFilesystemStorage:
         path.unlink(missing_ok=True)
         self._cleanup_empty_parents(path)
         return size
-
-    def _stored_video(self, path: Path, *, include_metadata: bool = True) -> StoredVideo:
-        stat = path.stat()
-        try:
-            camera_id = path.relative_to(self.upload_dir).parts[0]
-            camera_id = _validate_camera_id(camera_id)
-        except (ValueError, IndexError):
-            camera_id = "unknown"
-
-        if not include_metadata:
-            # Retention decisions only use relative_path/size/stored_at/camera_id,
-            # so skip the sidecar JSON read and the legacy sha256 backfill below.
-            return StoredVideo(
-                name=path.name,
-                relative_path=path.relative_to(self.upload_dir).as_posix(),
-                size=stat.st_size,
-                camera_id=camera_id,
-                captured_at=None,
-                stored_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
-                duration_ms=None,
-                content_type="video/mp4",
-                sha256="",
-            )
-
-        captured_at, duration_ms, content_type, sha256 = self._read_video_metadata(path)
-        data_sha256 = sha256
-        if data_sha256 is None:
-            # Legacy sidecar predating stream-hashing on upload: hash once
-            # here and persist it back so future scans don't re-read the
-            # whole file every time list_videos() is called.
-            data_sha256 = _sha256_file(path)
-        video = StoredVideo(
-            name=path.name,
-            relative_path=path.relative_to(self.upload_dir).as_posix(),
-            size=stat.st_size,
-            camera_id=camera_id,
-            captured_at=captured_at,
-            stored_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
-            duration_ms=duration_ms,
-            content_type=content_type,
-            sha256=data_sha256,
-        )
-        if sha256 is None:
-            try:
-                self._write_video_metadata(video)
-            except OSError:
-                # Best-effort cache backfill; a failed write just means the
-                # next scan re-hashes this file, matching the old behavior.
-                pass
-        return video
 
     def read_image_by_relative_path(self, relative_path: str) -> bytes:
         return self._resolve_relative_path(relative_path).read_bytes()
