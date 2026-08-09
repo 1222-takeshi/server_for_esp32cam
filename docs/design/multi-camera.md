@@ -132,9 +132,13 @@ detections (
     y1 REAL NOT NULL,
     x2 REAL NOT NULL,
     y2 REAL NOT NULL,
+    track_id INTEGER,
     FOREIGN KEY(snapshot_id) REFERENCES snapshots(id) ON DELETE CASCADE
 )
 ```
+
+`track_id` is nullable for backward compatibility. When tracking is enabled,
+IDs are assigned independently per `camera_id` by the in-process IoU tracker.
 
 ### カメラステータス判定ロジック
 

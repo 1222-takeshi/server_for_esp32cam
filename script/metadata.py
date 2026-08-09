@@ -21,6 +21,7 @@ class DetectionRecord:
     y1: float
     x2: float
     y2: float
+    track_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -196,29 +197,35 @@ class SQLiteMetadataStore:
         row = conn.execute(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='snapshots'"
         ).fetchone()
-        if row is None or "ON DELETE CASCADE" in row["sql"].upper():
-            return
-
-        with conn:
-            conn.execute(
-                """
-                CREATE TABLE snapshots_new (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    filename TEXT NOT NULL UNIQUE,
-                    relative_path TEXT NOT NULL UNIQUE,
-                    size INTEGER NOT NULL,
-                    camera_id TEXT,
-                    captured_at TEXT,
-                    stored_at TEXT NOT NULL,
-                    inference_status TEXT NOT NULL,
-                    inference_error TEXT,
-                    FOREIGN KEY(camera_id) REFERENCES cameras(camera_id) ON DELETE CASCADE
+        if row is not None and "ON DELETE CASCADE" not in row["sql"].upper():
+            with conn:
+                conn.execute(
+                    """
+                    CREATE TABLE snapshots_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        filename TEXT NOT NULL UNIQUE,
+                        relative_path TEXT NOT NULL UNIQUE,
+                        size INTEGER NOT NULL,
+                        camera_id TEXT,
+                        captured_at TEXT,
+                        stored_at TEXT NOT NULL,
+                        inference_status TEXT NOT NULL,
+                        inference_error TEXT,
+                        FOREIGN KEY(camera_id) REFERENCES cameras(camera_id) ON DELETE CASCADE
+                    )
+                    """
                 )
-                """
-            )
-            conn.execute("INSERT INTO snapshots_new SELECT * FROM snapshots")
-            conn.execute("DROP TABLE snapshots")
-            conn.execute("ALTER TABLE snapshots_new RENAME TO snapshots")
+                conn.execute("INSERT INTO snapshots_new SELECT * FROM snapshots")
+                conn.execute("DROP TABLE snapshots")
+                conn.execute("ALTER TABLE snapshots_new RENAME TO snapshots")
+
+        detection_columns = {
+            column["name"]
+            for column in conn.execute("PRAGMA table_info(detections)").fetchall()
+        }
+        if "track_id" not in detection_columns:
+            with conn:
+                conn.execute("ALTER TABLE detections ADD COLUMN track_id INTEGER")
 
     def _initialize_schema(self, conn: sqlite3.Connection) -> None:
         conn.executescript(
@@ -277,6 +284,7 @@ class SQLiteMetadataStore:
                     y1 REAL NOT NULL,
                     x2 REAL NOT NULL,
                     y2 REAL NOT NULL,
+                    track_id INTEGER,
                     FOREIGN KEY(snapshot_id) REFERENCES snapshots(id) ON DELETE CASCADE
                 );
 
@@ -952,6 +960,7 @@ class SQLiteMetadataStore:
                 detections.y1,
                 detections.x2,
                 detections.y2,
+                detections.track_id,
                 snapshots.filename,
                 snapshots.camera_id,
                 snapshots.captured_at,
@@ -971,6 +980,7 @@ class SQLiteMetadataStore:
                 "label": row["label"],
                 "score": row["score"],
                 "bbox": [row["x1"], row["y1"], row["x2"], row["y2"]],
+                "track_id": row["track_id"],
                 "filename": row["filename"],
                 "camera_id": row["camera_id"],
                 "captured_at": row["captured_at"],
@@ -1080,8 +1090,8 @@ class SQLiteMetadataStore:
                 conn.executemany(
                     """
                     INSERT INTO detections (
-                        snapshot_id, label, score, x1, y1, x2, y2
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        snapshot_id, label, score, x1, y1, x2, y2, track_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     [
                         (
@@ -1092,6 +1102,7 @@ class SQLiteMetadataStore:
                             detection.y1,
                             detection.x2,
                             detection.y2,
+                            detection.track_id,
                         )
                         for detection in detections
                     ],
@@ -1106,7 +1117,7 @@ class SQLiteMetadataStore:
 
         placeholders = ",".join("?" for _ in snapshot_ids)
         query = f"""
-            SELECT snapshot_id, label, score, x1, y1, x2, y2
+            SELECT snapshot_id, label, score, x1, y1, x2, y2, track_id
             FROM detections
             WHERE snapshot_id IN ({placeholders})
             ORDER BY id ASC
@@ -1126,6 +1137,7 @@ class SQLiteMetadataStore:
                     y1=row["y1"],
                     x2=row["x2"],
                     y2=row["y2"],
+                    track_id=row["track_id"],
                 )
             )
         return {snapshot_id: tuple(records) for snapshot_id, records in grouped.items()}

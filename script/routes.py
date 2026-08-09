@@ -164,6 +164,7 @@ def _serialize_detection(detection) -> dict[str, object]:
         "label": detection.label,
         "score": round(detection.score, 4),
         "bbox": [detection.x1, detection.y1, detection.x2, detection.y2],
+        "track_id": detection.track_id,
     }
 
 
@@ -1073,7 +1074,19 @@ def api_detections():
         )
         buf = StringIO()
         writer = csv.writer(buf)
-        writer.writerow(["camera_id", "filename", "captured_at", "stored_at", "label", "score", "x1", "y1", "x2", "y2"])
+        writer.writerow([
+            "camera_id",
+            "filename",
+            "captured_at",
+            "stored_at",
+            "label",
+            "score",
+            "track_id",
+            "x1",
+            "y1",
+            "x2",
+            "y2",
+        ])
         _csv_danger = frozenset("=+-@\t\r")
         for d in rows:
             bbox = d["bbox"]
@@ -1082,7 +1095,7 @@ def api_detections():
                 label = "'" + label
             writer.writerow([
                 d["camera_id"], d["filename"], d["captured_at"], d["stored_at"],
-                label, round(d["score"], 4),
+                label, round(d["score"], 4), d["track_id"],
                 bbox[0], bbox[1], bbox[2], bbox[3],
             ])
         return Response(

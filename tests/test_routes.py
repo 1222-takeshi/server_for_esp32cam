@@ -29,6 +29,17 @@ class BrokenDetector:
         raise RuntimeError("model unavailable")
 
 
+class SequenceDetector:
+    def __init__(self, responses):
+        self._responses = list(responses)
+
+    def detect(self, _image_bytes: bytes):
+        response = self._responses.pop(0)
+        if isinstance(response, BaseException):
+            raise response
+        return response
+
+
 def test_healthz_returns_ok(client):
     response = client.get("/healthz")
 
@@ -595,6 +606,50 @@ def test_upload_records_person_detection_when_detector_finds_person(app, client)
     assert response.status_code == 200
     assert len(body["detections"]) == 1
     assert body["detections"][0]["label"] == "person"
+
+
+def test_tracking_adds_stable_track_id_to_snapshot_and_detection_apis(app, client):
+    from script.detector import Detection
+    from script.tracking import ObjectTracker
+
+    app.extensions["inference_service"].tracker = ObjectTracker(iou_threshold=0.3)
+    app.extensions["inference_service"].detector = FakePersonDetector(
+        [Detection(label="person", score=0.9, x1=0.1, y1=0.2, x2=0.4, y2=0.8)]
+    )
+
+    for captured_at in ("2026-03-11T12:34:56Z", "2026-03-11T12:35:56Z"):
+        headers = {**UPLOAD_HEADERS, "X-Captured-At": captured_at}
+        response = client.post("/upload", data=MINIMAL_JPEG, headers=headers)
+        assert response.status_code == 200
+
+    detections = client.get("/api/detections").get_json()["detections"]
+    snapshots = client.get("/api/cameras/esp32cam-front-door/snapshots").get_json()["snapshots"]
+
+    assert [d["track_id"] for d in detections] == [1, 1]
+    assert [s["detections"][0]["track_id"] for s in snapshots] == [1, 1]
+
+
+def test_skipped_inference_advances_tracking_missed_frame_state(app, client):
+    from script.detector import Detection, DetectionSkipped
+    from script.tracking import ObjectTracker
+
+    detection = Detection(label="person", score=0.9, x1=0.1, y1=0.2, x2=0.4, y2=0.8)
+    app.extensions["inference_service"].tracker = ObjectTracker(max_missed_frames=0)
+    app.extensions["inference_service"].detector = SequenceDetector(
+        [[detection], DetectionSkipped("temporarily skipped"), [detection]]
+    )
+
+    for index in range(3):
+        response = client.post(
+            "/upload",
+            data=MINIMAL_JPEG,
+            headers={**UPLOAD_HEADERS, "X-Captured-At": f"2026-03-11T12:3{index}:56Z"},
+        )
+        assert response.status_code == 200
+
+    detections = client.get("/api/detections").get_json()["detections"]
+
+    assert [d["track_id"] for d in detections] == [2, 1]
 
 
 def test_upload_keeps_detected_snapshot_when_detection_only_mode_enabled(app, client):
@@ -1320,7 +1375,7 @@ def test_api_detections_export_csv(app):
     assert "text/csv" in response.content_type
     assert "attachment" in response.headers.get("Content-Disposition", "")
     lines = response.data.decode().splitlines()
-    assert lines[0] == "camera_id,filename,captured_at,stored_at,label,score,x1,y1,x2,y2"
+    assert lines[0] == "camera_id,filename,captured_at,stored_at,label,score,track_id,x1,y1,x2,y2"
     assert len(lines) >= 2
 
 
@@ -1330,7 +1385,7 @@ def test_api_detections_export_csv_empty(client):
     assert response.status_code == 200
     assert "text/csv" in response.content_type
     lines = response.data.decode().splitlines()
-    assert lines[0] == "camera_id,filename,captured_at,stored_at,label,score,x1,y1,x2,y2"
+    assert lines[0] == "camera_id,filename,captured_at,stored_at,label,score,track_id,x1,y1,x2,y2"
     assert len(lines) == 1
 
 

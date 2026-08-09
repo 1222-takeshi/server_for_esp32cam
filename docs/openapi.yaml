@@ -1304,6 +1304,10 @@ components:
         person_detected:
           type: boolean
           nullable: true
+        detections:
+          type: array
+          items:
+            $ref: "#/components/schemas/Detection"
 
     SnapshotList:
       type: object
@@ -1366,6 +1370,31 @@ components:
           type: number
           minimum: 0.0
           maximum: 1.0
+        track_id:
+          type: integer
+          minimum: 1
+          nullable: true
+        bbox:
+          type: array
+          items:
+            type: number
+          minItems: 4
+          maxItems: 4
+          description: "[x1, y1, x2, y2] normalized coordinates"
+
+    Detection:
+      type: object
+      properties:
+        label:
+          type: string
+        score:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+        track_id:
+          type: integer
+          minimum: 1
+          nullable: true
         bbox:
           type: array
           items:

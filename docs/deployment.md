@@ -284,6 +284,11 @@ All variables are optional unless marked **required for production**.
 | `ESP32CAM_PERSON_CLASS_ID` | `0` | Class index for the person class in the model. |
 | `ESP32CAM_CAMERA_EXPECTED_INTERVAL_SECONDS` | `300` | Seconds between expected uploads; used to compute camera health. |
 | `ESP32CAM_KEEP_ONLY_DETECTED_SNAPSHOTS` | `false` | If true, delete snapshots with successful inference and zero detections. |
+| `ESP32CAM_TRACKING_ENABLED` | `false` | Enable bounded, per-camera IoU tracking. State is process-local and resets safely after restart. |
+| `ESP32CAM_TRACKING_IOU_THRESHOLD` | `0.3` | Minimum bounding-box IoU required to keep a track. |
+| `ESP32CAM_TRACKING_MAX_MISSED_FRAMES` | `2` | Number of consecutive empty frames a track remains alive. |
+| `ESP32CAM_TRACKING_MAX_TRACKS_PER_CAMERA` | `50` | Maximum active tracks retained for each camera; excess detections remain untracked. |
+| `ESP32CAM_TRACKING_MAX_CAMERAS` | `500` | Maximum camera states retained in one process; least-recently-used camera state is evicted beyond this cap. |
 | `ESP32CAM_MAX_WS_CONNECTIONS` | `50` | Maximum concurrent WebSocket connections. |
 | `ESP32CAM_MAX_MJPEG_STREAMS` | `10` | Maximum concurrent MJPEG stream viewers per camera. |
 | `ESP32CAM_MAX_TRACKED_CAMERAS` | `500` | Maximum distinct `camera_id`s tracked by the in-process upload metrics registry; least-recently-active entries are evicted beyond this cap. Set `0` to disable the cap. |

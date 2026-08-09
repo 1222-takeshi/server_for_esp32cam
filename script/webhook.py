@@ -72,6 +72,7 @@ class WebhookNotifier:
                 "camera_id": snapshot.camera_id,
                 "snapshot_relative_path": snapshot.relative_path,
                 "score": round(best.score, 4),
+                "track_id": best.track_id,
                 "detected_at": detected_at,
             }
         ).encode()

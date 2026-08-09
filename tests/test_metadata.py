@@ -603,7 +603,15 @@ def test_mark_snapshot_result_stores_multiple_detections_in_one_call(tmp_path):
     store.mark_snapshot_result(
         snapshot.id,
         detections=[
-            Detection(label="person", score=0.9, x1=0.0, y1=0.0, x2=1.0, y2=1.0),
+            Detection(
+                label="person",
+                score=0.9,
+                x1=0.0,
+                y1=0.0,
+                x2=1.0,
+                y2=1.0,
+                track_id=7,
+            ),
             Detection(label="cat", score=0.5, x1=0.1, y1=0.1, x2=0.9, y2=0.9),
             Detection(label="dog", score=0.4, x1=0.2, y1=0.2, x2=0.8, y2=0.8),
         ],
@@ -613,6 +621,7 @@ def test_mark_snapshot_result_stores_multiple_detections_in_one_call(tmp_path):
 
     assert stored is not None
     assert sorted(d.label for d in stored.detections) == ["cat", "dog", "person"]
+    assert next(d for d in stored.detections if d.label == "person").track_id == 7
 
     # Re-marking with no detections must clear the previous ones without erroring
     # on an empty executemany() call.
@@ -738,6 +747,58 @@ def test_migrate_schema_adds_cascade_to_existing_db(tmp_path):
     assert "ON DELETE CASCADE" in row["sql"].upper()
     assert store.get_camera("cam-x") is not None
     assert len(store.list_camera_snapshots("cam-x")) == 1
+
+
+def test_migrate_schema_adds_detection_track_id_to_existing_db(tmp_path):
+    import sqlite3
+
+    db_path = tmp_path / "legacy-detections.sqlite3"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE cameras (
+            camera_id TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL,
+            expected_interval_seconds INTEGER NOT NULL,
+            first_seen_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TABLE snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT NOT NULL UNIQUE,
+            relative_path TEXT NOT NULL UNIQUE,
+            size INTEGER NOT NULL,
+            camera_id TEXT,
+            captured_at TEXT,
+            stored_at TEXT NOT NULL,
+            inference_status TEXT NOT NULL,
+            inference_error TEXT
+        );
+        CREATE TABLE detections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            snapshot_id INTEGER NOT NULL,
+            label TEXT NOT NULL,
+            score REAL NOT NULL,
+            x1 REAL NOT NULL,
+            y1 REAL NOT NULL,
+            x2 REAL NOT NULL,
+            y2 REAL NOT NULL
+        );
+        INSERT INTO cameras VALUES ('cam-a', 'Cam A', 300, '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00', 1);
+        INSERT INTO snapshots VALUES (1, 'img.jpg', 'cam-a/images/img.jpg', 100, 'cam-a', NULL, '2026-01-01T00:00:00+00:00', 'succeeded', NULL);
+        INSERT INTO detections VALUES (1, 1, 'person', 0.9, 0.1, 0.1, 0.4, 0.4);
+        """
+    )
+    conn.close()
+
+    store = SQLiteMetadataStore(db_path)
+
+    columns = store._get_connection().execute("PRAGMA table_info(detections)").fetchall()
+    assert "track_id" in {column["name"] for column in columns}
+    snapshot = store.get_snapshot(1)
+    assert snapshot is not None
+    assert snapshot.detections[0].track_id is None
 
 
 def test_metadata_store_enables_wal_mode(tmp_path):

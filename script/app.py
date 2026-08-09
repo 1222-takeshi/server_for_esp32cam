@@ -21,6 +21,7 @@ from script.prometheus_metrics import AppMetrics
 from script.retention import RetentionScanGate, RetentionScheduler
 from script.routes import limiter, server
 from script.storage import LocalFilesystemStorage, StorageRetentionPolicy
+from script.tracking import ObjectTracker
 from script.upload_metrics import UploadMetricsRegistry
 from script.webhook import DISABLED_NOTIFIER, WebhookNotifier
 from script.websocket_routes import register_websocket_routes
@@ -163,6 +164,16 @@ def create_app(test_config: dict | None = None) -> Flask:
         else DISABLED_NOTIFIER
     )
     atexit.register(notifier.close)
+    object_tracker = (
+        ObjectTracker(
+            iou_threshold=app.config["TRACKING_IOU_THRESHOLD"],
+            max_missed_frames=app.config["TRACKING_MAX_MISSED_FRAMES"],
+            max_tracks_per_camera=app.config["TRACKING_MAX_TRACKS_PER_CAMERA"],
+            max_cameras=app.config["TRACKING_MAX_CAMERAS"],
+        )
+        if app.config["TRACKING_ENABLED"]
+        else None
+    )
     inference_service = InferenceService(
         metadata_store=metadata_store,
         storage=storage,
@@ -170,6 +181,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         mode=app.config["INFERENCE_MODE"],
         notifier=notifier,
         keep_only_detected_snapshots=app.config["KEEP_ONLY_DETECTED_SNAPSHOTS"],
+        tracker=object_tracker,
     )
     inference_service.start()
     snapshot_event_publisher = SnapshotEventPublisher()
@@ -201,6 +213,7 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.extensions["metadata_store"] = metadata_store
     app.extensions["detector"] = detector
     app.extensions["inference_service"] = inference_service
+    app.extensions["object_tracker"] = object_tracker
     app.extensions["snapshot_event_publisher"] = snapshot_event_publisher
     app.extensions["storage_retention_policy"] = storage_retention_policy
     app.extensions["video_retention_policy"] = video_retention_policy

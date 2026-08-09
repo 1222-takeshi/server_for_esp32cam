@@ -48,7 +48,7 @@ This project provides a web server with the following functionalities:
 
 *   **`GET /api/detections`**
     *   **Description:** Returns recent detections as JSON. Supports `camera_id` and `since` query parameters.
-    *   **Response:** `{"detections": [...]}`
+    *   **Response:** `{"detections": [...]}`. Each detection includes nullable `track_id`; when tracking is enabled, the same camera-local ID identifies a matched object across snapshots.
 
 *   **`GET /files`**
     *   **Description:** Displays an HTML page (`templates/files.html`) listing stored files in reverse chronological order together with stored device metadata when available.
