@@ -271,6 +271,7 @@ All variables are optional unless marked **required for production**.
 | `ESP32CAM_STORAGE_RETENTION_MAX_AGE_SECONDS` | `2592000` (30 days) | Delete images older than this. Set `0` to disable. |
 | `ESP32CAM_STORAGE_RETENTION_MAX_BYTES` | `0` (disabled) | Delete oldest images when total exceeds this size. |
 | `ESP32CAM_STORAGE_RETENTION_SCAN_INTERVAL_UPLOADS` | `1` | Only run the full image retention directory scan every N uploads instead of every upload (still always scans on the very first upload). Raise on deployments with many stored files to cut per-upload disk I/O. |
+| `ESP32CAM_RETENTION_SCHEDULER_INTERVAL_SECONDS` | `3600` (1 hour) | Run image/video retention independently of uploads in each application process. Set `0` to disable the background scheduler; keep one Gunicorn worker for a single scheduler. |
 | `ESP32CAM_VIDEO_RETENTION_MAX_AGE_SECONDS` | `0` (disabled) | Delete videos older than this many seconds. Set `0` to disable. |
 | `ESP32CAM_VIDEO_RETENTION_MAX_BYTES` | `0` (disabled) | Delete oldest videos when total video storage exceeds this size. |
 | `ESP32CAM_VIDEO_RETENTION_SCAN_INTERVAL_UPLOADS` | `1` | Same as `ESP32CAM_STORAGE_RETENTION_SCAN_INTERVAL_UPLOADS` but for the video retention scan. |

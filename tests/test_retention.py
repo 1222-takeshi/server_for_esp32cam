@@ -20,6 +20,7 @@ from uuid import uuid4
 
 from script.retention import (
     RetentionScanGate,
+    RetentionScheduler,
     apply_upload_retention,
     apply_video_upload_retention,
 )
@@ -198,6 +199,92 @@ def test_apply_video_upload_retention_runs_metadata_query_when_gate_allows(app):
     fake_metadata_store.list_video_retention_candidates.assert_called_once_with(
         exclude_relative_paths={_stored_video().relative_path}
     )
+
+
+def test_scheduler_runs_image_and_video_retention_without_an_upload(app_factory):
+    app = app_factory()
+    app.extensions["storage_retention_policy"] = StorageRetentionPolicy(max_age_seconds=1)
+    app.extensions["video_retention_policy"] = StorageRetentionPolicy(max_age_seconds=1)
+
+    metadata_store = MagicMock()
+    metadata_store.list_snapshot_retention_candidates.return_value = (
+        [("cam-a/old.jpg", 10, datetime(2020, 1, 1, tzinfo=timezone.utc))],
+        10,
+    )
+    metadata_store.list_video_retention_candidates.return_value = (
+        [("cam-a/old.mp4", 20, datetime(2020, 1, 1, tzinfo=timezone.utc))],
+        20,
+    )
+    app.extensions["metadata_store"] = metadata_store
+    storage = MagicMock()
+    storage.delete_image_by_relative_path.return_value = 10
+    storage.delete_video_by_relative_path.return_value = 20
+    app.extensions["storage"] = storage
+
+    scheduler = RetentionScheduler(app, interval_seconds=3600)
+    deleted_images, deleted_videos = scheduler.run_once()
+
+    assert deleted_images == ["cam-a/old.jpg"]
+    assert deleted_videos == ["cam-a/old.mp4"]
+    metadata_store.delete_snapshots_by_relative_paths.assert_called_once_with(["cam-a/old.jpg"])
+    metadata_store.delete_videos_by_relative_paths.assert_called_once_with(["cam-a/old.mp4"])
+
+
+def test_scheduler_logs_failure_and_continues_loop(app_factory, caplog):
+    import logging
+
+    app = app_factory()
+    scheduler = RetentionScheduler(app, interval_seconds=3600)
+    calls = 0
+
+    def fail_once():
+        nonlocal calls
+        calls += 1
+        scheduler._stop_event.set()
+        raise RuntimeError("retention failed")
+
+    scheduler.run_once = fail_once
+    with caplog.at_level(logging.ERROR):
+        scheduler._run_loop()
+
+    assert calls == 1
+    assert "Scheduled retention failed" in caplog.text
+
+
+def test_scheduler_does_not_start_in_testing_mode(app_factory):
+    app = app_factory(RETENTION_SCHEDULER_INTERVAL_SECONDS=1)
+
+    scheduler = app.extensions["retention_scheduler"]
+
+    assert scheduler.is_running is False
+
+
+def test_scheduler_start_and_stop_runs_a_cycle(app_factory):
+    import threading
+
+    app = app_factory()
+    scheduler = RetentionScheduler(app, interval_seconds=0.01)
+    cycle_finished = threading.Event()
+
+    def run_once():
+        cycle_finished.set()
+        scheduler.stop()
+        return [], []
+
+    scheduler.run_once = run_once
+
+    assert scheduler.start() is True
+    assert cycle_finished.wait(timeout=1) is True
+    scheduler.stop()
+    assert scheduler.is_running is False
+
+
+def test_scheduler_zero_interval_is_disabled(app_factory):
+    app = app_factory()
+    scheduler = RetentionScheduler(app, interval_seconds=0)
+
+    assert scheduler.start() is False
+    assert scheduler.is_running is False
 
 
 # ---------------------------------------------------------------------------
