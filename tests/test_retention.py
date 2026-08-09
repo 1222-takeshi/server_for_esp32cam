@@ -287,6 +287,33 @@ def test_scheduler_zero_interval_is_disabled(app_factory):
     assert scheduler.is_running is False
 
 
+def test_scheduler_logs_lifecycle_and_scan_result(app_factory, caplog):
+    import logging
+    import threading
+
+    app = app_factory()
+    scheduler = RetentionScheduler(app, interval_seconds=3600)
+    scan_finished = threading.Event()
+    original_run_once = scheduler.run_once
+
+    def run_once():
+        result = original_run_once()
+        scan_finished.set()
+        scheduler._stop_event.set()
+        return result
+
+    scheduler.run_once = run_once
+
+    with caplog.at_level(logging.INFO):
+        assert scheduler.start() is True
+        assert scan_finished.wait(timeout=1) is True
+        scheduler.stop()
+
+    assert "Storage retention scheduler started (interval_seconds=3600.0)" in caplog.text
+    assert "Scheduled retention completed (images_deleted=0, videos_deleted=0)" in caplog.text
+    assert "Storage retention scheduler stopped" in caplog.text
+
+
 # ---------------------------------------------------------------------------
 # End-to-end: retention is skipped on intermediate uploads but still
 # eventually enforced once the interval boundary is reached.
