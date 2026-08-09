@@ -228,17 +228,41 @@ class RetentionScheduler:
                 daemon=True,
             )
             self._thread.start()
+            self._app.logger.info(
+                "Storage retention scheduler started (interval_seconds=%s)",
+                self.interval_seconds,
+            )
         return True
 
     def stop(self, timeout: float = 5.0) -> None:
         self._stop_event.set()
         thread = self._thread
-        if thread is not None and thread is not threading.current_thread():
+        if thread is None:
+            return
+        if thread is not threading.current_thread():
             thread.join(timeout=timeout)
+            if thread.is_alive():
+                self._app.logger.warning(
+                    "Storage retention scheduler stop timed out (timeout_seconds=%s)",
+                    timeout,
+                )
+                return
+            with self._state_lock:
+                if self._thread is thread:
+                    self._thread = None
+            self._app.logger.info("Storage retention scheduler stopped")
+            return
+        self._app.logger.info("Storage retention scheduler stop requested")
 
     def run_once(self) -> tuple[list[str], list[str]]:
         with self._app.app_context():
-            return apply_scheduled_retention()
+            image_paths, video_paths = apply_scheduled_retention()
+        self._app.logger.info(
+            "Scheduled retention completed (images_deleted=%s, videos_deleted=%s)",
+            len(image_paths),
+            len(video_paths),
+        )
+        return image_paths, video_paths
 
     def _run_loop(self) -> None:
         while not self._stop_event.is_set():
