@@ -140,3 +140,9 @@ Julesがタスクを遂行する上で遵守すべき基本方針は以下の通
 - **詳細**: Flask/Werkzeug 3.1以降で `before_request` から `request.max_content_length` を設定する。Content-Lengthがないchunked入力では、設定値ちょうどだと `LimitedStream` が超過分を切り詰めて正常扱いになる可能性があるため、設定値は `configured_limit + 1` とし、route側の `len(data) > configured_limit` 判定で413にする。`+1` だけでは上限判定にならないため、必ずroute側の判定と組み合わせる。
 - **適用条件**: Content-Lengthを信用できないupload endpointで、body読込前のメモリ上限をルートごとに分ける場合。Content-Lengthなしのstreaming入力にこの制限を適用するには、WSGIサーバーが `wsgi.input_terminated` を設定する構成であることも確認する。
 - **例**: `request.max_content_length = app.config["SNAPSHOT_MAX_CONTENT_LENGTH"] + 1` と `len(data) > app.config["SNAPSHOT_MAX_CONTENT_LENGTH"]` の組み合わせ。
+
+### Per-camera object tracking (追記日: 2026-08-09)
+- **概要**: Detection後段の軽量IoU trackingは、`ESP32CAM_TRACKING_ENABLED=true` のときだけ有効化し、カメラ単位のプロセス内状態として保持する。
+- **詳細**: `track_id` は Detection/SQLite/API/Webhook に nullable で追加。既存SQLiteには起動時に `ALTER TABLE detections ADD COLUMN track_id INTEGER` を行う。既定値はIoU `0.3`、欠落2フレーム、cameraあたり50 track、500 camera state。track stateは再起動時に安全にリセットされる。
+- **適用条件**: 連続snapshotで同一物体を識別したい場合。Raspberry Piではtracking上限を増やしすぎず、camera数・track数・欠落許容を監視する。
+- **例**: `ESP32CAM_TRACKING_ENABLED=true`、`ESP32CAM_TRACKING_IOU_THRESHOLD=0.3`、`ESP32CAM_TRACKING_MAX_MISSED_FRAMES=2`。

@@ -44,8 +44,16 @@ def _snapshot(*, captured_at=None) -> SnapshotRecord:
     )
 
 
-def _detection(score: float) -> Detection:
-    return Detection(label="person", score=score, x1=0.1, y1=0.1, x2=0.9, y2=0.9)
+def _detection(score: float, *, track_id: int | None = None) -> Detection:
+    return Detection(
+        label="person",
+        score=score,
+        x1=0.1,
+        y1=0.1,
+        x2=0.9,
+        y2=0.9,
+        track_id=track_id,
+    )
 
 
 def _successful_response() -> MagicMock:
@@ -67,7 +75,7 @@ def _http_error(status: int) -> urllib.error.HTTPError:
 
 def test_notifier_posts_when_detection_above_threshold(notifier):
     snapshot = _snapshot(captured_at=datetime(2026, 5, 23, 11, 0, tzinfo=timezone.utc))
-    detections = [_detection(0.9)]
+    detections = [_detection(0.9, track_id=4)]
 
     mock_response = _successful_response()
 
@@ -82,6 +90,7 @@ def test_notifier_posts_when_detection_above_threshold(notifier):
     assert payload["camera_id"] == "cam-a"
     assert payload["snapshot_relative_path"] == "cam-a/images/img.jpg"
     assert payload["score"] == 0.9
+    assert payload["track_id"] == 4
     assert "2026-05-23" in payload["detected_at"]
 
 

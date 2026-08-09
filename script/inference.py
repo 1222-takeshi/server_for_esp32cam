@@ -4,9 +4,10 @@ from queue import Empty, Queue
 import threading
 from typing import Protocol
 
-from script.detector import DetectionSkipped
+from script.detector import Detection, DetectionSkipped
 from script.metadata import SQLiteMetadataStore
 from script.storage import Storage
+from script.tracking import ObjectTracker
 from script.webhook import DISABLED_NOTIFIER
 
 
@@ -25,6 +26,7 @@ class InferenceService:
         mode: str = "async",
         notifier=DISABLED_NOTIFIER,
         keep_only_detected_snapshots: bool = False,
+        tracker: ObjectTracker | None = None,
     ) -> None:
         self.metadata_store = metadata_store
         self.storage = storage
@@ -32,6 +34,7 @@ class InferenceService:
         self.mode = mode
         self._notifier = notifier
         self.keep_only_detected_snapshots = keep_only_detected_snapshots
+        self.tracker = tracker
         self._queue: Queue[int] = Queue()
         self._stop_event = threading.Event()
         self._worker: threading.Thread | None = None
@@ -93,17 +96,27 @@ class InferenceService:
             image_bytes = self.storage.read_image_by_relative_path(snapshot.relative_path)
             detections = self.detector.detect(image_bytes)
         except DetectionSkipped as exc:
+            self._update_tracking(snapshot.camera_id, [])
             self.metadata_store.mark_snapshot_skipped(snapshot_id, reason=str(exc))
             return
         except Exception as exc:  # pragma: no cover - exercised via route behavior
+            self._update_tracking(snapshot.camera_id, [])
             self.metadata_store.mark_snapshot_result(snapshot_id, detections=[], error=str(exc))
             return
 
+        detections = self._update_tracking(snapshot.camera_id, detections)
         self.metadata_store.mark_snapshot_result(snapshot_id, detections=detections)
         if detections:
             self._notifier.notify(snapshot, detections)
         elif self.keep_only_detected_snapshots:
             self._discard_undetected_snapshot(snapshot.relative_path)
+
+    def _update_tracking(
+        self, camera_id: str | None, detections: list[Detection]
+    ) -> list[Detection]:
+        if self.tracker is None or camera_id is None:
+            return detections
+        return self.tracker.update(camera_id, detections)
 
     def _discard_undetected_snapshot(self, relative_path: str) -> None:
         try:
