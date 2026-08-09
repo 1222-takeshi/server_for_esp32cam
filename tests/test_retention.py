@@ -315,8 +315,13 @@ def test_scheduler_info_logs_are_enabled(app_factory):
     import logging
 
     app_factory()
+    retention_logger = logging.getLogger("script.retention")
 
-    assert logging.getLogger("script.retention").isEnabledFor(logging.INFO) is True
+    assert retention_logger.isEnabledFor(logging.INFO) is True
+    assert any(
+        getattr(handler, "_esp32cam_retention_handler", False)
+        for handler in retention_logger.handlers
+    )
 
 
 def test_gunicorn_preload_detection_is_explicit():
