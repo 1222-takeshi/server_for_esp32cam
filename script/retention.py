@@ -2,11 +2,16 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime, timezone
+import logging
 import threading
 
 from flask import current_app
 
 from script.storage import StorageRetentionPolicy, StoredImage, StoredVideo
+
+
+_logger = logging.getLogger(__name__)
+_logger.setLevel(logging.INFO)
 
 
 class RetentionScanGate:
@@ -138,7 +143,7 @@ def _apply_retention(
             return []
 
         deleted_metadata = delete_metadata(deleted)
-        current_app.logger.info(
+        _logger.info(
             "%s retention deleted %s files (%s bytes), metadata_rows=%s",
             log_prefix,
             len(deleted),
@@ -228,7 +233,7 @@ class RetentionScheduler:
                 daemon=True,
             )
             self._thread.start()
-            self._app.logger.info(
+            _logger.info(
                 "Storage retention scheduler started (interval_seconds=%s)",
                 self.interval_seconds,
             )
@@ -242,7 +247,7 @@ class RetentionScheduler:
         if thread is not threading.current_thread():
             thread.join(timeout=timeout)
             if thread.is_alive():
-                self._app.logger.warning(
+                _logger.warning(
                     "Storage retention scheduler stop timed out (timeout_seconds=%s)",
                     timeout,
                 )
@@ -250,14 +255,14 @@ class RetentionScheduler:
             with self._state_lock:
                 if self._thread is thread:
                     self._thread = None
-            self._app.logger.info("Storage retention scheduler stopped")
+            _logger.info("Storage retention scheduler stopped")
             return
-        self._app.logger.info("Storage retention scheduler stop requested")
+        _logger.info("Storage retention scheduler stop requested")
 
     def run_once(self) -> tuple[list[str], list[str]]:
         with self._app.app_context():
             image_paths, video_paths = apply_scheduled_retention()
-        self._app.logger.info(
+        _logger.info(
             "Scheduled retention completed (images_deleted=%s, videos_deleted=%s)",
             len(image_paths),
             len(video_paths),
@@ -269,6 +274,6 @@ class RetentionScheduler:
             try:
                 self.run_once()
             except Exception:
-                self._app.logger.exception("Scheduled retention failed")
+                _logger.exception("Scheduled retention failed")
             if self._stop_event.wait(self.interval_seconds):
                 return

@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shlex
+import sys
+from collections.abc import Sequence
 
 
 def _env_bool(name: str, default: str = "false") -> bool:
@@ -27,6 +30,21 @@ def _load_device_api_keys() -> dict[str, str]:
             raise ValueError("ESP32CAM_DEVICE_API_KEYS must not contain empty device IDs or keys")
         normalized[key] = value
     return normalized
+
+
+def gunicorn_preload_requested(
+    argv: Sequence[str] | None = None,
+    command_args: str | None = None,
+) -> bool:
+    """Return whether the Gunicorn invocation requests app preloading."""
+
+    arguments = list(argv if argv is not None else sys.argv)
+    if not arguments or Path(arguments[0]).name != "gunicorn":
+        return False
+    configured_args = command_args
+    if configured_args is None:
+        configured_args = os.getenv("GUNICORN_CMD_ARGS", "")
+    return "--preload" in arguments[1:] or "--preload" in shlex.split(configured_args)
 
 
 class Config:
@@ -61,6 +79,10 @@ class Config:
     RETENTION_SCHEDULER_INTERVAL_SECONDS = int(
         os.getenv("ESP32CAM_RETENTION_SCHEDULER_INTERVAL_SECONDS", "3600")
     )
+    # Gunicorn's WSGI entrypoint disables this before forking and starts the
+    # scheduler lazily in the worker process. Direct create_app() users keep
+    # the default auto-start behavior.
+    RETENTION_SCHEDULER_AUTO_START = True
     MAX_WS_CONNECTIONS = int(os.getenv("ESP32CAM_MAX_WS_CONNECTIONS", "50"))
     DEVICE_API_KEY = os.getenv("ESP32CAM_DEVICE_API_KEY", "")
     DEVICE_API_KEYS = _load_device_api_keys()
