@@ -24,7 +24,8 @@ from script.retention import (
     apply_upload_retention,
     apply_video_upload_retention,
 )
-from script.app import create_app
+from script.app import create_app, start_retention_scheduler
+from script.config import gunicorn_preload_requested
 from script.storage import StorageRetentionPolicy, StoredImage, StoredVideo
 from tests.conftest import MINIMAL_JPEG
 
@@ -285,6 +286,46 @@ def test_scheduler_zero_interval_is_disabled(app_factory):
 
     assert scheduler.start() is False
     assert scheduler.is_running is False
+
+
+def test_scheduler_can_be_deferred_until_worker_initialization(app_factory):
+    app = app_factory(TESTING=False, RETENTION_SCHEDULER_AUTO_START=False)
+    scheduler = app.extensions["retention_scheduler"]
+
+    assert scheduler.is_running is False
+    assert start_retention_scheduler(app) is True
+
+    scheduler.stop()
+    assert scheduler.is_running is False
+
+
+def test_deferred_scheduler_starts_on_first_worker_request(app_factory):
+    app = app_factory(TESTING=False, RETENTION_SCHEDULER_AUTO_START=False)
+    scheduler = app.extensions["retention_scheduler"]
+
+    assert scheduler.is_running is False
+    response = app.test_client().get("/healthz/ready")
+
+    assert response.status_code == 200
+    assert scheduler.is_running is True
+    scheduler.stop()
+
+
+def test_scheduler_info_logs_are_enabled(app_factory):
+    import logging
+
+    app_factory()
+
+    assert logging.getLogger("script.retention").isEnabledFor(logging.INFO) is True
+
+
+def test_gunicorn_preload_detection_is_explicit():
+    assert gunicorn_preload_requested(["/venv/bin/gunicorn", "--preload"]) is True
+    assert gunicorn_preload_requested(
+        ["/venv/bin/gunicorn"], command_args="--workers 1 --preload"
+    ) is True
+    assert gunicorn_preload_requested(["/venv/bin/gunicorn", "--workers", "1"]) is False
+    assert gunicorn_preload_requested(["pytest", "--preload"]) is False
 
 
 def test_scheduler_logs_lifecycle_and_scan_result(app_factory, caplog):

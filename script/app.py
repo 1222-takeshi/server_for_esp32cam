@@ -53,6 +53,17 @@ def _create_detector(app: Flask):
         return DisabledDetector(str(exc), skip=False)
 
 
+def start_retention_scheduler(app: Flask) -> bool:
+    """Start retention in the current process when it is not a test app."""
+
+    if app.config.get("TESTING", False):
+        return False
+    scheduler = app.extensions.get("retention_scheduler")
+    if scheduler is None:
+        return False
+    return scheduler.start()
+
+
 def create_app(test_config: dict | None = None) -> Flask:
     app = Flask(
         __name__,
@@ -207,11 +218,14 @@ def create_app(test_config: dict | None = None) -> Flask:
     # daemon thread from each test while keeping the scheduler enabled for the
     # production WSGI process.
     if not app.config.get("TESTING", False):
-        retention_scheduler.start()
         atexit.register(retention_scheduler.stop)
+        if app.config.get("RETENTION_SCHEDULER_AUTO_START", True):
+            start_retention_scheduler(app)
 
     @app.before_request
     def _before_request():
+        if not app.config.get("RETENTION_SCHEDULER_AUTO_START", True):
+            start_retention_scheduler(app)
         if request.endpoint == "server.upload_file":
             # Read one sentinel byte beyond the configured limit so a chunked
             # request without Content-Length is rejected instead of silently
