@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import atexit
 from datetime import datetime
+import threading
 from zoneinfo import ZoneInfo
 
 from flask import Flask, jsonify
@@ -17,7 +18,7 @@ from script.logging_config import configure_logging
 from script.metadata import SQLiteMetadataStore
 from script.auth import validate_auth_config
 from script.prometheus_metrics import AppMetrics
-from script.retention import RetentionScanGate
+from script.retention import RetentionScanGate, RetentionScheduler
 from script.routes import limiter, server
 from script.storage import LocalFilesystemStorage, StorageRetentionPolicy
 from script.upload_metrics import UploadMetricsRegistry
@@ -176,6 +177,10 @@ def create_app(test_config: dict | None = None) -> Flask:
         app.config.get("VIDEO_RETENTION_SCAN_INTERVAL_UPLOADS", 1)
     )
     disk_usage_scan_gate = RetentionScanGate(app.config.get("DISK_USAGE_CHECK_INTERVAL_UPLOADS", 1))
+    retention_scheduler = RetentionScheduler(
+        app,
+        interval_seconds=app.config.get("RETENTION_SCHEDULER_INTERVAL_SECONDS", 3600),
+    )
     upload_metrics = UploadMetricsRegistry(
         max_tracked_cameras=app.config.get("MAX_TRACKED_CAMERAS", 500)
     )
@@ -191,10 +196,19 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.extensions["storage_retention_scan_gate"] = storage_retention_scan_gate
     app.extensions["video_retention_scan_gate"] = video_retention_scan_gate
     app.extensions["disk_usage_scan_gate"] = disk_usage_scan_gate
+    app.extensions["storage_retention_lock"] = threading.RLock()
+    app.extensions["retention_scheduler"] = retention_scheduler
     app.extensions["upload_metrics"] = upload_metrics
     app.extensions["app_metrics"] = app_metrics
     limiter.init_app(app)
     app.register_blueprint(server)
+
+    # Flask's test suite creates many application instances; avoid leaking a
+    # daemon thread from each test while keeping the scheduler enabled for the
+    # production WSGI process.
+    if not app.config.get("TESTING", False):
+        retention_scheduler.start()
+        atexit.register(retention_scheduler.stop)
 
     @app.before_request
     def _before_request():

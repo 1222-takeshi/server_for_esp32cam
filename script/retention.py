@@ -99,65 +99,152 @@ def _run_retention_scan(
     return deleted, deleted_bytes
 
 
-def apply_upload_retention(stored: StoredImage) -> list[str]:
-    policy = current_app.extensions.get("storage_retention_policy")
+def _retention_lock() -> threading.RLock:
+    lock = current_app.extensions.get("storage_retention_lock")
+    if lock is None:
+        lock = threading.RLock()
+        current_app.extensions["storage_retention_lock"] = lock
+    return lock
+
+
+def _apply_retention(
+    *,
+    policy: StorageRetentionPolicy | None,
+    gate: RetentionScanGate | None,
+    exclude_relative_paths: set[str],
+    list_candidates: Callable[..., tuple[list[tuple[str, int, datetime]], int]],
+    delete_file: Callable[[str], int],
+    delete_metadata: Callable[[list[str]], int],
+    log_prefix: str,
+    honor_upload_gate: bool,
+) -> list[str]:
     if policy is None or not policy.enabled:
         return []
 
-    gate = current_app.extensions.get("storage_retention_scan_gate")
-    if gate is not None and not gate.should_scan():
+    if honor_upload_gate and gate is not None and not gate.should_scan():
         return []
 
-    metadata_store = current_app.extensions["metadata_store"]
-    candidates, total_bytes = metadata_store.list_snapshot_retention_candidates(
-        exclude_relative_paths={stored.relative_path}
-    )
-    deleted, deleted_bytes = _run_retention_scan(
-        policy=policy,
-        candidates=candidates,
-        total_bytes=total_bytes,
+    with _retention_lock():
+        candidates, total_bytes = list_candidates(
+            exclude_relative_paths=exclude_relative_paths
+        )
+        deleted, deleted_bytes = _run_retention_scan(
+            policy=policy,
+            candidates=candidates,
+            total_bytes=total_bytes,
+            delete_file=delete_file,
+        )
+        if not deleted:
+            return []
+
+        deleted_metadata = delete_metadata(deleted)
+        current_app.logger.info(
+            "%s retention deleted %s files (%s bytes), metadata_rows=%s",
+            log_prefix,
+            len(deleted),
+            deleted_bytes,
+            deleted_metadata,
+        )
+        return deleted
+
+
+def apply_upload_retention(stored: StoredImage) -> list[str]:
+    return _apply_retention(
+        policy=current_app.extensions.get("storage_retention_policy"),
+        gate=current_app.extensions.get("storage_retention_scan_gate"),
+        exclude_relative_paths={stored.relative_path},
+        list_candidates=current_app.extensions["metadata_store"].list_snapshot_retention_candidates,
         delete_file=current_app.extensions["storage"].delete_image_by_relative_path,
+        delete_metadata=current_app.extensions["metadata_store"].delete_snapshots_by_relative_paths,
+        log_prefix="Storage",
+        honor_upload_gate=True,
     )
-    if not deleted:
-        return []
-
-    deleted_metadata = metadata_store.delete_snapshots_by_relative_paths(deleted)
-    current_app.logger.info(
-        "Storage retention deleted %s files (%s bytes), metadata_rows=%s",
-        len(deleted),
-        deleted_bytes,
-        deleted_metadata,
-    )
-    return deleted
 
 
 def apply_video_upload_retention(stored: StoredVideo) -> list[str]:
-    policy = current_app.extensions.get("video_retention_policy")
-    if policy is None or not policy.enabled:
-        return []
-
-    gate = current_app.extensions.get("video_retention_scan_gate")
-    if gate is not None and not gate.should_scan():
-        return []
-
-    metadata_store = current_app.extensions["metadata_store"]
-    candidates, total_bytes = metadata_store.list_video_retention_candidates(
-        exclude_relative_paths={stored.relative_path}
-    )
-    deleted, deleted_bytes = _run_retention_scan(
-        policy=policy,
-        candidates=candidates,
-        total_bytes=total_bytes,
+    return _apply_retention(
+        policy=current_app.extensions.get("video_retention_policy"),
+        gate=current_app.extensions.get("video_retention_scan_gate"),
+        exclude_relative_paths={stored.relative_path},
+        list_candidates=current_app.extensions["metadata_store"].list_video_retention_candidates,
         delete_file=current_app.extensions["storage"].delete_video_by_relative_path,
+        delete_metadata=current_app.extensions["metadata_store"].delete_videos_by_relative_paths,
+        log_prefix="Video",
+        honor_upload_gate=True,
     )
-    if not deleted:
-        return []
 
-    deleted_metadata = metadata_store.delete_videos_by_relative_paths(deleted)
-    current_app.logger.info(
-        "Video retention deleted %s files (%s bytes), metadata_rows=%s",
-        len(deleted),
-        deleted_bytes,
-        deleted_metadata,
+
+def apply_scheduled_retention() -> tuple[list[str], list[str]]:
+    """Run both retention policies without depending on a new upload."""
+
+    image_paths = _apply_retention(
+        policy=current_app.extensions.get("storage_retention_policy"),
+        gate=None,
+        exclude_relative_paths=set(),
+        list_candidates=current_app.extensions["metadata_store"].list_snapshot_retention_candidates,
+        delete_file=current_app.extensions["storage"].delete_image_by_relative_path,
+        delete_metadata=current_app.extensions["metadata_store"].delete_snapshots_by_relative_paths,
+        log_prefix="Storage",
+        honor_upload_gate=False,
     )
-    return deleted
+    video_paths = _apply_retention(
+        policy=current_app.extensions.get("video_retention_policy"),
+        gate=None,
+        exclude_relative_paths=set(),
+        list_candidates=current_app.extensions["metadata_store"].list_video_retention_candidates,
+        delete_file=current_app.extensions["storage"].delete_video_by_relative_path,
+        delete_metadata=current_app.extensions["metadata_store"].delete_videos_by_relative_paths,
+        log_prefix="Video",
+        honor_upload_gate=False,
+    )
+    return image_paths, video_paths
+
+
+class RetentionScheduler:
+    """Periodically enforce image/video retention independently of uploads."""
+
+    def __init__(self, app, *, interval_seconds: float) -> None:
+        self._app = app
+        self.interval_seconds = max(0.0, float(interval_seconds))
+        self._stop_event = threading.Event()
+        self._state_lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+
+    @property
+    def is_running(self) -> bool:
+        thread = self._thread
+        return thread is not None and thread.is_alive()
+
+    def start(self) -> bool:
+        if self.interval_seconds <= 0:
+            return False
+        with self._state_lock:
+            if self.is_running:
+                return False
+            self._stop_event.clear()
+            self._thread = threading.Thread(
+                target=self._run_loop,
+                name="storage-retention",
+                daemon=True,
+            )
+            self._thread.start()
+        return True
+
+    def stop(self, timeout: float = 5.0) -> None:
+        self._stop_event.set()
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=timeout)
+
+    def run_once(self) -> tuple[list[str], list[str]]:
+        with self._app.app_context():
+            return apply_scheduled_retention()
+
+    def _run_loop(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                self.run_once()
+            except Exception:
+                self._app.logger.exception("Scheduled retention failed")
+            if self._stop_event.wait(self.interval_seconds):
+                return

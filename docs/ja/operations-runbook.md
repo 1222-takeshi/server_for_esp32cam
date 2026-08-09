@@ -265,6 +265,22 @@ curl http://localhost:8080/healthz/ready
 
 ## 8. ディスク容量対応
 
+### 無通信時の定期ローテーション
+
+画像・動画の保持処理はアップロード時だけでなく、既定で1時間ごとにバックグラウンド実行されます。カメラが停止している間も、`ESP32CAM_STORAGE_RETENTION_MAX_AGE_SECONDS` / `ESP32CAM_STORAGE_RETENTION_MAX_BYTES` と動画用の同等設定が適用されます。scheduler はアプリケーションプロセスごとに1本起動するため、複数 Gunicorn worker を使う場合は各 worker が実行します。1本だけ動かす場合は `-w 1` を使用してください。
+
+```dotenv
+# 1時間ごとに実行（0でバックグラウンド実行を無効化）
+ESP32CAM_RETENTION_SCHEDULER_INTERVAL_SECONDS=3600
+```
+
+削除実績とエラーはアプリケーションログで確認できます。systemd ユーザーサービスの場合は次を実行してください。
+
+```bash
+journalctl --user -u esp32cam-server --since "1 hour ago" \
+  | grep -E "retention deleted|Scheduled retention failed"
+```
+
 ### 使用量の確認
 
 ```bash
