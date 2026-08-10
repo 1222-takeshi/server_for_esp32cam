@@ -116,7 +116,7 @@
 | `DEVICE_API_KEY` + デバイスID固定 | 推奨 | **必須** |
 | `DEVICE_API_KEYS` (複数台) | 複数台では推奨 | 複数台では **必須** |
 | `ADMIN_TOKEN` | 推奨 | **必須** |
-| `/api/docs` の公開 | 可 | 非推奨 (CDN スクリプト読み込みあり) |
+| `/api/docs` の公開 | 可 | 公開要否を判断 (Swagger UI 資産は `/static/vendor/swagger-ui/` に自己ホストされ、外部 CDN には依存しない。#316) |
 | `/files/` の認証 | 不要 | 推奨 (nginx で追加) |
 | ファイアウォール | 任意 | 必須 (8080 を LAN のみに制限) |
 
