@@ -16,6 +16,7 @@ Contributions to this project are welcome! If you'd like to contribute, please f
     *   Ensure your code follows the existing style and structure.
     *   If you add new features, consider adding relevant documentation or examples.
     *   If you add or change a Python dependency in `pyproject.toml`, regenerate the pinned lockfile: `uv pip compile pyproject.toml --extra dev --extra server --extra ml --generate-hashes -o requirements.lock.txt`.
+    *   `static/vendor/swagger-ui/` vendors a specific `swagger-ui-dist` release (currently `5.32.12`) so `GET /api/docs` doesn't depend on a third-party CDN (see #316). To update it, download the new version's tarball (`https://registry.npmjs.org/swagger-ui-dist/-/swagger-ui-dist-<version>.tgz`) and replace `swagger-ui.css`, `swagger-ui-bundle.js`, `swagger-ui-standalone-preset.js`, `LICENSE`, and `NOTICE` with the corresponding files from the new release.
 
 4.  **Test Your Changes:**
     Thoroughly test your changes to ensure they work as expected and do not introduce new issues.
