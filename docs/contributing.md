@@ -15,7 +15,9 @@ Contributions to this project are welcome! If you'd like to contribute, please f
     Implement your feature or bug fix.
     *   Ensure your code follows the existing style and structure.
     *   If you add new features, consider adding relevant documentation or examples.
-    *   If you add or change a Python dependency in `pyproject.toml`, regenerate the pinned lockfile: `uv pip compile pyproject.toml --extra dev --extra server --extra ml --generate-hashes -o requirements.lock.txt`.
+    *   If you add or change a Python dependency in `pyproject.toml`, regenerate the pinned lockfiles:
+        *   `uv pip compile pyproject.toml --extra dev --extra server --extra ml --generate-hashes -o requirements.lock.txt` (used by CI's `pip-audit` job).
+        *   `uv pip compile pyproject.toml --extra server --generate-hashes -o requirements-server.lock.txt` (used by `Dockerfile` to build the production image — keep this in sync with `requirements.lock.txt` whenever a `server`-extra dependency changes).
 
 4.  **Test Your Changes:**
     Thoroughly test your changes to ensure they work as expected and do not introduce new issues.
