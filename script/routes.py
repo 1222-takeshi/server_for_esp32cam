@@ -11,7 +11,17 @@ import threading
 import time
 import uuid
 
-from flask import Blueprint, Response, current_app, jsonify, render_template, request, send_file, stream_with_context
+from flask import (
+    Blueprint,
+    Response,
+    current_app,
+    jsonify,
+    render_template,
+    request,
+    send_file,
+    stream_with_context,
+    url_for,
+)
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from PIL import Image, UnidentifiedImageError
@@ -1264,30 +1274,50 @@ def api_openapi_yaml():
     return Response(spec_text, mimetype="application/yaml")
 
 
-_SWAGGER_UI_HTML = """\
+_SWAGGER_UI_HTML_TEMPLATE = """\
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <title>API Docs — server_for_esp32cam</title>
-  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+  <link rel="stylesheet" href="{css_url}">
 </head>
 <body>
 <div id="swagger-ui"></div>
-<script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+<script src="{bundle_url}"></script>
+<script src="{preset_url}"></script>
 <script>
-  SwaggerUIBundle({
+  SwaggerUIBundle({{
     url: "/api/openapi.yaml",
     dom_id: "#swagger-ui",
-    presets: [SwaggerUIBundle.presets.apis, SwaggerUIBundle.SwaggerUIStandalonePreset],
-    layout: "BaseLayout",
-  });
+    presets: [SwaggerUIBundle.presets.apis, SwaggerUIStandalonePreset],
+    layout: "StandaloneLayout",
+  }});
 </script>
 </body>
 </html>
 """
 
 
+def _swagger_ui_html() -> str:
+    # Served from static/vendor/swagger-ui/ (vendored swagger-ui-dist,
+    # pinned version documented in docs/contributing.md) instead of
+    # unpkg.com, so /api/docs no longer depends on a third-party CDN being
+    # reachable, floats to no unpinned "@5" version, and has no
+    # Subresource-Integrity gap -- see #316. This also fixes the previous
+    # `SwaggerUIBundle.SwaggerUIStandalonePreset` reference, which was
+    # always `undefined` because swagger-ui-bundle.js never defines that
+    # property and the standalone preset script wasn't loaded at all; the
+    # preset is a separate top-level global (`SwaggerUIStandalonePreset`)
+    # exposed by swagger-ui-standalone-preset.js, per swagger-ui-dist's own
+    # documented usage.
+    return _SWAGGER_UI_HTML_TEMPLATE.format(
+        css_url=url_for("static", filename="vendor/swagger-ui/swagger-ui.css"),
+        bundle_url=url_for("static", filename="vendor/swagger-ui/swagger-ui-bundle.js"),
+        preset_url=url_for("static", filename="vendor/swagger-ui/swagger-ui-standalone-preset.js"),
+    )
+
+
 @server.route("/api/docs")
 def api_docs():
-    return Response(_SWAGGER_UI_HTML, mimetype="text/html")
+    return Response(_swagger_ui_html(), mimetype="text/html")

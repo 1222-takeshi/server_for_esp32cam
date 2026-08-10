@@ -315,7 +315,7 @@ The receiver should deduplicate events; see [Issue #279](https://github.com/1222
 - [ ] `ESP32CAM_DB_PATH` points to a persistent volume
 - [ ] Storage retention limits are configured (`MAX_AGE_SECONDS` and/or `MAX_BYTES`)
 - [ ] HTTPS termination is handled upstream (nginx/Caddy/cloud load balancer)
-- [ ] `/api/docs` is not exposed publicly (Swagger UI loads scripts from CDN)
+- [ ] Confirm whether `/api/docs` should be exposed publicly. Its Swagger UI assets are self-hosted under `/static/vendor/swagger-ui/` (no third-party CDN dependency, see #316), so this is a documentation-exposure decision rather than a CDN-reachability/integrity concern.
 
 ---
 
