@@ -79,6 +79,19 @@ def test_websocket_hub_filters_events_by_camera_id():
     assert garden_ws.messages == []
 
 
+def test_websocket_hub_can_count_connection_without_broadcasting_to_it():
+    publisher = SnapshotEventPublisher()
+    hub = WebSocketHub(publisher)
+    upload_ws = FakeWebSocket()
+
+    hub.connect(upload_ws, camera_id="esp32cam-front-door", receive_events=False)
+    publisher.publish_snapshot_created(_snapshot())
+    hub.flush()
+
+    assert hub.active_connections == 1
+    assert upload_ws.messages == []
+
+
 def test_websocket_hub_disconnect_stops_future_delivery():
     publisher = SnapshotEventPublisher()
     hub = WebSocketHub(publisher)

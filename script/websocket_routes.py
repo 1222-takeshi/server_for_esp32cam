@@ -161,7 +161,7 @@ def register_websocket_routes(
             websocket.send(json.dumps(auth_error))
             return
         try:
-            disconnect = hub.connect(websocket, camera_id=camera_id)
+            disconnect = hub.connect(websocket, camera_id=camera_id, receive_events=False)
         except ConnectionLimitExceeded:
             websocket.send(json.dumps({"type": "error", "message": "Too many connections"}))
             return

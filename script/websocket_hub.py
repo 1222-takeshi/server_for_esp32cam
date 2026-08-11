@@ -37,7 +37,7 @@ class WebSocketHub:
 
         self._publisher = publisher
         self._max_connections = max_connections
-        self._connections: list[tuple[WebSocketLike, str | None]] = []
+        self._connections: list[tuple[WebSocketLike, str | None, bool]] = []
         self._lock = threading.Lock()
         self._worker_lock = threading.Lock()
         self._pending_events: Queue[tuple[str, str | None]] = Queue(maxsize=max_pending_events)
@@ -102,20 +102,24 @@ class WebSocketHub:
         with self._lock:
             connections = list(self._connections)
 
-        failed: list[tuple[WebSocketLike, str | None]] = []
-        for ws, ws_camera_id in connections:
+        failed: list[tuple[WebSocketLike, str | None, bool]] = []
+        for ws, ws_camera_id, receive_events in connections:
+            if not receive_events:
+                continue
             if ws_camera_id is not None and ws_camera_id != camera_id:
                 continue
             try:
                 ws.send(json_str)
             except Exception:
-                failed.append((ws, ws_camera_id))
+                failed.append((ws, ws_camera_id, receive_events))
 
         if failed:
-            failed_ws = {id(ws) for ws, _ in failed}
+            failed_ws = {id(ws) for ws, _, _ in failed}
             with self._lock:
                 self._connections = [
-                    (ws, cid) for ws, cid in self._connections if id(ws) not in failed_ws
+                    (ws, cid, receive_events)
+                    for ws, cid, receive_events in self._connections
+                    if id(ws) not in failed_ws
                 ]
 
     def flush(self) -> None:
@@ -141,19 +145,25 @@ class WebSocketHub:
             worker.join(timeout=self._worker_idle_seconds + 1.0)
 
     def connect(
-        self, websocket: WebSocketLike, *, camera_id: str | None = None
+        self,
+        websocket: WebSocketLike,
+        *,
+        camera_id: str | None = None,
+        receive_events: bool = True,
     ) -> Callable[[], None]:
         with self._lock:
             if len(self._connections) >= self._max_connections:
                 raise ConnectionLimitExceeded(
                     f"WebSocket connection limit reached ({self._max_connections})"
                 )
-            self._connections.append((websocket, camera_id))
+            self._connections.append((websocket, camera_id, receive_events))
 
         def disconnect() -> None:
             with self._lock:
                 self._connections = [
-                    (ws, cid) for ws, cid in self._connections if ws is not websocket
+                    (ws, cid, events)
+                    for ws, cid, events in self._connections
+                    if ws is not websocket
                 ]
 
         return disconnect
