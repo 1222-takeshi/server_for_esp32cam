@@ -13,6 +13,9 @@ from script.detector import Detection
 from script.storage import StoredImage, StoredVideo
 
 
+_MIN_RETURNING_SQLITE_VERSION = (3, 35, 0)
+
+
 @dataclass(frozen=True)
 class DetectionRecord:
     label: str
@@ -154,6 +157,13 @@ class SQLiteMetadataStore:
     _BUSY_TIMEOUT_MS = 5000
 
     def __init__(self, db_path: str | Path, *, default_expected_interval_seconds: int = 300):
+        if sqlite3.sqlite_version_info < _MIN_RETURNING_SQLITE_VERSION:
+            detected_version = ".".join(str(part) for part in sqlite3.sqlite_version_info)
+            raise RuntimeError(
+                "SQLite 3.35.0 or newer is required for metadata writes; "
+                f"detected {detected_version}"
+            )
+
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._default_expected_interval_seconds = default_expected_interval_seconds

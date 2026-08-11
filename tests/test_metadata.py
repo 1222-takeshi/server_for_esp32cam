@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 from script.detector import Detection
 from script.metadata import ALLOWED_LOG_LEVELS, DesiredConfigVersionConflict, SQLiteMetadataStore
@@ -45,6 +46,12 @@ def test_metadata_store_registers_camera_and_snapshot(tmp_path):
     assert camera is not None
     assert snapshot.camera_id == "cam-a"
     assert snapshot.inference_status == "pending"
+
+
+def test_metadata_store_requires_sqlite_returning_support(tmp_path):
+    with patch("script.metadata.sqlite3.sqlite_version_info", (3, 34, 0)):
+        with pytest.raises(RuntimeError, match="SQLite 3.35.0 or newer"):
+            SQLiteMetadataStore(tmp_path / "state.sqlite3")
 
 
 def test_hot_write_paths_return_rows_without_follow_up_selects(tmp_path):
