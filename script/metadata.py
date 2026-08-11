@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 import json
@@ -78,6 +78,7 @@ ALLOWED_LOG_LEVELS = frozenset({"info", "warning", "error", "critical"})
 # (SQLITE_MAX_VARIABLE_NUMBER, historically 999). Chunk filename lookups so a
 # large on-disk listing never exceeds that limit.
 _SYNC_LOOKUP_CHUNK_SIZE = 500
+_RETENTION_LOOKUP_BATCH_SIZE = 500
 
 
 @dataclass(frozen=True)
@@ -553,6 +554,91 @@ class SQLiteMetadataStore:
             )
         return int(cursor.rowcount)
 
+    def _total_retention_bytes(self, table: str) -> int:
+        conn = self._get_connection()
+        total_row = conn.execute(
+            f"SELECT COALESCE(SUM(size), 0) AS total FROM {table}"
+        ).fetchone()
+        return int(total_row["total"])
+
+    def _iter_retention_candidates(
+        self,
+        table: str,
+        *,
+        exclude_relative_paths: set[str] | None = None,
+        older_than: datetime | None = None,
+        batch_size: int = _RETENTION_LOOKUP_BATCH_SIZE,
+    ) -> Iterator[tuple[str, int, datetime]]:
+        if batch_size < 1:
+            raise ValueError("batch_size must be at least 1")
+
+        conn = self._get_connection()
+        exclude = exclude_relative_paths or set()
+        cursor_stored_at: str | None = None
+        cursor_id = 0
+
+        while True:
+            conditions: list[str] = []
+            params: list[object] = []
+            if older_than is not None:
+                conditions.append("stored_at < ?")
+                params.append(older_than.isoformat())
+            if cursor_stored_at is not None:
+                conditions.append("(stored_at > ? OR (stored_at = ? AND id > ?))")
+                params.extend([cursor_stored_at, cursor_stored_at, cursor_id])
+
+            query = f"SELECT id, relative_path, size, stored_at FROM {table}"
+            if conditions:
+                query += " WHERE " + " AND ".join(conditions)
+            query += " ORDER BY stored_at ASC, id ASC LIMIT ?"
+            params.append(batch_size)
+            rows = conn.execute(query, tuple(params)).fetchall()
+            if not rows:
+                return
+
+            for row in rows:
+                if row["relative_path"] in exclude:
+                    continue
+                yield (
+                    row["relative_path"],
+                    row["size"],
+                    _parse_datetime(row["stored_at"]) or datetime.now(tz=timezone.utc),
+                )
+
+            last_row = rows[-1]
+            cursor_stored_at = last_row["stored_at"]
+            cursor_id = last_row["id"]
+            if len(rows) < batch_size:
+                return
+
+    def iter_snapshot_retention_candidates(
+        self,
+        *,
+        exclude_relative_paths: set[str] | None = None,
+        older_than: datetime | None = None,
+        batch_size: int = _RETENTION_LOOKUP_BATCH_SIZE,
+    ) -> Iterator[tuple[str, int, datetime]]:
+        return self._iter_retention_candidates(
+            "snapshots",
+            exclude_relative_paths=exclude_relative_paths,
+            older_than=older_than,
+            batch_size=batch_size,
+        )
+
+    def iter_video_retention_candidates(
+        self,
+        *,
+        exclude_relative_paths: set[str] | None = None,
+        older_than: datetime | None = None,
+        batch_size: int = _RETENTION_LOOKUP_BATCH_SIZE,
+    ) -> Iterator[tuple[str, int, datetime]]:
+        return self._iter_retention_candidates(
+            "videos",
+            exclude_relative_paths=exclude_relative_paths,
+            older_than=older_than,
+            batch_size=batch_size,
+        )
+
     def list_snapshot_retention_candidates(
         self, *, exclude_relative_paths: set[str] | None = None
     ) -> tuple[list[tuple[str, int, datetime]], int]:
@@ -568,47 +654,23 @@ class SQLiteMetadataStore:
         *every* indexed snapshot's size, including excluded ones, matching
         what a full `list_images()` walk would have summed.
         """
-        conn = self._get_connection()
-        total_row = conn.execute("SELECT COALESCE(SUM(size), 0) AS total FROM snapshots").fetchone()
-        total_bytes = int(total_row["total"])
-
-        exclude = exclude_relative_paths or set()
-        rows = conn.execute(
-            "SELECT relative_path, size, stored_at FROM snapshots ORDER BY stored_at ASC, id ASC"
-        ).fetchall()
-        candidates = [
-            (
-                row["relative_path"],
-                row["size"],
-                _parse_datetime(row["stored_at"]) or datetime.now(tz=timezone.utc),
+        candidates = list(
+            self.iter_snapshot_retention_candidates(
+                exclude_relative_paths=exclude_relative_paths,
             )
-            for row in rows
-            if row["relative_path"] not in exclude
-        ]
-        return candidates, total_bytes
+        )
+        return candidates, self._total_retention_bytes("snapshots")
 
     def list_video_retention_candidates(
         self, *, exclude_relative_paths: set[str] | None = None
     ) -> tuple[list[tuple[str, int, datetime]], int]:
         """Video counterpart of list_snapshot_retention_candidates()."""
-        conn = self._get_connection()
-        total_row = conn.execute("SELECT COALESCE(SUM(size), 0) AS total FROM videos").fetchone()
-        total_bytes = int(total_row["total"])
-
-        exclude = exclude_relative_paths or set()
-        rows = conn.execute(
-            "SELECT relative_path, size, stored_at FROM videos ORDER BY stored_at ASC, id ASC"
-        ).fetchall()
-        candidates = [
-            (
-                row["relative_path"],
-                row["size"],
-                _parse_datetime(row["stored_at"]) or datetime.now(tz=timezone.utc),
+        candidates = list(
+            self.iter_video_retention_candidates(
+                exclude_relative_paths=exclude_relative_paths,
             )
-            for row in rows
-            if row["relative_path"] not in exclude
-        ]
-        return candidates, total_bytes
+        )
+        return candidates, self._total_retention_bytes("videos")
 
     def sync_storage_index(
         self,

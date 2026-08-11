@@ -14,7 +14,7 @@ intermediate uploads skip the scan.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
@@ -505,6 +505,53 @@ def test_run_retention_scan_reports_missing_file_candidates_as_deleted():
     # metadata rows), but deleted_bytes only counts the file actually freed.
     assert deleted == ["cam-a/missing.jpg", "cam-a/present.jpg"]
     assert deleted_bytes == 50
+
+
+def test_run_retention_scan_stops_after_ordered_candidates_are_not_expired():
+    from script.retention import _run_retention_scan
+
+    now = datetime.now(tz=timezone.utc)
+
+    def candidates():
+        yield "cam-a/old.jpg", 100, now - timedelta(hours=1)
+        yield "cam-a/current.jpg", 50, now
+        raise AssertionError("retention scan should stop at the first non-expired row")
+
+    deleted, deleted_bytes = _run_retention_scan(
+        policy=StorageRetentionPolicy(max_age_seconds=60),
+        candidates=candidates(),
+        total_bytes=150,
+        delete_file=lambda _relative_path: 100,
+    )
+
+    assert deleted == ["cam-a/old.jpg"]
+    assert deleted_bytes == 100
+
+
+def test_apply_retention_uses_age_filter_when_byte_limit_is_disabled(app_factory):
+    from script.retention import _apply_retention
+
+    app = app_factory()
+    iter_candidates = MagicMock(return_value=[])
+    list_candidates = MagicMock()
+
+    with app.app_context():
+        result = _apply_retention(
+            policy=StorageRetentionPolicy(max_age_seconds=60, max_bytes=0),
+            gate=None,
+            exclude_relative_paths=set(),
+            list_candidates=list_candidates,
+            delete_file=MagicMock(),
+            delete_metadata=MagicMock(return_value=0),
+            log_prefix="Storage",
+            honor_upload_gate=False,
+            iter_candidates=iter_candidates,
+            total_bytes_reader=MagicMock(return_value=0),
+        )
+
+    assert result == []
+    list_candidates.assert_not_called()
+    assert iter_candidates.call_args.kwargs["older_than"] is not None
 
 
 def test_disk_usage_check_default_interval_runs_every_upload(app_factory):
