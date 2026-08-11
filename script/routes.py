@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import csv
+import base64
+import binascii
 from functools import lru_cache
 from io import BytesIO, StringIO
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 from queue import Empty, Queue
 import shutil
@@ -85,6 +88,34 @@ def _parse_pagination() -> tuple[int, int] | tuple[None, None]:
     if limit < 1 or limit > _PAGINATION_LIMIT_MAX or offset < 0 or offset > _PAGINATION_OFFSET_MAX:
         return None, None
     return limit, offset
+
+
+def _encode_detection_cursor(row: dict[str, object]) -> str:
+    payload = json.dumps(
+        [row["stored_at"], row["snapshot_id"], row["detection_id"]],
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_detection_cursor(value: str) -> tuple[str, int, int] | None:
+    try:
+        padded = value + "=" * (-len(value) % 4)
+        decoded = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+        stored_at, snapshot_id, detection_id = decoded
+        if (
+            not isinstance(stored_at, str)
+            or isinstance(snapshot_id, bool)
+            or not isinstance(snapshot_id, int)
+            or isinstance(detection_id, bool)
+            or not isinstance(detection_id, int)
+            or snapshot_id < 1
+            or detection_id < 1
+        ):
+            return None
+        return stored_at, snapshot_id, detection_id
+    except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError, binascii.Error):
+        return None
 
 
 def _check_disk_usage() -> None:
@@ -546,10 +577,23 @@ def list_files():
         page = 1
     limit = _PAGINATION_LIMIT_DEFAULT
     offset = (page - 1) * limit
+    before = None
+    before_str = request.args.get("before")
+    if before_str is not None:
+        try:
+            before = int(before_str)
+        except (TypeError, ValueError):
+            return jsonify({"message": "Invalid before parameter"}), 400
+        offset = 0
     try:
         store = _metadata_store()
         total = store.count_snapshots()
-        files = store.list_recent_snapshots(limit=limit, offset=offset, include_detections=False)
+        files = store.list_recent_snapshots(
+            limit=limit,
+            offset=offset,
+            before=before,
+            include_detections=False,
+        )
         total_pages = max(1, (total + limit - 1) // limit)
         return render_template(
             "files.html",
@@ -557,6 +601,8 @@ def list_files():
             page=page,
             total_pages=total_pages,
             total=total,
+            before=before,
+            next_before=files[-1].id if len(files) == limit else None,
         )
     except Exception as exc:  # pragma: no cover
         current_app.logger.error("Error listing files: %s", exc)
@@ -997,6 +1043,15 @@ def api_camera_snapshots(camera_id: str):
     limit, offset = _parse_pagination()
     if limit is None:
         return jsonify({"message": "Invalid pagination parameters"}), 400
+    before = None
+    before_str = request.args.get("before")
+    if before_str is not None:
+        try:
+            before = int(before_str)
+        except (TypeError, ValueError):
+            return jsonify({"message": "Invalid before parameter"}), 400
+        if offset:
+            return jsonify({"message": "before cannot be combined with offset"}), 400
 
     since, until = None, None
     since_raw = request.args.get("since")
@@ -1032,7 +1087,7 @@ def api_camera_snapshots(camera_id: str):
 
     total = store.count_camera_snapshots(camera_id, since=since, until=until)
     snapshots = store.list_camera_snapshots(
-        camera_id, limit=limit, offset=offset, since=since, until=until
+        camera_id, limit=limit, offset=offset, before=before, since=since, until=until
     )
     return jsonify(
         {
@@ -1040,6 +1095,7 @@ def api_camera_snapshots(camera_id: str):
             "total": total,
             "limit": limit,
             "offset": offset,
+            "next_before": snapshots[-1].id if len(snapshots) == limit else None,
             "snapshots": [_serialize_snapshot(s) for s in snapshots],
         }
     )
@@ -1117,16 +1173,32 @@ def api_detections():
     limit, offset = _parse_pagination()
     if limit is None:
         return jsonify({"message": "Invalid pagination parameters"}), 400
+    before = None
+    before_str = request.args.get("before")
+    if before_str is not None:
+        before = _decode_detection_cursor(before_str)
+        if before is None:
+            return jsonify({"message": "Invalid before parameter"}), 400
+        if offset:
+            return jsonify({"message": "before cannot be combined with offset"}), 400
 
     total = store.count_detections(camera_id=camera_id, since=since, confidence_min=confidence_min)
     detections = store.list_detections(
-        camera_id=camera_id, since=since, limit=limit, offset=offset, confidence_min=confidence_min
+        camera_id=camera_id,
+        since=since,
+        limit=limit,
+        offset=offset,
+        before=before,
+        confidence_min=confidence_min,
     )
     return jsonify(
         {
             "total": total,
             "limit": limit,
             "offset": offset,
+            "next_before": (
+                _encode_detection_cursor(detections[-1]) if len(detections) == limit else None
+            ),
             "detections": detections,
         }
     )

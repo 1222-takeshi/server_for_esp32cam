@@ -1298,6 +1298,61 @@ def test_api_camera_snapshots_returns_pagination_envelope(client):
     assert len(body["snapshots"]) >= 1
 
 
+def test_api_camera_snapshots_supports_before_cursor(client):
+    for index in range(2):
+        response = client.post(
+            "/upload",
+            data=MINIMAL_JPEG,
+            content_type="image/jpeg",
+            headers={
+                **UPLOAD_HEADERS,
+                "X-Captured-At": f"2026-01-01T00:00:0{index}Z",
+            },
+        )
+        assert response.status_code == 200
+
+    first_page = client.get("/api/cameras/esp32cam-front-door/snapshots?limit=1").get_json()
+    second_page = client.get(
+        f"/api/cameras/esp32cam-front-door/snapshots?limit=1&before={first_page['next_before']}"
+    ).get_json()
+
+    assert first_page["next_before"] == first_page["snapshots"][0]["id"]
+    assert second_page["snapshots"][0]["id"] < first_page["snapshots"][0]["id"]
+    assert second_page["offset"] == 0
+
+
+def test_api_camera_snapshots_rejects_invalid_before_cursor(client):
+    client.post(
+        "/upload",
+        data=MINIMAL_JPEG,
+        content_type="image/jpeg",
+        headers=UPLOAD_HEADERS,
+    )
+    response = client.get("/api/cameras/esp32cam-front-door/snapshots?before=not-an-id")
+
+    assert response.status_code == 400
+
+
+def test_files_supports_before_cursor(app, client):
+    for index in range(2):
+        response = client.post(
+            "/upload",
+            data=MINIMAL_JPEG,
+            content_type="image/jpeg",
+            headers={
+                **UPLOAD_HEADERS,
+                "X-Captured-At": f"2026-01-01T00:00:0{index}Z",
+            },
+        )
+        assert response.status_code == 200
+
+    snapshots = app.extensions["metadata_store"].list_recent_snapshots()
+    response = client.get(f"/files?before={snapshots[0].id}")
+
+    assert response.status_code == 200
+    assert snapshots[1].filename.encode() in response.data
+
+
 def test_api_camera_snapshots_invalid_limit_returns_400(client):
     client.post(
         "/upload",
@@ -1317,6 +1372,39 @@ def test_api_detections_returns_pagination_envelope(client):
     assert "limit" in body
     assert "offset" in body
     assert body["limit"] == 20
+
+
+def test_api_detections_supports_before_cursor(app, client):
+    from script.detector import Detection
+
+    app.extensions["inference_service"].detector = FakePersonDetector(
+        [Detection(label="person", score=0.9, x1=0, y1=0, x2=1, y2=1)]
+    )
+    for index in range(2):
+        response = client.post(
+            "/upload",
+            data=MINIMAL_JPEG,
+            content_type="image/jpeg",
+            headers={
+                **UPLOAD_HEADERS,
+                "X-Captured-At": f"2026-01-01T00:00:0{index}Z",
+            },
+        )
+        assert response.status_code == 200
+
+    first_page = client.get("/api/detections?limit=1").get_json()
+    second_page = client.get(
+        f"/api/detections?limit=1&before={first_page['next_before']}"
+    ).get_json()
+
+    assert first_page["next_before"]
+    assert second_page["detections"][0]["detection_id"] != first_page["detections"][0]["detection_id"]
+
+
+def test_api_detections_rejects_invalid_before_cursor(client):
+    response = client.get("/api/detections?before=not-a-cursor")
+
+    assert response.status_code == 400
 
 
 def test_api_detections_invalid_confidence_min_returns_400(client):

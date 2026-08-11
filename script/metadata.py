@@ -723,6 +723,7 @@ class SQLiteMetadataStore:
         *,
         limit: int | None = None,
         offset: int = 0,
+        before: int | None = None,
         camera_id: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
@@ -739,6 +740,9 @@ class SQLiteMetadataStore:
         if until is not None:
             query += " AND stored_at <= ?"
             params.append(until.astimezone(timezone.utc).isoformat())
+        if before is not None:
+            query += " AND id < ?"
+            params.append(before)
         query += " ORDER BY stored_at DESC, id DESC"
         if limit is not None:
             query += " LIMIT ? OFFSET ?"
@@ -882,6 +886,7 @@ class SQLiteMetadataStore:
         *,
         limit: int = 20,
         offset: int = 0,
+        before: int | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
     ) -> list[SnapshotRecord]:
@@ -893,6 +898,9 @@ class SQLiteMetadataStore:
         if until is not None:
             query += " AND stored_at <= ?"
             params.append(until.astimezone(timezone.utc).isoformat())
+        if before is not None:
+            query += " AND id < ?"
+            params.append(before)
         query += " ORDER BY stored_at DESC, id DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
         conn = self._get_connection()
@@ -906,6 +914,7 @@ class SQLiteMetadataStore:
         camera_id: str | None = None,
         since: datetime | None = None,
         confidence_min: float | None = None,
+        before: tuple[str, int, int] | None = None,
     ) -> tuple[str, list[object]]:
         where = "WHERE 1 = 1"
         params: list[object] = []
@@ -918,6 +927,29 @@ class SQLiteMetadataStore:
         if confidence_min is not None:
             where += " AND detections.score >= ?"
             params.append(confidence_min)
+        if before is not None:
+            before_stored_at, before_snapshot_id, before_detection_id = before
+            where += """
+                AND (
+                    snapshots.stored_at < ?
+                    OR (
+                        snapshots.stored_at = ?
+                        AND (
+                            snapshots.id < ?
+                            OR (snapshots.id = ? AND detections.id < ?)
+                        )
+                    )
+                )
+            """
+            params.extend(
+                [
+                    before_stored_at,
+                    before_stored_at,
+                    before_snapshot_id,
+                    before_snapshot_id,
+                    before_detection_id,
+                ]
+            )
         return where, params
 
     def count_detections(
@@ -947,13 +979,19 @@ class SQLiteMetadataStore:
         since: datetime | None = None,
         limit: int = 50,
         offset: int = 0,
+        before: tuple[str, int, int] | None = None,
         confidence_min: float | None = None,
     ) -> list[dict[str, object]]:
         where, params = self._detection_where_clause(
-            camera_id=camera_id, since=since, confidence_min=confidence_min
+            camera_id=camera_id,
+            since=since,
+            confidence_min=confidence_min,
+            before=before,
         )
         query = f"""
             SELECT
+                detections.id AS detection_id,
+                snapshots.id AS snapshot_id,
                 detections.label,
                 detections.score,
                 detections.x1,
@@ -968,7 +1006,8 @@ class SQLiteMetadataStore:
             FROM detections
             JOIN snapshots ON snapshots.id = detections.snapshot_id
             {where}
-            ORDER BY snapshots.stored_at DESC, snapshots.id DESC LIMIT ? OFFSET ?
+            ORDER BY snapshots.stored_at DESC, snapshots.id DESC, detections.id DESC
+            LIMIT ? OFFSET ?
         """
         params.extend([limit, offset])
 
@@ -977,6 +1016,8 @@ class SQLiteMetadataStore:
 
         return [
             {
+                "detection_id": row["detection_id"],
+                "snapshot_id": row["snapshot_id"],
                 "label": row["label"],
                 "score": row["score"],
                 "bbox": [row["x1"], row["y1"], row["x2"], row["y2"]],
