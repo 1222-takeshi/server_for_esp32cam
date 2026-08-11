@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 from datetime import datetime, timezone
 import json
 import time
@@ -110,9 +111,17 @@ def _handle_binary_upload_connection(websocket: WebSocketLike, *, camera_id: str
 
 
 def register_websocket_routes(
-    app: Flask, publisher: SnapshotEventPublisher, *, max_connections: int = 50
+    app: Flask,
+    publisher: SnapshotEventPublisher,
+    *,
+    max_connections: int = 50,
+    max_pending_events: int = 256,
 ) -> WebSocketHub:
-    hub = WebSocketHub(publisher, max_connections=max_connections)
+    hub = WebSocketHub(
+        publisher,
+        max_connections=max_connections,
+        max_pending_events=max_pending_events,
+    )
     sock = Sock(app)
 
     @sock.route("/ws/snapshots")
@@ -163,4 +172,5 @@ def register_websocket_routes(
 
     app.extensions["sock"] = sock
     app.extensions["websocket_hub"] = hub
+    atexit.register(hub.close, wait=False)
     return hub

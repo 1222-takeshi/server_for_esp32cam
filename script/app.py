@@ -271,7 +271,10 @@ def create_app(test_config: dict | None = None) -> Flask:
         return response
 
     register_websocket_routes(
-        app, snapshot_event_publisher, max_connections=app.config["MAX_WS_CONNECTIONS"]
+        app,
+        snapshot_event_publisher,
+        max_connections=app.config["MAX_WS_CONNECTIONS"],
+        max_pending_events=app.config["MAX_WS_PENDING_EVENTS"],
     )
 
     @app.errorhandler(RequestEntityTooLarge)
