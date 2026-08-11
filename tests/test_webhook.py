@@ -6,7 +6,6 @@ import math
 import threading
 import time
 import urllib.error
-import urllib.request
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, call, patch
 
@@ -56,37 +55,27 @@ def _detection(score: float, *, track_id: int | None = None) -> Detection:
     )
 
 
-def _successful_response() -> MagicMock:
+def _successful_response(status: int = 204) -> MagicMock:
     response = MagicMock()
-    response.__enter__ = lambda s: s
-    response.__exit__ = MagicMock(return_value=False)
+    response.status = status
+    response.read.return_value = b""
     return response
-
-
-def _http_error(status: int) -> urllib.error.HTTPError:
-    return urllib.error.HTTPError(
-        "http://example.com/hook?secret=hidden",
-        status,
-        "request failed",
-        {},
-        None,
-    )
 
 
 def test_notifier_posts_when_detection_above_threshold(notifier):
     snapshot = _snapshot(captured_at=datetime(2026, 5, 23, 11, 0, tzinfo=timezone.utc))
     detections = [_detection(0.9, track_id=4)]
 
-    mock_response = _successful_response()
+    connection = MagicMock()
+    connection.getresponse.return_value = _successful_response()
 
-    with patch("urllib.request.urlopen", return_value=mock_response) as mock_open:
+    with patch("script.webhook.http_client.HTTPConnection", return_value=connection):
         future = notifier.notify(snapshot, detections)
         if future is not None:
             future.result(timeout=5.0)
 
-    mock_open.assert_called_once()
-    req = mock_open.call_args[0][0]
-    payload = json.loads(req.data)
+    connection.request.assert_called_once()
+    payload = json.loads(connection.request.call_args.kwargs["body"])
     assert payload["camera_id"] == "cam-a"
     assert payload["snapshot_relative_path"] == "cam-a/images/img.jpg"
     assert payload["score"] == 0.9
@@ -94,25 +83,69 @@ def test_notifier_posts_when_detection_above_threshold(notifier):
     assert "2026-05-23" in payload["detected_at"]
 
 
+def test_notifier_reuses_http_connection_for_sequential_notifications():
+    notifier = WebhookNotifier(
+        "http://example.com/hook",
+        max_attempts=1,
+        retry_backoff_seconds=0,
+    )
+    connection = MagicMock()
+    response = MagicMock(status=204)
+    response.read.return_value = b""
+    connection.getresponse.return_value = response
+    try:
+        with patch("script.webhook.http_client.HTTPConnection", return_value=connection) as factory:
+            first = notifier.notify(_snapshot(), [_detection(0.9)])
+            assert first is not None
+            first.result(timeout=5.0)
+            second = notifier.notify(_snapshot(), [_detection(0.9)])
+            assert second is not None
+            second.result(timeout=5.0)
+
+        factory.assert_called_once_with("example.com", 80, timeout=10)
+        assert connection.request.call_count == 2
+        assert connection.getresponse.call_count == 2
+    finally:
+        notifier.close()
+
+
+def test_notifier_uses_tls_connection_for_https_webhook():
+    notifier = WebhookNotifier("https://example.com/hook")
+    connection = MagicMock()
+    connection.getresponse.return_value = _successful_response()
+    try:
+        with patch("script.webhook.http_client.HTTPSConnection", return_value=connection) as factory:
+            future = notifier.notify(_snapshot(), [_detection(0.9)])
+            assert future is not None
+            future.result(timeout=5.0)
+
+        factory.assert_called_once()
+        assert factory.call_args.args[:2] == ("example.com", 443)
+        assert factory.call_args.kwargs["timeout"] == 10
+        assert "context" in factory.call_args.kwargs
+    finally:
+        notifier.close()
+
+
 def test_notifier_uses_stored_at_when_no_captured_at(notifier):
     snapshot = _snapshot(captured_at=None)
 
-    mock_response = _successful_response()
+    connection = MagicMock()
+    connection.getresponse.return_value = _successful_response()
 
-    with patch("urllib.request.urlopen", return_value=mock_response) as mock_open:
+    with patch("script.webhook.http_client.HTTPConnection", return_value=connection):
         future = notifier.notify(snapshot, [_detection(0.8)])
         if future is not None:
             future.result(timeout=5.0)
 
-    req = mock_open.call_args[0][0]
-    payload = json.loads(req.data)
+    payload = json.loads(connection.request.call_args.kwargs["body"])
     assert "2026-05-23T12:00:00" in payload["detected_at"]
 
 
 def test_notifier_skips_when_all_detections_below_threshold():
     high_threshold_notifier = WebhookNotifier("http://example.com/hook", min_score=0.8)
     try:
-        with patch("urllib.request.urlopen") as mock_open:
+        with patch("script.webhook.http_client.HTTPConnection") as mock_open:
             high_threshold_notifier.notify(_snapshot(), [_detection(0.6)])
 
         mock_open.assert_not_called()
@@ -121,7 +154,7 @@ def test_notifier_skips_when_all_detections_below_threshold():
 
 
 def test_notifier_skips_when_no_detections(notifier):
-    with patch("urllib.request.urlopen") as mock_open:
+    with patch("script.webhook.http_client.HTTPConnection") as mock_open:
         notifier.notify(_snapshot(), [])
 
     mock_open.assert_not_called()
@@ -129,7 +162,9 @@ def test_notifier_skips_when_no_detections(notifier):
 
 def test_notifier_logs_warning_on_delivery_failure(notifier, caplog):
     with caplog.at_level(logging.WARNING, logger="script.webhook"):
-        with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("conn refused")):
+        connection = MagicMock()
+        connection.request.side_effect = urllib.error.URLError("conn refused")
+        with patch("script.webhook.http_client.HTTPConnection", return_value=connection):
             future = notifier.notify(_snapshot(), [_detection(0.9)])
             if future is not None:
                 future.result(timeout=5.0)
@@ -144,18 +179,21 @@ def test_notifier_retries_http_5xx_then_succeeds():
         retry_backoff_seconds=1.0,
     )
     try:
+        connection = MagicMock()
+        connection.getresponse.side_effect = [
+            _successful_response(503),
+            _successful_response(503),
+            _successful_response(),
+        ]
         with (
-            patch(
-                "urllib.request.urlopen",
-                side_effect=[_http_error(503), _http_error(503), _successful_response()],
-            ) as mock_open,
+            patch("script.webhook.http_client.HTTPConnection", return_value=connection) as factory,
             patch("script.webhook.time.sleep") as mock_sleep,
         ):
             future = notifier.notify(_snapshot(), [_detection(0.9)])
             assert future is not None
             future.result(timeout=5.0)
 
-        assert mock_open.call_count == 3
+        assert factory.call_count == 3
         assert mock_sleep.call_args_list == [call(1.0), call(2.0)]
     finally:
         notifier.close()
@@ -168,15 +206,15 @@ def test_notifier_retries_transport_error_then_succeeds():
         retry_backoff_seconds=0,
     )
     try:
-        with patch(
-            "urllib.request.urlopen",
-            side_effect=[OSError("connection reset"), _successful_response()],
-        ) as mock_open:
+        connection = MagicMock()
+        connection.request.side_effect = [OSError("connection reset"), None]
+        connection.getresponse.return_value = _successful_response()
+        with patch("script.webhook.http_client.HTTPConnection", return_value=connection) as factory:
             future = notifier.notify(_snapshot(), [_detection(0.9)])
             assert future is not None
             future.result(timeout=5.0)
 
-        assert mock_open.call_count == 2
+        assert factory.call_count == 2
     finally:
         notifier.close()
 
@@ -188,15 +226,15 @@ def test_notifier_retries_timeout_then_succeeds():
         retry_backoff_seconds=0,
     )
     try:
-        with patch(
-            "urllib.request.urlopen",
-            side_effect=[TimeoutError(), _successful_response()],
-        ) as mock_open:
+        connection = MagicMock()
+        connection.request.side_effect = [TimeoutError(), None]
+        connection.getresponse.return_value = _successful_response()
+        with patch("script.webhook.http_client.HTTPConnection", return_value=connection) as factory:
             future = notifier.notify(_snapshot(), [_detection(0.9)])
             assert future is not None
             future.result(timeout=5.0)
 
-        assert mock_open.call_count == 2
+        assert factory.call_count == 2
     finally:
         notifier.close()
 
@@ -208,12 +246,14 @@ def test_notifier_does_not_retry_http_4xx():
         retry_backoff_seconds=0,
     )
     try:
-        with patch("urllib.request.urlopen", side_effect=_http_error(400)) as mock_open:
+        connection = MagicMock()
+        connection.getresponse.return_value = _successful_response(400)
+        with patch("script.webhook.http_client.HTTPConnection", return_value=connection) as factory:
             future = notifier.notify(_snapshot(), [_detection(0.9)])
             assert future is not None
             future.result(timeout=5.0)
 
-        assert mock_open.call_count == 1
+        assert factory.call_count == 1
     finally:
         notifier.close()
 
@@ -226,12 +266,14 @@ def test_notifier_logs_final_failure_without_url_or_payload(caplog):
     )
     try:
         with caplog.at_level(logging.WARNING, logger="script.webhook"):
-            with patch("urllib.request.urlopen", side_effect=_http_error(503)) as mock_open:
+            connection = MagicMock()
+            connection.getresponse.return_value = _successful_response(503)
+            with patch("script.webhook.http_client.HTTPConnection", return_value=connection) as factory:
                 future = notifier.notify(_snapshot(), [_detection(0.9)])
                 assert future is not None
                 future.result(timeout=5.0)
 
-        assert mock_open.call_count == 3
+        assert factory.call_count == 3
         messages = " ".join(record.message for record in caplog.records)
         assert "example.com" not in messages
         assert "secret=hidden" not in messages
@@ -270,13 +312,16 @@ def test_notifier_submits_delivery_without_blocking_caller():
     started = threading.Event()
     release = threading.Event()
 
-    def blocked_urlopen(*_args, **_kwargs):
+    def blocked_request(*_args, **_kwargs):
         started.set()
         release.wait(timeout=5.0)
-        return _successful_response()
+        return None
 
     try:
-        with patch("urllib.request.urlopen", side_effect=blocked_urlopen):
+        connection = MagicMock()
+        connection.request.side_effect = blocked_request
+        connection.getresponse.return_value = _successful_response()
+        with patch("script.webhook.http_client.HTTPConnection", return_value=connection):
             started_at = time.monotonic()
             future = notifier.notify(_snapshot(), [_detection(0.9)])
             elapsed = time.monotonic() - started_at
@@ -329,7 +374,7 @@ def test_close_shuts_down_executor_and_drops_further_notifications(caplog):
 
     import logging
     with caplog.at_level(logging.WARNING, logger="script.webhook"):
-        with patch("urllib.request.urlopen") as mock_open:
+        with patch("script.webhook.http_client.HTTPConnection") as mock_open:
             result = closable_notifier.notify(_snapshot(), [_detection(0.9)])
 
     assert result is None
