@@ -117,6 +117,11 @@ class Config:
         os.getenv("ESP32CAM_VIDEO_RETENTION_SCAN_INTERVAL_UPLOADS", "1")
     )
     MAX_MJPEG_STREAMS = int(os.getenv("ESP32CAM_MAX_MJPEG_STREAMS", "10"))
+    # 0 derives the timeout from each camera's expected interval plus a grace
+    # period, so a sparse camera does not disconnect while it is healthy.
+    MJPEG_STREAM_IDLE_TIMEOUT_SECONDS = int(
+        os.getenv("ESP32CAM_MJPEG_STREAM_IDLE_TIMEOUT_SECONDS", "0")
+    )
     MAX_TRACKED_CAMERAS = int(os.getenv("ESP32CAM_MAX_TRACKED_CAMERAS", "500"))
     DISK_USAGE_CHECK_INTERVAL_UPLOADS = int(
         os.getenv("ESP32CAM_DISK_USAGE_CHECK_INTERVAL_UPLOADS", "1")
