@@ -47,6 +47,62 @@ def test_metadata_store_registers_camera_and_snapshot(tmp_path):
     assert snapshot.inference_status == "pending"
 
 
+def test_ensure_camera_return_value_reflects_merged_conflict_row(tmp_path):
+    # ensure_camera() uses INSERT ... ON CONFLICT DO UPDATE ... RETURNING *
+    # instead of a separate follow-up SELECT (#315). Assert the value it
+    # returns directly -- not a value re-fetched via get_camera() -- reflects
+    # the post-UPDATE row (min(first_seen_at), max(last_seen_at)).
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    older = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    newer = datetime(2026, 3, 11, 12, 5, tzinfo=timezone.utc)
+    middle = datetime(2026, 3, 11, 12, 2, tzinfo=timezone.utc)
+
+    store.ensure_camera("cam-a", seen_at=middle)
+    updated = store.ensure_camera("cam-a", seen_at=newer)
+    merged = store.ensure_camera("cam-a", seen_at=older)
+
+    assert updated.first_seen_at == middle
+    assert updated.last_seen_at == newer
+    assert merged.first_seen_at == older
+    assert merged.last_seen_at == newer
+    assert merged.is_active is True
+
+
+def test_record_snapshot_returns_updated_record_on_conflict(tmp_path):
+    # record_snapshot() upserts via INSERT ... ON CONFLICT DO UPDATE ...
+    # RETURNING * (#315). Re-uploading the same filename must return the
+    # merged row's fresh values directly from the RETURNING clause, not
+    # stale values from before the UPDATE.
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    first_seen = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    second_seen = datetime(2026, 3, 11, 12, 5, tzinfo=timezone.utc)
+
+    first = store.record_snapshot(
+        _stored_image(
+            name="dup.jpg",
+            relative_path="cam-a/images/dup.jpg",
+            camera_id="cam-a",
+            captured_at=first_seen,
+            stored_at=first_seen,
+        )
+    )
+    second = store.record_snapshot(
+        _stored_image(
+            name="dup.jpg",
+            relative_path="cam-a/images/dup-renamed.jpg",
+            camera_id="cam-a",
+            captured_at=second_seen,
+            stored_at=second_seen,
+        )
+    )
+
+    assert second.id == first.id
+    assert second.relative_path == "cam-a/images/dup-renamed.jpg"
+    assert second.stored_at == second_seen
+    # Fetching independently must agree with what record_snapshot() returned.
+    assert store.get_snapshot(first.id) == second
+
+
 def test_metadata_store_lists_camera_summaries_with_status(tmp_path):
     store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
     now = datetime.now(tz=timezone.utc)
@@ -918,6 +974,44 @@ def test_metadata_store_records_and_lists_videos(tmp_path):
     assert videos[0].content_type == "video/mp4"
     assert videos[0].sha256 == "a" * 64
     assert store.get_camera("cam-a") is not None
+
+
+def test_record_video_returns_updated_record_on_conflict(tmp_path):
+    # record_video() upserts via INSERT ... ON CONFLICT DO UPDATE ...
+    # RETURNING * (#315); re-recording the same filename must return the
+    # merged row's fresh values directly, not stale pre-UPDATE values.
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    first_seen = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+    second_seen = datetime(2026, 6, 1, 12, 5, tzinfo=timezone.utc)
+
+    first = store.record_video(
+        _stored_video(
+            name="dup.mp4",
+            relative_path="cam-a/videos/dup.mp4",
+            camera_id="cam-a",
+            captured_at=first_seen,
+            stored_at=first_seen,
+            duration_ms=1000,
+            sha256="a" * 64,
+        )
+    )
+    second = store.record_video(
+        _stored_video(
+            name="dup.mp4",
+            relative_path="cam-a/videos/dup-renamed.mp4",
+            camera_id="cam-a",
+            captured_at=second_seen,
+            stored_at=second_seen,
+            duration_ms=2000,
+            sha256="b" * 64,
+        )
+    )
+
+    assert second.id == first.id
+    assert second.relative_path == "cam-a/videos/dup-renamed.mp4"
+    assert second.duration_ms == 2000
+    assert second.sha256 == "b" * 64
+    assert store.get_video(first.id) == second
 
 
 def test_metadata_store_deletes_videos_by_relative_path(tmp_path):
