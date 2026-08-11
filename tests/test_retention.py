@@ -338,6 +338,9 @@ def test_gunicorn_worker_count_parses_common_worker_flags():
     assert gunicorn_worker_count(["/venv/bin/gunicorn", "--workers=3"]) == 3
     assert gunicorn_worker_count(["/venv/bin/gunicorn", "-w", "2"]) == 2
     assert gunicorn_worker_count(["/venv/bin/gunicorn", "-w2"]) == 2
+    assert gunicorn_worker_count(
+        ["/venv/bin/gunicorn", "--workers", "4"], command_args="--workers 2"
+    ) == 4
     assert gunicorn_worker_count(["pytest", "--workers", "4"]) is None
 
 

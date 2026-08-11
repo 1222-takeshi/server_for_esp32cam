@@ -60,7 +60,8 @@ def gunicorn_worker_count(
     configured_args = command_args
     if configured_args is None:
         configured_args = os.getenv("GUNICORN_CMD_ARGS", "")
-    options = arguments[1:] + shlex.split(configured_args)
+    # Explicit command-line options take precedence over GUNICORN_CMD_ARGS.
+    options = shlex.split(configured_args) + arguments[1:]
     try:
         worker_count = int(os.getenv("WEB_CONCURRENCY", "1"))
     except ValueError:
