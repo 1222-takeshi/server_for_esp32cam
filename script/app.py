@@ -10,7 +10,7 @@ from werkzeug.exceptions import RequestEntityTooLarge
 
 from flask import g, request
 
-from script.config import Config
+from script.config import Config, gunicorn_worker_count
 from script.detector import DisabledDetector, TFLiteCpuDetector
 from script.events import SnapshotEventPublisher
 from script.inference import InferenceService
@@ -100,6 +100,19 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     configure_logging(app)
     validate_auth_config(app)
+
+    worker_count = gunicorn_worker_count()
+    if (
+        worker_count is not None
+        and worker_count > 1
+        and str(app.config.get("RATELIMIT_STORAGE_URI", "")).startswith("memory://")
+    ):
+        app.logger.warning(
+            "Flask-Limiter uses in-process memory storage with multiple Gunicorn workers "
+            "(%d); configure ESP32CAM_RATELIMIT_STORAGE_URI with a shared backend "
+            "such as Redis",
+            worker_count,
+        )
 
     if not app.config.get("ADMIN_TOKEN", ""):
         app.logger.warning(
