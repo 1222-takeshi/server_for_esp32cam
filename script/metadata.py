@@ -723,7 +723,7 @@ class SQLiteMetadataStore:
         *,
         limit: int | None = None,
         offset: int = 0,
-        before: int | None = None,
+        before: tuple[str, int] | None = None,
         camera_id: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
@@ -741,8 +741,9 @@ class SQLiteMetadataStore:
             query += " AND stored_at <= ?"
             params.append(until.astimezone(timezone.utc).isoformat())
         if before is not None:
-            query += " AND id < ?"
-            params.append(before)
+            before_stored_at, before_id = before
+            query += " AND (stored_at < ? OR (stored_at = ? AND id < ?))"
+            params.extend([before_stored_at, before_stored_at, before_id])
         query += " ORDER BY stored_at DESC, id DESC"
         if limit is not None:
             query += " LIMIT ? OFFSET ?"
@@ -886,7 +887,7 @@ class SQLiteMetadataStore:
         *,
         limit: int = 20,
         offset: int = 0,
-        before: int | None = None,
+        before: tuple[str, int] | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
     ) -> list[SnapshotRecord]:
@@ -899,8 +900,9 @@ class SQLiteMetadataStore:
             query += " AND stored_at <= ?"
             params.append(until.astimezone(timezone.utc).isoformat())
         if before is not None:
-            query += " AND id < ?"
-            params.append(before)
+            before_stored_at, before_id = before
+            query += " AND (stored_at < ? OR (stored_at = ? AND id < ?))"
+            params.extend([before_stored_at, before_stored_at, before_id])
         query += " ORDER BY stored_at DESC, id DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
         conn = self._get_connection()

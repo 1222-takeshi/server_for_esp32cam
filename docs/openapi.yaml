@@ -608,8 +608,8 @@ paths:
         - in: query
           name: before
           schema:
-            type: integer
-          description: Return snapshots with id less than this value (cursor); do not combine with offset
+            type: string
+          description: Opaque cursor returned as next_before; do not combine with offset
         - in: query
           name: since
           schema:
@@ -1331,7 +1331,7 @@ components:
         offset:
           type: integer
         next_before:
-          type: integer
+          type: string
           nullable: true
         snapshots:
           type: array

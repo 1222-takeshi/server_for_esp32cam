@@ -90,6 +90,33 @@ def _parse_pagination() -> tuple[int, int] | tuple[None, None]:
     return limit, offset
 
 
+def _encode_snapshot_cursor(snapshot: SnapshotRecord) -> str:
+    payload = json.dumps(
+        [snapshot.stored_at.isoformat(), snapshot.id],
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_snapshot_cursor(value: str) -> tuple[str, int] | None:
+    try:
+        padded = value + "=" * (-len(value) % 4)
+        stored_at, snapshot_id = json.loads(
+            base64.urlsafe_b64decode(padded).decode("utf-8")
+        )
+        parsed_stored_at = datetime.fromisoformat(stored_at.replace("Z", "+00:00"))
+        if (
+            parsed_stored_at.tzinfo is None
+            or isinstance(snapshot_id, bool)
+            or not isinstance(snapshot_id, int)
+            or snapshot_id < 1
+        ):
+            return None
+        return stored_at, snapshot_id
+    except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError, binascii.Error):
+        return None
+
+
 def _encode_detection_cursor(row: dict[str, object]) -> str:
     payload = json.dumps(
         [row["stored_at"], row["snapshot_id"], row["detection_id"]],
@@ -580,9 +607,8 @@ def list_files():
     before = None
     before_str = request.args.get("before")
     if before_str is not None:
-        try:
-            before = int(before_str)
-        except (TypeError, ValueError):
+        before = _decode_snapshot_cursor(before_str)
+        if before is None:
             return jsonify({"message": "Invalid before parameter"}), 400
         offset = 0
     try:
@@ -602,7 +628,7 @@ def list_files():
             total_pages=total_pages,
             total=total,
             before=before,
-            next_before=files[-1].id if len(files) == limit else None,
+            next_before=_encode_snapshot_cursor(files[-1]) if len(files) == limit else None,
         )
     except Exception as exc:  # pragma: no cover
         current_app.logger.error("Error listing files: %s", exc)
@@ -1046,9 +1072,8 @@ def api_camera_snapshots(camera_id: str):
     before = None
     before_str = request.args.get("before")
     if before_str is not None:
-        try:
-            before = int(before_str)
-        except (TypeError, ValueError):
+        before = _decode_snapshot_cursor(before_str)
+        if before is None:
             return jsonify({"message": "Invalid before parameter"}), 400
         if offset:
             return jsonify({"message": "before cannot be combined with offset"}), 400
@@ -1095,7 +1120,9 @@ def api_camera_snapshots(camera_id: str):
             "total": total,
             "limit": limit,
             "offset": offset,
-            "next_before": snapshots[-1].id if len(snapshots) == limit else None,
+            "next_before": (
+                _encode_snapshot_cursor(snapshots[-1]) if len(snapshots) == limit else None
+            ),
             "snapshots": [_serialize_snapshot(s) for s in snapshots],
         }
     )

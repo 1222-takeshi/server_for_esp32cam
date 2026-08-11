@@ -378,12 +378,52 @@ def test_list_snapshots_supports_id_cursor(tmp_path):
     ]
 
     first_page = store.list_camera_snapshots("cam-a", limit=1)
-    second_page = store.list_camera_snapshots("cam-a", limit=1, before=first_page[0].id)
-    recent_page = store.list_recent_snapshots(limit=1, before=first_page[0].id)
+    cursor = (first_page[0].stored_at.isoformat(), first_page[0].id)
+    second_page = store.list_camera_snapshots("cam-a", limit=1, before=cursor)
+    recent_page = store.list_recent_snapshots(limit=1, before=cursor)
 
     assert [snapshot.id for snapshot in first_page] == [snapshots[2].id]
     assert [snapshot.id for snapshot in second_page] == [snapshots[1].id]
     assert [snapshot.id for snapshot in recent_page] == [snapshots[1].id]
+
+
+def test_list_snapshots_cursor_handles_backfilled_stored_at(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    base = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    newest = store.record_snapshot(
+        _stored_image(
+            name="newest.jpg",
+            relative_path="cam-a/images/newest.jpg",
+            camera_id="cam-a",
+            captured_at=base + timedelta(seconds=10),
+            stored_at=base + timedelta(seconds=10),
+        )
+    )
+    oldest = store.record_snapshot(
+        _stored_image(
+            name="oldest.jpg",
+            relative_path="cam-a/images/oldest.jpg",
+            camera_id="cam-a",
+            captured_at=base,
+            stored_at=base,
+        )
+    )
+    middle = store.record_snapshot(
+        _stored_image(
+            name="middle.jpg",
+            relative_path="cam-a/images/middle.jpg",
+            camera_id="cam-a",
+            captured_at=base + timedelta(seconds=5),
+            stored_at=base + timedelta(seconds=5),
+        )
+    )
+
+    first_page = store.list_recent_snapshots(limit=1)
+    cursor = (first_page[0].stored_at.isoformat(), first_page[0].id)
+    remaining = store.list_recent_snapshots(limit=10, before=cursor)
+
+    assert first_page[0].id == newest.id
+    assert [snapshot.id for snapshot in remaining] == [middle.id, oldest.id]
 
 
 def test_list_detections_paginates_stably_with_duplicate_timestamps(tmp_path):
