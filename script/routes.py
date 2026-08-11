@@ -395,13 +395,16 @@ def index():
     limit, offset = _parse_pagination()
     if limit is None:
         abort(400, description="Invalid pagination parameters")
+    camera_total = store.count_cameras()
+    if camera_total and offset >= camera_total:
+        offset = ((camera_total - 1) // limit) * limit
     camera_summaries = store.list_camera_summaries(limit=limit, offset=offset)
     one_hour_ago = datetime.now(tz=timezone.utc) - timedelta(hours=1)
     cameras_with_errors = store.camera_ids_with_recent_errors(since=one_hour_ago)
     return render_template(
         "index.html",
         camera_summaries=camera_summaries,
-        camera_total=store.count_cameras(),
+        camera_total=camera_total,
         camera_limit=limit,
         camera_offset=offset,
         image_count=store.total_snapshot_count(),
@@ -684,11 +687,14 @@ def list_cameras():
     if limit is None:
         abort(400, description="Invalid pagination parameters")
     store = _metadata_store()
+    camera_total = store.count_cameras()
+    if camera_total and offset >= camera_total:
+        offset = ((camera_total - 1) // limit) * limit
     camera_summaries = store.list_camera_summaries(limit=limit, offset=offset)
     return render_template(
         "cameras.html",
         camera_summaries=camera_summaries,
-        camera_total=store.count_cameras(),
+        camera_total=camera_total,
         camera_limit=limit,
         camera_offset=offset,
     )
@@ -719,13 +725,26 @@ def camera_detail(camera_id: str):
 
 @server.route("/api/cameras")
 def api_cameras():
+    store = _metadata_store()
+    if "limit" not in request.args and "offset" not in request.args:
+        return jsonify(
+            {
+                "total": store.count_cameras(),
+                "limit": None,
+                "offset": 0,
+                "cameras": [
+                    _serialize_camera_summary(item)
+                    for item in store.list_camera_summaries()
+                ],
+            }
+        )
     limit, offset = _parse_pagination()
     if limit is None:
         return jsonify({"message": "Invalid pagination parameters"}), 400
-    store = _metadata_store()
+    total = store.count_cameras()
     return jsonify(
         {
-            "total": store.count_cameras(),
+            "total": total,
             "limit": limit,
             "offset": offset,
             "cameras": [

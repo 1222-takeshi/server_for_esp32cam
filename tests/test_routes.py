@@ -367,12 +367,15 @@ def test_camera_pages_support_bounded_pagination(client):
 
     dashboard = client.get("/?limit=1&offset=1")
     cameras = client.get("/cameras?limit=1&offset=1")
+    boundary = client.get("/cameras?limit=1&offset=99")
 
     assert dashboard.status_code == 200
     assert cameras.status_code == 200
+    assert boundary.status_code == 200
     assert "esp32cam-front-door" in dashboard.get_data(as_text=True)
     assert "esp32cam-garden" not in dashboard.get_data(as_text=True)
     assert "Showing 2–2 of 2 cameras" in cameras.get_data(as_text=True)
+    assert "Showing 2–2 of 2 cameras" in boundary.get_data(as_text=True)
 
 
 def test_api_cameras_returns_pagination_envelope(client):
@@ -399,6 +402,31 @@ def test_api_cameras_returns_pagination_envelope(client):
     assert body["limit"] == 1
     assert body["offset"] == 1
     assert len(body["cameras"]) == 1
+
+
+def test_api_cameras_without_pagination_preserves_all_cameras(client):
+    client.post(
+        "/upload",
+        data=MINIMAL_JPEG,
+        headers=UPLOAD_HEADERS,
+    )
+    client.post(
+        "/upload",
+        data=MINIMAL_JPEG,
+        headers={
+            "Content-Type": "image/jpeg",
+            "X-Device-Id": "esp32cam-garden",
+            "X-Captured-At": "2026-03-11T12:35:56Z",
+        },
+    )
+
+    response = client.get("/api/cameras")
+    body = response.get_json()
+
+    assert response.status_code == 200
+    assert body["limit"] is None
+    assert body["offset"] == 0
+    assert len(body["cameras"]) == 2
 
 
 def test_api_cameras_rejects_invalid_pagination(client):
