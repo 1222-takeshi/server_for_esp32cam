@@ -351,6 +351,16 @@ def test_memory_rate_limit_storage_warns_for_multiple_workers(app_factory, caplo
     assert any("multiple Gunicorn workers" in record.message for record in caplog.records)
 
 
+@pytest.mark.parametrize("worker_count, storage_uri", [(1, "memory://"), (2, "redis://localhost")])
+def test_memory_rate_limit_warning_is_limited_to_unsafe_configuration(
+    app_factory, caplog, worker_count, storage_uri
+):
+    with patch("script.app.gunicorn_worker_count", return_value=worker_count):
+        app_factory(RATELIMIT_STORAGE_URI=storage_uri)
+
+    assert not any("multiple Gunicorn workers" in record.message for record in caplog.records)
+
+
 def test_scheduler_logs_lifecycle_and_scan_result(app_factory, caplog):
     import logging
     import threading
