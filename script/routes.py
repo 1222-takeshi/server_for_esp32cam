@@ -14,6 +14,7 @@ import uuid
 from flask import (
     Blueprint,
     Response,
+    abort,
     current_app,
     jsonify,
     render_template,
@@ -391,12 +392,18 @@ def _read_video_upload_payload() -> tuple[object | None, str | None, datetime | 
 @server.route("/")
 def index():
     store = _metadata_store()
-    camera_summaries = store.list_camera_summaries()
+    limit, offset = _parse_pagination()
+    if limit is None:
+        abort(400, description="Invalid pagination parameters")
+    camera_summaries = store.list_camera_summaries(limit=limit, offset=offset)
     one_hour_ago = datetime.now(tz=timezone.utc) - timedelta(hours=1)
     cameras_with_errors = store.camera_ids_with_recent_errors(since=one_hour_ago)
     return render_template(
         "index.html",
         camera_summaries=camera_summaries,
+        camera_total=store.count_cameras(),
+        camera_limit=limit,
+        camera_offset=offset,
         image_count=store.total_snapshot_count(),
         cameras_with_errors=cameras_with_errors,
     )
@@ -673,8 +680,18 @@ def mjpeg_stream(camera_id: str):
 
 @server.route("/cameras")
 def list_cameras():
-    camera_summaries = _metadata_store().list_camera_summaries()
-    return render_template("cameras.html", camera_summaries=camera_summaries)
+    limit, offset = _parse_pagination()
+    if limit is None:
+        abort(400, description="Invalid pagination parameters")
+    store = _metadata_store()
+    camera_summaries = store.list_camera_summaries(limit=limit, offset=offset)
+    return render_template(
+        "cameras.html",
+        camera_summaries=camera_summaries,
+        camera_total=store.count_cameras(),
+        camera_limit=limit,
+        camera_offset=offset,
+    )
 
 
 @server.route("/cameras/<camera_id>")
@@ -702,7 +719,21 @@ def camera_detail(camera_id: str):
 
 @server.route("/api/cameras")
 def api_cameras():
-    return jsonify({"cameras": [_serialize_camera_summary(item) for item in _metadata_store().list_camera_summaries()]})
+    limit, offset = _parse_pagination()
+    if limit is None:
+        return jsonify({"message": "Invalid pagination parameters"}), 400
+    store = _metadata_store()
+    return jsonify(
+        {
+            "total": store.count_cameras(),
+            "limit": limit,
+            "offset": offset,
+            "cameras": [
+                _serialize_camera_summary(item)
+                for item in store.list_camera_summaries(limit=limit, offset=offset)
+            ],
+        }
+    )
 
 
 @server.route("/api/cameras/<camera_id>/videos", methods=["POST"])

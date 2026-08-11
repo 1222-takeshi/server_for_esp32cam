@@ -524,6 +524,18 @@ def test_list_camera_summaries_returns_empty_for_empty_store(tmp_path):
     assert summaries == []
 
 
+def test_list_camera_summaries_supports_bounded_pages(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    store.record_heartbeat("cam-a", seen_at=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc))
+    store.record_heartbeat("cam-b", seen_at=datetime(2026, 1, 1, 13, 0, tzinfo=timezone.utc))
+    store.record_heartbeat("cam-c", seen_at=datetime(2026, 1, 1, 14, 0, tzinfo=timezone.utc))
+
+    summaries = store.list_camera_summaries(limit=1, offset=1)
+
+    assert [summary.camera.camera_id for summary in summaries] == ["cam-b"]
+    assert store.count_cameras() == 3
+
+
 def test_list_camera_last_seen_returns_empty_for_empty_store(tmp_path):
     store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
 

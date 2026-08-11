@@ -38,7 +38,8 @@
     *   **レスポンス:** 最新画像、bbox overlay、最近の snapshots、推論状態を含むHTMLページ。
 
 *   **`GET /api/cameras`**
-    *   **説明:** camera summary を JSON で返します。
+    *   **説明:** camera summary を JSON で返します。`limit`（1–200、既定50）と `offset`（既定0）でページングできます。レスポンスには全件数の `total`、指定値の `limit`/`offset`、ページ内の `cameras` が含まれます。
+    *   **例:** `GET /api/cameras?limit=50&offset=0`
 
 *   **`GET /api/cameras/<camera_id>/snapshots`**
     *   **説明:** 指定 camera の最近の snapshots を JSON で返します。
