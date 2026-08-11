@@ -384,7 +384,7 @@ class SQLiteMetadataStore:
         seen_iso = effective_seen_at.isoformat()
         conn = self._get_connection()
         with conn:
-            conn.execute(
+            row = conn.execute(
                 """
                 INSERT INTO cameras (
                     camera_id, display_name, expected_interval_seconds, first_seen_at, last_seen_at, is_active
@@ -399,6 +399,7 @@ class SQLiteMetadataStore:
                         ELSE cameras.last_seen_at
                     END,
                     is_active=1
+                RETURNING *
                 """,
                 (
                     camera_id,
@@ -407,10 +408,6 @@ class SQLiteMetadataStore:
                     seen_iso,
                     seen_iso,
                 ),
-            )
-            row = conn.execute(
-                "SELECT * FROM cameras WHERE camera_id = ?",
-                (camera_id,),
             ).fetchone()
         return self._camera_from_row(row)
 
@@ -423,7 +420,7 @@ class SQLiteMetadataStore:
         inference_status = "pending" if default_pending and stored.device_id else "succeeded"
         conn = self._get_connection()
         with conn:
-            conn.execute(
+            row = conn.execute(
                 """
                 INSERT INTO snapshots (
                     filename, relative_path, size, camera_id, captured_at, stored_at, inference_status, inference_error
@@ -434,6 +431,7 @@ class SQLiteMetadataStore:
                     camera_id=excluded.camera_id,
                     captured_at=excluded.captured_at,
                     stored_at=excluded.stored_at
+                RETURNING *
                 """,
                 (
                     stored.name,
@@ -444,10 +442,6 @@ class SQLiteMetadataStore:
                     stored.created_at.isoformat(),
                     inference_status,
                 ),
-            )
-            row = conn.execute(
-                "SELECT * FROM snapshots WHERE filename = ?",
-                (stored.name,),
             ).fetchone()
         return self._snapshot_from_row(row)
 
@@ -455,7 +449,7 @@ class SQLiteMetadataStore:
         self.ensure_camera(stored.camera_id, seen_at=stored.stored_at)
         conn = self._get_connection()
         with conn:
-            conn.execute(
+            row = conn.execute(
                 """
                 INSERT INTO videos (
                     filename, relative_path, size, camera_id, captured_at, stored_at,
@@ -470,6 +464,7 @@ class SQLiteMetadataStore:
                     duration_ms=excluded.duration_ms,
                     content_type=excluded.content_type,
                     sha256=excluded.sha256
+                RETURNING *
                 """,
                 (
                     stored.name,
@@ -482,10 +477,6 @@ class SQLiteMetadataStore:
                     stored.content_type,
                     stored.sha256,
                 ),
-            )
-            row = conn.execute(
-                "SELECT * FROM videos WHERE filename = ?",
-                (stored.name,),
             ).fetchone()
         return self._video_from_row(row)
 
@@ -1295,13 +1286,13 @@ class SQLiteMetadataStore:
         effective_logged_at = (logged_at or datetime.now(tz=timezone.utc)).astimezone(timezone.utc)
         conn = self._get_connection()
         with conn:
-            cursor = conn.execute(
-                "INSERT INTO device_logs (camera_id, level, message, logged_at) VALUES (?, ?, ?, ?)",
-                (camera_id, level, message, effective_logged_at.isoformat()),
-            )
             row = conn.execute(
-                "SELECT * FROM device_logs WHERE id = ?",
-                (cursor.lastrowid,),
+                """
+                INSERT INTO device_logs (camera_id, level, message, logged_at)
+                VALUES (?, ?, ?, ?)
+                RETURNING *
+                """,
+                (camera_id, level, message, effective_logged_at.isoformat()),
             ).fetchone()
         return DeviceLogRecord(
             id=row["id"],

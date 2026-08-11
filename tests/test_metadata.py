@@ -47,6 +47,38 @@ def test_metadata_store_registers_camera_and_snapshot(tmp_path):
     assert snapshot.inference_status == "pending"
 
 
+def test_hot_write_paths_return_rows_without_follow_up_selects(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    traces: list[str] = []
+    store._get_connection().set_trace_callback(traces.append)
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+
+    store.record_snapshot(
+        _stored_image(
+            name="image_a.jpg",
+            relative_path="cam-a/images/image_a.jpg",
+            camera_id="cam-a",
+            captured_at=stored_at,
+            stored_at=stored_at,
+        )
+    )
+    store.record_video(
+        _stored_video(
+            name="video_a.mp4",
+            relative_path="cam-a/videos/video_a.mp4",
+            camera_id="cam-a",
+            captured_at=stored_at,
+            stored_at=stored_at,
+        )
+    )
+    store.record_device_log("cam-a", level="info", message="boot", logged_at=stored_at)
+
+    assert not any("SELECT * FROM cameras WHERE camera_id" in sql for sql in traces)
+    assert not any("SELECT * FROM snapshots WHERE filename" in sql for sql in traces)
+    assert not any("SELECT * FROM videos WHERE filename" in sql for sql in traces)
+    assert not any("SELECT * FROM device_logs WHERE id" in sql for sql in traces)
+
+
 def test_metadata_store_lists_camera_summaries_with_status(tmp_path):
     store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
     now = datetime.now(tz=timezone.utc)
