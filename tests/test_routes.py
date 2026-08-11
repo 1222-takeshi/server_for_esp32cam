@@ -734,6 +734,7 @@ def test_upload_publishes_snapshot_created_event(app, client):
     assert event["snapshot"]["filename"] == body["filename"]
     assert event["snapshot"]["url"] == f"/files/{body['filename']}"
     assert event["snapshot"]["size_bytes"] == body["size"]
+    assert event.raw_image == MINIMAL_JPEG
 
 
 def test_status_update_records_heartbeat(client):

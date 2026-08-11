@@ -41,6 +41,7 @@ def test_handle_binary_snapshot_upload_stores_frame_and_publishes_event(app):
     assert len(events) == 1
     assert events[0]["type"] == "snapshot.created"
     assert events[0]["camera_id"] == "esp32cam-01"
+    assert events[0].raw_image == JPEG_BYTES
 
 
 def test_handle_binary_snapshot_upload_rejects_non_jpeg_payload(app):
