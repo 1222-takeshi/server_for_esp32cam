@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import http.client as http_client
 import logging
 import math
 import threading
@@ -254,6 +255,50 @@ def test_notifier_does_not_retry_http_4xx():
             future.result(timeout=5.0)
 
         assert factory.call_count == 1
+    finally:
+        notifier.close()
+
+
+@pytest.mark.parametrize("status", [301, 302, 307, 308])
+def test_notifier_treats_redirect_as_delivery_failure(status, caplog):
+    notifier = WebhookNotifier(
+        "http://example.com/hook",
+        max_attempts=3,
+        retry_backoff_seconds=0,
+    )
+    try:
+        with caplog.at_level(logging.WARNING, logger="script.webhook"):
+            connection = MagicMock()
+            connection.getresponse.return_value = _successful_response(status)
+            with patch("script.webhook.http_client.HTTPConnection", return_value=connection) as factory:
+                future = notifier.notify(_snapshot(), [_detection(0.9)])
+                assert future is not None
+                future.result(timeout=5.0)
+
+        assert factory.call_count == 1
+        assert connection.request.call_count == 1
+        assert any(f"http_{status}" in record.message for record in caplog.records)
+    finally:
+        notifier.close()
+
+
+def test_notifier_retries_http_exception_from_reused_connection():
+    notifier = WebhookNotifier(
+        "http://example.com/hook",
+        max_attempts=2,
+        retry_backoff_seconds=0,
+    )
+    try:
+        connection = MagicMock()
+        connection.request.side_effect = [http_client.HTTPException("stale connection"), None]
+        connection.getresponse.return_value = _successful_response()
+        with patch("script.webhook.http_client.HTTPConnection", return_value=connection) as factory:
+            future = notifier.notify(_snapshot(), [_detection(0.9)])
+            assert future is not None
+            future.result(timeout=5.0)
+
+        assert factory.call_count == 2
+        assert connection.request.call_count == 2
     finally:
         notifier.close()
 

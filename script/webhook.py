@@ -141,7 +141,7 @@ class WebhookNotifier:
                     )
                     response = connection.getresponse()
                     response.read()
-                    if response.status >= 400:
+                    if response.status >= 300:
                         raise _WebhookHTTPError(response.status)
                     return
                 except _WebhookHTTPError as exc:
@@ -150,7 +150,7 @@ class WebhookNotifier:
                 except urllib.error.HTTPError as exc:
                     failure_kind = f"http_{exc.code}"
                     retryable = 500 <= exc.code <= 599
-                except (urllib.error.URLError, OSError) as exc:
+                except (urllib.error.URLError, http_client.HTTPException, OSError) as exc:
                     failure_kind = type(exc).__name__
                     retryable = True
                 except Exception as exc:  # pragma: no cover - defensive boundary
