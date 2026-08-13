@@ -47,6 +47,42 @@ def gunicorn_preload_requested(
     return "--preload" in arguments[1:] or "--preload" in shlex.split(configured_args)
 
 
+def gunicorn_worker_count(
+    argv: Sequence[str] | None = None,
+    command_args: str | None = None,
+) -> int | None:
+    """Return the configured Gunicorn worker count, if this is a Gunicorn process."""
+
+    arguments = list(argv if argv is not None else sys.argv)
+    if not arguments or Path(arguments[0]).name != "gunicorn":
+        return None
+
+    configured_args = command_args
+    if configured_args is None:
+        configured_args = os.getenv("GUNICORN_CMD_ARGS", "")
+    # Explicit command-line options take precedence over GUNICORN_CMD_ARGS.
+    options = shlex.split(configured_args) + arguments[1:]
+    try:
+        worker_count = int(os.getenv("WEB_CONCURRENCY", "1"))
+    except ValueError:
+        return None
+    for index, option in enumerate(options):
+        raw_value: str | None = None
+        if option in {"--workers", "-w"} and index + 1 < len(options):
+            raw_value = options[index + 1]
+        elif option.startswith("--workers="):
+            raw_value = option.partition("=")[2]
+        elif option.startswith("-w") and option != "-w":
+            raw_value = option[2:]
+        if raw_value is None:
+            continue
+        try:
+            worker_count = int(raw_value)
+        except ValueError:
+            return None
+    return worker_count if worker_count > 0 else None
+
+
 class Config:
     BASE_DIR = Path(__file__).resolve().parent.parent
     UPLOAD_DIR = Path(os.getenv("ESP32CAM_UPLOAD_DIR", BASE_DIR / "uploads"))

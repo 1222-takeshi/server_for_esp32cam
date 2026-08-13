@@ -307,6 +307,11 @@ All variables are optional unless marked **required for production**.
 | `ESP32CAM_UPLOAD_WS_MIN_FRAME_INTERVAL_SECONDS` | `1.0` | Minimum seconds between WebSocket frames per connection. |
 | `ESP32CAM_LOG_FORMAT` | `text` | Log output format: `text` (human-readable) or `json` (structured, via python-json-logger). |
 
+When Gunicorn is configured with more than one worker while this setting remains
+`memory://`, the application emits a startup warning because rate-limit counters
+are independent per process. Use a shared backend such as Redis before scaling
+workers or application instances.
+
 Webhook delivery with retries is at-least-once: if the receiver processes an event
 but the response is lost or becomes a 5xx, the same event may be delivered again.
 The receiver should deduplicate events; see [Issue #279](https://github.com/1222-takeshi/server_for_esp32cam/issues/279).
