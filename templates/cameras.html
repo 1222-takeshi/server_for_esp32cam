@@ -62,5 +62,19 @@
     </div>
   </div>
   {% endif %}
+
+  {% if camera_total > camera_limit %}
+  <div class="card" style="margin-top:16px;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;gap:12px;">
+    <span class="text-4">Showing {{ camera_offset + 1 }}–{{ [camera_offset + camera_summaries|length, camera_total]|min }} of {{ camera_total }} cameras</span>
+    <div style="display:flex;gap:8px;">
+      {% if camera_offset > 0 %}
+      <a class="button" href="{{ url_for('server.list_cameras', limit=camera_limit, offset=[camera_offset - camera_limit, 0]|max) }}">Previous</a>
+      {% endif %}
+      {% if camera_offset + camera_limit < camera_total %}
+      <a class="button" href="{{ url_for('server.list_cameras', limit=camera_limit, offset=camera_offset + camera_limit) }}">Next</a>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
 </div>
 {% endblock %}

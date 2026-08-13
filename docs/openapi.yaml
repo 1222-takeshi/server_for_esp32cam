@@ -164,8 +164,25 @@ paths:
   /api/cameras:
     get:
       summary: List all cameras
-      description: Returns all known cameras with their latest health status.
+      description: Returns known cameras with their latest health status. For backward compatibility, a request without `limit` or `offset` returns all cameras; include either query parameter to request a page.
       tags: [cameras]
+      parameters:
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - in: query
+          name: offset
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 10000000
+            default: 0
       responses:
         "200":
           description: Camera list
@@ -606,6 +623,11 @@ paths:
         - $ref: "#/components/parameters/limit"
         - $ref: "#/components/parameters/offset"
         - in: query
+          name: before
+          schema:
+            type: string
+          description: Opaque cursor returned as next_before; do not combine with offset
+        - in: query
           name: since
           schema:
             type: string
@@ -727,6 +749,11 @@ paths:
           description: Minimum detection confidence score
         - $ref: "#/components/parameters/limit"
         - $ref: "#/components/parameters/offset"
+        - in: query
+          name: before
+          schema:
+            type: string
+          description: Opaque cursor returned as next_before; do not combine with offset
         - in: query
           name: export
           schema:
@@ -881,7 +908,9 @@ paths:
       description: |
         Opens a `multipart/x-mixed-replace` stream that pushes JPEG frames as new
         snapshots arrive. The latest stored snapshot is sent immediately on connect.
-        The stream closes automatically after 30 seconds of inactivity.
+        The stream closes after the camera's expected interval plus a 30-second
+        grace period, or the configured `ESP32CAM_MJPEG_STREAM_IDLE_TIMEOUT_SECONDS`
+        minimum, whichever is longer.
       tags: [streaming]
       parameters:
         - $ref: "#/components/parameters/camera_id"
@@ -1127,6 +1156,16 @@ components:
     CameraList:
       type: object
       properties:
+        total:
+          type: integer
+          description: Total number of known cameras.
+        limit:
+          type: integer
+          nullable: true
+          description: Number of cameras requested for this page.
+        offset:
+          type: integer
+          description: Zero-based offset of this page.
         cameras:
           type: array
           items:
@@ -1320,6 +1359,9 @@ components:
           type: integer
         offset:
           type: integer
+        next_before:
+          type: string
+          nullable: true
         snapshots:
           type: array
           items:
@@ -1353,6 +1395,10 @@ components:
     DetectionRecord:
       type: object
       properties:
+        detection_id:
+          type: integer
+        snapshot_id:
+          type: integer
         camera_id:
           type: string
         filename:
@@ -1412,6 +1458,9 @@ components:
           type: integer
         offset:
           type: integer
+        next_before:
+          type: string
+          nullable: true
         detections:
           type: array
           items:

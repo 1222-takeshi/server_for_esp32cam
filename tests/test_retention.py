@@ -25,7 +25,7 @@ from script.retention import (
     apply_video_upload_retention,
 )
 from script.app import create_app, start_retention_scheduler
-from script.config import gunicorn_preload_requested
+from script.config import gunicorn_preload_requested, gunicorn_worker_count
 from script.storage import StorageRetentionPolicy, StoredImage, StoredVideo
 from tests.conftest import MINIMAL_JPEG
 
@@ -331,6 +331,34 @@ def test_gunicorn_preload_detection_is_explicit():
     ) is True
     assert gunicorn_preload_requested(["/venv/bin/gunicorn", "--workers", "1"]) is False
     assert gunicorn_preload_requested(["pytest", "--preload"]) is False
+
+
+def test_gunicorn_worker_count_parses_common_worker_flags():
+    assert gunicorn_worker_count(["/venv/bin/gunicorn", "--workers", "4"]) == 4
+    assert gunicorn_worker_count(["/venv/bin/gunicorn", "--workers=3"]) == 3
+    assert gunicorn_worker_count(["/venv/bin/gunicorn", "-w", "2"]) == 2
+    assert gunicorn_worker_count(["/venv/bin/gunicorn", "-w2"]) == 2
+    assert gunicorn_worker_count(
+        ["/venv/bin/gunicorn", "--workers", "4"], command_args="--workers 2"
+    ) == 4
+    assert gunicorn_worker_count(["pytest", "--workers", "4"]) is None
+
+
+def test_memory_rate_limit_storage_warns_for_multiple_workers(app_factory, caplog):
+    with patch("script.app.gunicorn_worker_count", return_value=2):
+        app_factory(RATELIMIT_STORAGE_URI="memory://")
+
+    assert any("multiple Gunicorn workers" in record.message for record in caplog.records)
+
+
+@pytest.mark.parametrize("worker_count, storage_uri", [(1, "memory://"), (2, "redis://localhost")])
+def test_memory_rate_limit_warning_is_limited_to_unsafe_configuration(
+    app_factory, caplog, worker_count, storage_uri
+):
+    with patch("script.app.gunicorn_worker_count", return_value=worker_count):
+        app_factory(RATELIMIT_STORAGE_URI=storage_uri)
+
+    assert not any("multiple Gunicorn workers" in record.message for record in caplog.records)
 
 
 def test_scheduler_logs_lifecycle_and_scan_result(app_factory, caplog):
