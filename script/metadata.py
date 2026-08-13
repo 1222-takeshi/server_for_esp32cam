@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 import json
@@ -11,6 +11,9 @@ import threading
 
 from script.detector import Detection
 from script.storage import StoredImage, StoredVideo
+
+
+_MIN_RETURNING_SQLITE_VERSION = (3, 35, 0)
 
 
 @dataclass(frozen=True)
@@ -75,9 +78,22 @@ class CameraSummary:
 ALLOWED_LOG_LEVELS = frozenset({"info", "warning", "error", "critical"})
 
 # SQLite has a default limit on the number of bound parameters per statement
-# (SQLITE_MAX_VARIABLE_NUMBER, historically 999). Chunk filename lookups so a
-# large on-disk listing never exceeds that limit.
-_SYNC_LOOKUP_CHUNK_SIZE = 500
+# (SQLITE_MAX_VARIABLE_NUMBER, historically 999). Every `IN (...)` clause
+# built from a caller-supplied list (filenames, relative_paths, camera_ids,
+# snapshot_ids) must chunk against this limit instead of assuming the list
+# stays small -- a multi-camera fleet or a large retention sweep can easily
+# exceed 999 items, which previously raised sqlite3.OperationalError
+# ("too many SQL variables") instead of degrading gracefully.
+_SQLITE_IN_CLAUSE_CHUNK_SIZE = 500
+# Page size for the keyset-paginated retention candidate scan below --
+# distinct from the IN-clause chunk size above (this bounds one SELECT's
+# result set, not the number of bound parameters).
+_RETENTION_LOOKUP_BATCH_SIZE = 500
+
+
+def _chunked(items: list[object], size: int) -> list[list[object]]:
+    """Split `items` into consecutive chunks of at most `size` elements."""
+    return [items[offset : offset + size] for offset in range(0, len(items), size)]
 
 
 @dataclass(frozen=True)
@@ -154,6 +170,13 @@ class SQLiteMetadataStore:
     _BUSY_TIMEOUT_MS = 5000
 
     def __init__(self, db_path: str | Path, *, default_expected_interval_seconds: int = 300):
+        if sqlite3.sqlite_version_info < _MIN_RETURNING_SQLITE_VERSION:
+            detected_version = ".".join(str(part) for part in sqlite3.sqlite_version_info)
+            raise RuntimeError(
+                "SQLite 3.35.0 or newer is required for metadata writes; "
+                f"detected {detected_version}"
+            )
+
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._default_expected_interval_seconds = default_expected_interval_seconds
@@ -384,7 +407,7 @@ class SQLiteMetadataStore:
         seen_iso = effective_seen_at.isoformat()
         conn = self._get_connection()
         with conn:
-            conn.execute(
+            row = conn.execute(
                 """
                 INSERT INTO cameras (
                     camera_id, display_name, expected_interval_seconds, first_seen_at, last_seen_at, is_active
@@ -399,6 +422,7 @@ class SQLiteMetadataStore:
                         ELSE cameras.last_seen_at
                     END,
                     is_active=1
+                RETURNING *
                 """,
                 (
                     camera_id,
@@ -407,10 +431,6 @@ class SQLiteMetadataStore:
                     seen_iso,
                     seen_iso,
                 ),
-            )
-            row = conn.execute(
-                "SELECT * FROM cameras WHERE camera_id = ?",
-                (camera_id,),
             ).fetchone()
         return self._camera_from_row(row)
 
@@ -423,7 +443,7 @@ class SQLiteMetadataStore:
         inference_status = "pending" if default_pending and stored.device_id else "succeeded"
         conn = self._get_connection()
         with conn:
-            conn.execute(
+            row = conn.execute(
                 """
                 INSERT INTO snapshots (
                     filename, relative_path, size, camera_id, captured_at, stored_at, inference_status, inference_error
@@ -434,6 +454,7 @@ class SQLiteMetadataStore:
                     camera_id=excluded.camera_id,
                     captured_at=excluded.captured_at,
                     stored_at=excluded.stored_at
+                RETURNING *
                 """,
                 (
                     stored.name,
@@ -444,10 +465,6 @@ class SQLiteMetadataStore:
                     stored.created_at.isoformat(),
                     inference_status,
                 ),
-            )
-            row = conn.execute(
-                "SELECT * FROM snapshots WHERE filename = ?",
-                (stored.name,),
             ).fetchone()
         return self._snapshot_from_row(row)
 
@@ -455,7 +472,7 @@ class SQLiteMetadataStore:
         self.ensure_camera(stored.camera_id, seen_at=stored.stored_at)
         conn = self._get_connection()
         with conn:
-            conn.execute(
+            row = conn.execute(
                 """
                 INSERT INTO videos (
                     filename, relative_path, size, camera_id, captured_at, stored_at,
@@ -470,6 +487,7 @@ class SQLiteMetadataStore:
                     duration_ms=excluded.duration_ms,
                     content_type=excluded.content_type,
                     sha256=excluded.sha256
+                RETURNING *
                 """,
                 (
                     stored.name,
@@ -482,10 +500,6 @@ class SQLiteMetadataStore:
                     stored.content_type,
                     stored.sha256,
                 ),
-            )
-            row = conn.execute(
-                "SELECT * FROM videos WHERE filename = ?",
-                (stored.name,),
             ).fetchone()
         return self._video_from_row(row)
 
@@ -544,14 +558,102 @@ class SQLiteMetadataStore:
     def delete_videos_by_relative_paths(self, relative_paths: list[str]) -> int:
         if not relative_paths:
             return 0
-        placeholders = ",".join("?" for _ in relative_paths)
         conn = self._get_connection()
+        deleted = 0
         with conn:
-            cursor = conn.execute(
-                f"DELETE FROM videos WHERE relative_path IN ({placeholders})",
-                tuple(relative_paths),
-            )
-        return int(cursor.rowcount)
+            for chunk in _chunked(relative_paths, _SQLITE_IN_CLAUSE_CHUNK_SIZE):
+                placeholders = ",".join("?" for _ in chunk)
+                cursor = conn.execute(
+                    f"DELETE FROM videos WHERE relative_path IN ({placeholders})",
+                    tuple(chunk),
+                )
+                deleted += cursor.rowcount
+        return deleted
+
+    def _total_retention_bytes(self, table: str) -> int:
+        conn = self._get_connection()
+        total_row = conn.execute(
+            f"SELECT COALESCE(SUM(size), 0) AS total FROM {table}"
+        ).fetchone()
+        return int(total_row["total"])
+
+    def _iter_retention_candidates(
+        self,
+        table: str,
+        *,
+        exclude_relative_paths: set[str] | None = None,
+        older_than: datetime | None = None,
+        batch_size: int = _RETENTION_LOOKUP_BATCH_SIZE,
+    ) -> Iterator[tuple[str, int, datetime]]:
+        if batch_size < 1:
+            raise ValueError("batch_size must be at least 1")
+
+        conn = self._get_connection()
+        exclude = exclude_relative_paths or set()
+        cursor_stored_at: str | None = None
+        cursor_id = 0
+
+        while True:
+            conditions: list[str] = []
+            params: list[object] = []
+            if older_than is not None:
+                conditions.append("stored_at < ?")
+                params.append(older_than.isoformat())
+            if cursor_stored_at is not None:
+                conditions.append("(stored_at > ? OR (stored_at = ? AND id > ?))")
+                params.extend([cursor_stored_at, cursor_stored_at, cursor_id])
+
+            query = f"SELECT id, relative_path, size, stored_at FROM {table}"
+            if conditions:
+                query += " WHERE " + " AND ".join(conditions)
+            query += " ORDER BY stored_at ASC, id ASC LIMIT ?"
+            params.append(batch_size)
+            rows = conn.execute(query, tuple(params)).fetchall()
+            if not rows:
+                return
+
+            for row in rows:
+                if row["relative_path"] in exclude:
+                    continue
+                yield (
+                    row["relative_path"],
+                    row["size"],
+                    _parse_datetime(row["stored_at"]) or datetime.now(tz=timezone.utc),
+                )
+
+            last_row = rows[-1]
+            cursor_stored_at = last_row["stored_at"]
+            cursor_id = last_row["id"]
+            if len(rows) < batch_size:
+                return
+
+    def iter_snapshot_retention_candidates(
+        self,
+        *,
+        exclude_relative_paths: set[str] | None = None,
+        older_than: datetime | None = None,
+        batch_size: int = _RETENTION_LOOKUP_BATCH_SIZE,
+    ) -> Iterator[tuple[str, int, datetime]]:
+        return self._iter_retention_candidates(
+            "snapshots",
+            exclude_relative_paths=exclude_relative_paths,
+            older_than=older_than,
+            batch_size=batch_size,
+        )
+
+    def iter_video_retention_candidates(
+        self,
+        *,
+        exclude_relative_paths: set[str] | None = None,
+        older_than: datetime | None = None,
+        batch_size: int = _RETENTION_LOOKUP_BATCH_SIZE,
+    ) -> Iterator[tuple[str, int, datetime]]:
+        return self._iter_retention_candidates(
+            "videos",
+            exclude_relative_paths=exclude_relative_paths,
+            older_than=older_than,
+            batch_size=batch_size,
+        )
 
     def list_snapshot_retention_candidates(
         self, *, exclude_relative_paths: set[str] | None = None
@@ -568,47 +670,23 @@ class SQLiteMetadataStore:
         *every* indexed snapshot's size, including excluded ones, matching
         what a full `list_images()` walk would have summed.
         """
-        conn = self._get_connection()
-        total_row = conn.execute("SELECT COALESCE(SUM(size), 0) AS total FROM snapshots").fetchone()
-        total_bytes = int(total_row["total"])
-
-        exclude = exclude_relative_paths or set()
-        rows = conn.execute(
-            "SELECT relative_path, size, stored_at FROM snapshots ORDER BY stored_at ASC, id ASC"
-        ).fetchall()
-        candidates = [
-            (
-                row["relative_path"],
-                row["size"],
-                _parse_datetime(row["stored_at"]) or datetime.now(tz=timezone.utc),
+        candidates = list(
+            self.iter_snapshot_retention_candidates(
+                exclude_relative_paths=exclude_relative_paths,
             )
-            for row in rows
-            if row["relative_path"] not in exclude
-        ]
-        return candidates, total_bytes
+        )
+        return candidates, self._total_retention_bytes("snapshots")
 
     def list_video_retention_candidates(
         self, *, exclude_relative_paths: set[str] | None = None
     ) -> tuple[list[tuple[str, int, datetime]], int]:
         """Video counterpart of list_snapshot_retention_candidates()."""
-        conn = self._get_connection()
-        total_row = conn.execute("SELECT COALESCE(SUM(size), 0) AS total FROM videos").fetchone()
-        total_bytes = int(total_row["total"])
-
-        exclude = exclude_relative_paths or set()
-        rows = conn.execute(
-            "SELECT relative_path, size, stored_at FROM videos ORDER BY stored_at ASC, id ASC"
-        ).fetchall()
-        candidates = [
-            (
-                row["relative_path"],
-                row["size"],
-                _parse_datetime(row["stored_at"]) or datetime.now(tz=timezone.utc),
+        candidates = list(
+            self.iter_video_retention_candidates(
+                exclude_relative_paths=exclude_relative_paths,
             )
-            for row in rows
-            if row["relative_path"] not in exclude
-        ]
-        return candidates, total_bytes
+        )
+        return candidates, self._total_retention_bytes("videos")
 
     def sync_storage_index(
         self,
@@ -627,8 +705,7 @@ class SQLiteMetadataStore:
         # the historical size of the snapshots table.
         names = [img.name for img in images]
         existing: set[str] = set()
-        for offset in range(0, len(names), _SYNC_LOOKUP_CHUNK_SIZE):
-            chunk = names[offset : offset + _SYNC_LOOKUP_CHUNK_SIZE]
+        for chunk in _chunked(names, _SQLITE_IN_CLAUSE_CHUNK_SIZE):
             placeholders = ",".join("?" for _ in chunk)
             rows = conn.execute(
                 f"SELECT filename FROM snapshots WHERE filename IN ({placeholders})",
@@ -678,14 +755,17 @@ class SQLiteMetadataStore:
     def delete_snapshots_by_relative_paths(self, relative_paths: list[str]) -> int:
         if not relative_paths:
             return 0
-        placeholders = ",".join("?" for _ in relative_paths)
         conn = self._get_connection()
+        deleted = 0
         with conn:
-            cursor = conn.execute(
-                f"DELETE FROM snapshots WHERE relative_path IN ({placeholders})",
-                tuple(relative_paths),
-            )
-        return int(cursor.rowcount)
+            for chunk in _chunked(relative_paths, _SQLITE_IN_CLAUSE_CHUNK_SIZE):
+                placeholders = ",".join("?" for _ in chunk)
+                cursor = conn.execute(
+                    f"DELETE FROM snapshots WHERE relative_path IN ({placeholders})",
+                    tuple(chunk),
+                )
+                deleted += cursor.rowcount
+        return deleted
 
     def ping(self) -> None:
         conn = self._get_connection()
@@ -723,6 +803,7 @@ class SQLiteMetadataStore:
         *,
         limit: int | None = None,
         offset: int = 0,
+        before: tuple[str, int] | None = None,
         camera_id: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
@@ -739,6 +820,10 @@ class SQLiteMetadataStore:
         if until is not None:
             query += " AND stored_at <= ?"
             params.append(until.astimezone(timezone.utc).isoformat())
+        if before is not None:
+            before_stored_at, before_id = before
+            query += " AND (stored_at < ? OR (stored_at = ? AND id < ?))"
+            params.extend([before_stored_at, before_stored_at, before_id])
         query += " ORDER BY stored_at DESC, id DESC"
         if limit is not None:
             query += " LIMIT ? OFFSET ?"
@@ -806,42 +891,61 @@ class SQLiteMetadataStore:
         rows = conn.execute("SELECT camera_id, last_seen_at FROM cameras").fetchall()
         return [(row["camera_id"], _parse_datetime(row["last_seen_at"])) for row in rows]
 
-    def list_camera_summaries(self) -> list[CameraSummary]:
+    def count_cameras(self) -> int:
         conn = self._get_connection()
-        camera_rows = conn.execute(
-            "SELECT * FROM cameras ORDER BY last_seen_at DESC, camera_id ASC"
-        ).fetchall()
+        row = conn.execute("SELECT COUNT(*) AS count FROM cameras").fetchone()
+        return int(row["count"])
+
+    def list_camera_summaries(
+        self, *, limit: int | None = None, offset: int = 0
+    ) -> list[CameraSummary]:
+        conn = self._get_connection()
+        query = "SELECT * FROM cameras ORDER BY last_seen_at DESC, camera_id ASC"
+        params: list[int] = []
+        if limit is not None:
+            query += " LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+        camera_rows = conn.execute(query, tuple(params)).fetchall()
 
         if not camera_rows:
             return []
 
         camera_ids = [row["camera_id"] for row in camera_rows]
-        placeholders = ",".join("?" for _ in camera_ids)
 
-        conn = self._get_connection()
-        snapshot_rows = conn.execute(
-            f"""
-            SELECT *
-            FROM (
-                SELECT *, ROW_NUMBER() OVER (PARTITION BY camera_id ORDER BY stored_at DESC) AS rn
-                FROM snapshots
-                WHERE camera_id IN ({placeholders})
-            ) ranked
-            WHERE rn = 1
-            """,
-            camera_ids,
-        ).fetchall()
-
-        detection_rows = conn.execute(
-            f"""
-            SELECT snapshots.camera_id, MAX(snapshots.stored_at) AS latest_detection_at
-            FROM detections
-            JOIN snapshots ON snapshots.id = detections.snapshot_id
-            WHERE snapshots.camera_id IN ({placeholders})
-            GROUP BY snapshots.camera_id
-            """,
-            camera_ids,
-        ).fetchall()
+        # camera_ids can grow past SQLite's bound-parameter limit for a
+        # larger camera fleet, so both lookups below are chunked
+        # (_SQLITE_IN_CLAUSE_CHUNK_SIZE) and their results merged, instead of
+        # binding every camera_id into a single IN (...) clause.
+        snapshot_rows = []
+        detection_rows = []
+        for chunk in _chunked(camera_ids, _SQLITE_IN_CLAUSE_CHUNK_SIZE):
+            placeholders = ",".join("?" for _ in chunk)
+            snapshot_rows.extend(
+                conn.execute(
+                    f"""
+                    SELECT *
+                    FROM (
+                        SELECT *, ROW_NUMBER() OVER (PARTITION BY camera_id ORDER BY stored_at DESC) AS rn
+                        FROM snapshots
+                        WHERE camera_id IN ({placeholders})
+                    ) ranked
+                    WHERE rn = 1
+                    """,
+                    chunk,
+                ).fetchall()
+            )
+            detection_rows.extend(
+                conn.execute(
+                    f"""
+                    SELECT snapshots.camera_id, MAX(snapshots.stored_at) AS latest_detection_at
+                    FROM detections
+                    JOIN snapshots ON snapshots.id = detections.snapshot_id
+                    WHERE snapshots.camera_id IN ({placeholders})
+                    GROUP BY snapshots.camera_id
+                    """,
+                    chunk,
+                ).fetchall()
+            )
 
         detections_by_id = self._detections_by_snapshot_id([row["id"] for row in snapshot_rows])
         latest_snapshot_by_camera: dict[str, SnapshotRecord] = {
@@ -882,6 +986,7 @@ class SQLiteMetadataStore:
         *,
         limit: int = 20,
         offset: int = 0,
+        before: tuple[str, int] | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
     ) -> list[SnapshotRecord]:
@@ -893,6 +998,10 @@ class SQLiteMetadataStore:
         if until is not None:
             query += " AND stored_at <= ?"
             params.append(until.astimezone(timezone.utc).isoformat())
+        if before is not None:
+            before_stored_at, before_id = before
+            query += " AND (stored_at < ? OR (stored_at = ? AND id < ?))"
+            params.extend([before_stored_at, before_stored_at, before_id])
         query += " ORDER BY stored_at DESC, id DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
         conn = self._get_connection()
@@ -906,6 +1015,7 @@ class SQLiteMetadataStore:
         camera_id: str | None = None,
         since: datetime | None = None,
         confidence_min: float | None = None,
+        before: tuple[str, int, int] | None = None,
     ) -> tuple[str, list[object]]:
         where = "WHERE 1 = 1"
         params: list[object] = []
@@ -918,6 +1028,29 @@ class SQLiteMetadataStore:
         if confidence_min is not None:
             where += " AND detections.score >= ?"
             params.append(confidence_min)
+        if before is not None:
+            before_stored_at, before_snapshot_id, before_detection_id = before
+            where += """
+                AND (
+                    snapshots.stored_at < ?
+                    OR (
+                        snapshots.stored_at = ?
+                        AND (
+                            snapshots.id < ?
+                            OR (snapshots.id = ? AND detections.id < ?)
+                        )
+                    )
+                )
+            """
+            params.extend(
+                [
+                    before_stored_at,
+                    before_stored_at,
+                    before_snapshot_id,
+                    before_snapshot_id,
+                    before_detection_id,
+                ]
+            )
         return where, params
 
     def count_detections(
@@ -947,13 +1080,19 @@ class SQLiteMetadataStore:
         since: datetime | None = None,
         limit: int = 50,
         offset: int = 0,
+        before: tuple[str, int, int] | None = None,
         confidence_min: float | None = None,
     ) -> list[dict[str, object]]:
         where, params = self._detection_where_clause(
-            camera_id=camera_id, since=since, confidence_min=confidence_min
+            camera_id=camera_id,
+            since=since,
+            confidence_min=confidence_min,
+            before=before,
         )
         query = f"""
             SELECT
+                detections.id AS detection_id,
+                snapshots.id AS snapshot_id,
                 detections.label,
                 detections.score,
                 detections.x1,
@@ -968,7 +1107,8 @@ class SQLiteMetadataStore:
             FROM detections
             JOIN snapshots ON snapshots.id = detections.snapshot_id
             {where}
-            ORDER BY snapshots.stored_at DESC, snapshots.id DESC LIMIT ? OFFSET ?
+            ORDER BY snapshots.stored_at DESC, snapshots.id DESC, detections.id DESC
+            LIMIT ? OFFSET ?
         """
         params.extend([limit, offset])
 
@@ -977,6 +1117,8 @@ class SQLiteMetadataStore:
 
         return [
             {
+                "detection_id": row["detection_id"],
+                "snapshot_id": row["snapshot_id"],
                 "label": row["label"],
                 "score": row["score"],
                 "bbox": [row["x1"], row["y1"], row["x2"], row["y2"]],
@@ -1115,15 +1257,17 @@ class SQLiteMetadataStore:
         if not snapshot_ids:
             return {}
 
-        placeholders = ",".join("?" for _ in snapshot_ids)
-        query = f"""
-            SELECT snapshot_id, label, score, x1, y1, x2, y2, track_id
-            FROM detections
-            WHERE snapshot_id IN ({placeholders})
-            ORDER BY id ASC
-        """
         conn = self._get_connection()
-        rows = conn.execute(query, tuple(snapshot_ids)).fetchall()
+        rows = []
+        for chunk in _chunked(snapshot_ids, _SQLITE_IN_CLAUSE_CHUNK_SIZE):
+            placeholders = ",".join("?" for _ in chunk)
+            query = f"""
+                SELECT snapshot_id, label, score, x1, y1, x2, y2, track_id
+                FROM detections
+                WHERE snapshot_id IN ({placeholders})
+                ORDER BY id ASC
+            """
+            rows.extend(conn.execute(query, tuple(chunk)).fetchall())
 
         grouped: dict[int, list[DetectionRecord]] = {
             snapshot_id: [] for snapshot_id in snapshot_ids
@@ -1295,13 +1439,13 @@ class SQLiteMetadataStore:
         effective_logged_at = (logged_at or datetime.now(tz=timezone.utc)).astimezone(timezone.utc)
         conn = self._get_connection()
         with conn:
-            cursor = conn.execute(
-                "INSERT INTO device_logs (camera_id, level, message, logged_at) VALUES (?, ?, ?, ?)",
-                (camera_id, level, message, effective_logged_at.isoformat()),
-            )
             row = conn.execute(
-                "SELECT * FROM device_logs WHERE id = ?",
-                (cursor.lastrowid,),
+                """
+                INSERT INTO device_logs (camera_id, level, message, logged_at)
+                VALUES (?, ?, ?, ?)
+                RETURNING *
+                """,
+                (camera_id, level, message, effective_logged_at.isoformat()),
             ).fetchone()
         return DeviceLogRecord(
             id=row["id"],

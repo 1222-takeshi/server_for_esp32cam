@@ -58,6 +58,30 @@ def test_mjpeg_stream_yields_new_frame_on_event(client):
     assert MINIMAL_JPEG in response.data
 
 
+def test_mjpeg_stream_waits_longer_than_camera_interval(app):
+    queue = _mock_queue()
+    with app.test_client() as c:
+        with patch("script.routes.Queue", return_value=queue):
+            response = c.get("/stream/cameras/cam1")
+
+    assert response.status_code == 200
+    queue.get.assert_called_once_with(timeout=330.0)
+
+
+def test_mjpeg_stream_idle_timeout_config_is_a_minimum(app):
+    app.config["MJPEG_STREAM_IDLE_TIMEOUT_SECONDS"] = 600
+    queue = _mock_queue()
+    try:
+        with app.test_client() as c:
+            with patch("script.routes.Queue", return_value=queue):
+                response = c.get("/stream/cameras/cam1")
+
+        assert response.status_code == 200
+        queue.get.assert_called_once_with(timeout=600.0)
+    finally:
+        del app.config["MJPEG_STREAM_IDLE_TIMEOUT_SECONDS"]
+
+
 def test_mjpeg_stream_too_many_returns_503(app):
     app.config["MAX_MJPEG_STREAMS"] = 0
     try:

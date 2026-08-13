@@ -7,7 +7,13 @@ from typing import Any
 
 from script.metadata import SnapshotRecord
 
-SnapshotEvent = dict[str, Any]
+
+class SnapshotEvent(dict[str, Any]):
+    """JSON-safe event payload with an optional in-process frame side-channel."""
+
+    raw_image: bytes | None = None
+
+
 SnapshotEventSubscriber = Callable[[SnapshotEvent], None]
 
 
@@ -18,22 +24,26 @@ class _Subscription:
 
 
 def snapshot_created_event(snapshot: SnapshotRecord) -> SnapshotEvent:
-    return {
-        "type": "snapshot.created",
-        "camera_id": snapshot.camera_id,
-        "snapshot": {
-            "id": snapshot.id,
-            "filename": snapshot.filename,
-            "relative_path": snapshot.relative_path,
-            "url": f"/files/{snapshot.filename}",
-            "size": snapshot.size,
-            "size_bytes": snapshot.size,
-            "captured_at": snapshot.captured_at.isoformat() if snapshot.captured_at else None,
-            "stored_at": snapshot.stored_at.isoformat(),
-            "inference_status": snapshot.inference_status,
-            "inference_error": snapshot.inference_error,
-        },
-    }
+    return SnapshotEvent(
+        {
+            "type": "snapshot.created",
+            "camera_id": snapshot.camera_id,
+            "snapshot": {
+                "id": snapshot.id,
+                "filename": snapshot.filename,
+                "relative_path": snapshot.relative_path,
+                "url": f"/files/{snapshot.filename}",
+                "size": snapshot.size,
+                "size_bytes": snapshot.size,
+                "captured_at": snapshot.captured_at.isoformat()
+                if snapshot.captured_at
+                else None,
+                "stored_at": snapshot.stored_at.isoformat(),
+                "inference_status": snapshot.inference_status,
+                "inference_error": snapshot.inference_error,
+            },
+        }
+    )
 
 
 class SnapshotEventPublisher:
@@ -57,8 +67,12 @@ class SnapshotEventPublisher:
 
         return unsubscribe
 
-    def publish_snapshot_created(self, snapshot: SnapshotRecord) -> None:
-        self.publish(snapshot_created_event(snapshot))
+    def publish_snapshot_created(
+        self, snapshot: SnapshotRecord, *, image_bytes: bytes | None = None
+    ) -> None:
+        event = snapshot_created_event(snapshot)
+        event.raw_image = image_bytes
+        self.publish(event)
 
     def publish(self, event: SnapshotEvent) -> None:
         camera_id = event.get("camera_id")

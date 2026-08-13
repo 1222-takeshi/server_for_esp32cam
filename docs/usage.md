@@ -44,10 +44,12 @@ This project provides a web server with the following functionalities:
 
 *   **`GET /api/cameras/<camera_id>/snapshots`**
     *   **Description:** Returns recent snapshots for one camera as JSON.
+    *   **Pagination:** Use the `next_before` value from a response as `before` on the next request to avoid deep `offset` scans.
     *   **Response:** `{"camera_id": "<camera_id>", "snapshots": [...]}`
 
 *   **`GET /api/detections`**
     *   **Description:** Returns recent detections as JSON. Supports `camera_id` and `since` query parameters.
+    *   **Pagination:** Use the opaque `next_before` value from a response as `before` on the next request; do not combine it with `offset`.
     *   **Response:** `{"detections": [...]}`. Each detection includes nullable `track_id`; when tracking is enabled, the same camera-local ID identifies a matched object across snapshots.
 
 *   **`GET /files`**

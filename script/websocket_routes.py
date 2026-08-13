@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 from datetime import datetime, timezone
 import json
 import time
@@ -42,7 +43,9 @@ def handle_binary_snapshot_upload(
     )
     snapshot = current_app.extensions["metadata_store"].record_snapshot(stored)
     current_app.extensions["inference_service"].enqueue_snapshot(snapshot.id)
-    current_app.extensions["snapshot_event_publisher"].publish_snapshot_created(snapshot)
+    current_app.extensions["snapshot_event_publisher"].publish_snapshot_created(
+        snapshot, image_bytes=data
+    )
     current_app.extensions["upload_metrics"].record_frame(camera_id, len(data))
     apply_upload_retention(stored)
     return {
@@ -110,9 +113,17 @@ def _handle_binary_upload_connection(websocket: WebSocketLike, *, camera_id: str
 
 
 def register_websocket_routes(
-    app: Flask, publisher: SnapshotEventPublisher, *, max_connections: int = 50
+    app: Flask,
+    publisher: SnapshotEventPublisher,
+    *,
+    max_connections: int = 50,
+    max_pending_events: int = 256,
 ) -> WebSocketHub:
-    hub = WebSocketHub(publisher, max_connections=max_connections)
+    hub = WebSocketHub(
+        publisher,
+        max_connections=max_connections,
+        max_pending_events=max_pending_events,
+    )
     sock = Sock(app)
 
     @sock.route("/ws/snapshots")
@@ -152,7 +163,7 @@ def register_websocket_routes(
             websocket.send(json.dumps(auth_error))
             return
         try:
-            disconnect = hub.connect(websocket, camera_id=camera_id)
+            disconnect = hub.connect(websocket, camera_id=camera_id, receive_events=False)
         except ConnectionLimitExceeded:
             websocket.send(json.dumps({"type": "error", "message": "Too many connections"}))
             return
@@ -163,4 +174,5 @@ def register_websocket_routes(
 
     app.extensions["sock"] = sock
     app.extensions["websocket_hub"] = hub
+    atexit.register(hub.close, wait=False)
     return hub

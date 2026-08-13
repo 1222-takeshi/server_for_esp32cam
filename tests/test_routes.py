@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from io import BytesIO
 from unittest.mock import patch
 
@@ -347,6 +347,92 @@ def test_index_page_shows_camera_dashboard_metadata(client):
     assert "esp32cam-front-door" in page
     assert "esp32cam-garden" in page
     assert "Camera Dashboard" in page
+
+
+def test_camera_pages_support_bounded_pagination(client):
+    client.post(
+        "/upload",
+        data=MINIMAL_JPEG,
+        headers={**UPLOAD_HEADERS, "X-Captured-At": "2026-03-11T12:34:56Z"},
+    )
+    client.post(
+        "/upload",
+        data=MINIMAL_JPEG,
+        headers={
+            "Content-Type": "image/jpeg",
+            "X-Device-Id": "esp32cam-garden",
+            "X-Captured-At": "2026-03-11T12:35:56Z",
+        },
+    )
+
+    dashboard = client.get("/?limit=1&offset=1")
+    cameras = client.get("/cameras?limit=1&offset=1")
+    boundary = client.get("/cameras?limit=1&offset=99")
+
+    assert dashboard.status_code == 200
+    assert cameras.status_code == 200
+    assert boundary.status_code == 200
+    assert "esp32cam-front-door" in dashboard.get_data(as_text=True)
+    assert "esp32cam-garden" not in dashboard.get_data(as_text=True)
+    assert "Showing 2–2 of 2 cameras" in cameras.get_data(as_text=True)
+    assert "Showing 2–2 of 2 cameras" in boundary.get_data(as_text=True)
+
+
+def test_api_cameras_returns_pagination_envelope(client):
+    client.post(
+        "/upload",
+        data=MINIMAL_JPEG,
+        headers=UPLOAD_HEADERS,
+    )
+    client.post(
+        "/upload",
+        data=MINIMAL_JPEG,
+        headers={
+            "Content-Type": "image/jpeg",
+            "X-Device-Id": "esp32cam-garden",
+            "X-Captured-At": "2026-03-11T12:35:56Z",
+        },
+    )
+
+    response = client.get("/api/cameras?limit=1&offset=1")
+    body = response.get_json()
+
+    assert response.status_code == 200
+    assert body["total"] == 2
+    assert body["limit"] == 1
+    assert body["offset"] == 1
+    assert len(body["cameras"]) == 1
+
+
+def test_api_cameras_without_pagination_preserves_all_cameras(client):
+    client.post(
+        "/upload",
+        data=MINIMAL_JPEG,
+        headers=UPLOAD_HEADERS,
+    )
+    client.post(
+        "/upload",
+        data=MINIMAL_JPEG,
+        headers={
+            "Content-Type": "image/jpeg",
+            "X-Device-Id": "esp32cam-garden",
+            "X-Captured-At": "2026-03-11T12:35:56Z",
+        },
+    )
+
+    response = client.get("/api/cameras")
+    body = response.get_json()
+
+    assert response.status_code == 200
+    assert body["limit"] is None
+    assert body["offset"] == 0
+    assert len(body["cameras"]) == 2
+
+
+def test_api_cameras_rejects_invalid_pagination(client):
+    response = client.get("/api/cameras?limit=0")
+
+    assert response.status_code == 400
 
 
 def test_index_page_marks_snapshot_stats_for_live_updates(client):
@@ -734,6 +820,7 @@ def test_upload_publishes_snapshot_created_event(app, client):
     assert event["snapshot"]["filename"] == body["filename"]
     assert event["snapshot"]["url"] == f"/files/{body['filename']}"
     assert event["snapshot"]["size_bytes"] == body["size"]
+    assert event.raw_image == MINIMAL_JPEG
 
 
 def test_status_update_records_heartbeat(client):
@@ -1298,6 +1385,93 @@ def test_api_camera_snapshots_returns_pagination_envelope(client):
     assert len(body["snapshots"]) >= 1
 
 
+def test_api_camera_snapshots_supports_before_cursor(client):
+    for index in range(2):
+        response = client.post(
+            "/upload",
+            data=MINIMAL_JPEG,
+            content_type="image/jpeg",
+            headers={
+                **UPLOAD_HEADERS,
+                "X-Captured-At": f"2026-01-01T00:00:0{index}Z",
+            },
+        )
+        assert response.status_code == 200
+
+    first_page = client.get("/api/cameras/esp32cam-front-door/snapshots?limit=1").get_json()
+    second_page = client.get(
+        f"/api/cameras/esp32cam-front-door/snapshots?limit=1&before={first_page['next_before']}"
+    ).get_json()
+
+    assert isinstance(first_page["next_before"], str)
+    assert second_page["snapshots"][0]["id"] < first_page["snapshots"][0]["id"]
+    assert second_page["offset"] == 0
+
+
+def test_api_camera_snapshots_rejects_invalid_before_cursor(client):
+    client.post(
+        "/upload",
+        data=MINIMAL_JPEG,
+        content_type="image/jpeg",
+        headers=UPLOAD_HEADERS,
+    )
+    response = client.get("/api/cameras/esp32cam-front-door/snapshots?before=not-an-id")
+
+    assert response.status_code == 400
+
+
+def test_api_camera_snapshots_cursor_handles_backfilled_stored_at(app, client):
+    from script.storage import StoredImage
+
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    store = app.extensions["metadata_store"]
+    for name, seconds in (("newest.jpg", 10), ("oldest.jpg", 0), ("middle.jpg", 5)):
+        stored_at = base.replace(second=seconds)
+        store.record_snapshot(
+            StoredImage(
+                name=name,
+                relative_path=f"cam-backfill/images/{name}",
+                size=123,
+                created_at=stored_at,
+                device_id="cam-backfill",
+                captured_at=stored_at,
+            )
+        )
+
+    first_page = client.get("/api/cameras/cam-backfill/snapshots?limit=1").get_json()
+    second_page = client.get(
+        f"/api/cameras/cam-backfill/snapshots?limit=10&before={first_page['next_before']}"
+    ).get_json()
+
+    assert [snapshot["filename"] for snapshot in second_page["snapshots"]] == [
+        "middle.jpg",
+        "oldest.jpg",
+    ]
+
+
+def test_files_supports_before_cursor(app, client):
+    for index in range(2):
+        response = client.post(
+            "/upload",
+            data=MINIMAL_JPEG,
+            content_type="image/jpeg",
+            headers={
+                **UPLOAD_HEADERS,
+                "X-Captured-At": f"2026-01-01T00:00:0{index}Z",
+            },
+        )
+        assert response.status_code == 200
+
+    snapshots = app.extensions["metadata_store"].list_recent_snapshots()
+    cursor = client.get(
+        "/api/cameras/esp32cam-front-door/snapshots?limit=1"
+    ).get_json()["next_before"]
+    response = client.get(f"/files?before={cursor}")
+
+    assert response.status_code == 200
+    assert snapshots[1].filename.encode() in response.data
+
+
 def test_api_camera_snapshots_invalid_limit_returns_400(client):
     client.post(
         "/upload",
@@ -1317,6 +1491,39 @@ def test_api_detections_returns_pagination_envelope(client):
     assert "limit" in body
     assert "offset" in body
     assert body["limit"] == 20
+
+
+def test_api_detections_supports_before_cursor(app, client):
+    from script.detector import Detection
+
+    app.extensions["inference_service"].detector = FakePersonDetector(
+        [Detection(label="person", score=0.9, x1=0, y1=0, x2=1, y2=1)]
+    )
+    for index in range(2):
+        response = client.post(
+            "/upload",
+            data=MINIMAL_JPEG,
+            content_type="image/jpeg",
+            headers={
+                **UPLOAD_HEADERS,
+                "X-Captured-At": f"2026-01-01T00:00:0{index}Z",
+            },
+        )
+        assert response.status_code == 200
+
+    first_page = client.get("/api/detections?limit=1").get_json()
+    second_page = client.get(
+        f"/api/detections?limit=1&before={first_page['next_before']}"
+    ).get_json()
+
+    assert first_page["next_before"]
+    assert second_page["detections"][0]["detection_id"] != first_page["detections"][0]["detection_id"]
+
+
+def test_api_detections_rejects_invalid_before_cursor(client):
+    response = client.get("/api/detections?before=not-a-cursor")
+
+    assert response.status_code == 400
 
 
 def test_api_detections_invalid_confidence_min_returns_400(client):

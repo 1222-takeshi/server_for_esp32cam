@@ -67,6 +67,12 @@ docker compose version
 tailscale status
 ```
 
+このサーバーはメタデータの書き込みに SQLite の `INSERT ... RETURNING` を使用するため、
+SQLite 3.35.0 以上が必要です。Docker で運用する場合はイメージ内の Python にリンクされた
+SQLite が対象になります。Docker を使わず Raspberry Pi 上の Python 仮想環境で運用する場合は、
+`python3 -c 'import sqlite3; print(sqlite3.sqlite_version)'` で確認してください。
+要件を満たさない環境では、データベースを開く前にサーバーが明示的なエラーで終了します。
+
 ### 2. Deploy the server
 
 ```bash
@@ -290,7 +296,9 @@ All variables are optional unless marked **required for production**.
 | `ESP32CAM_TRACKING_MAX_TRACKS_PER_CAMERA` | `50` | Maximum active tracks retained for each camera; excess detections remain untracked. |
 | `ESP32CAM_TRACKING_MAX_CAMERAS` | `500` | Maximum camera states retained in one process; least-recently-used camera state is evicted beyond this cap. |
 | `ESP32CAM_MAX_WS_CONNECTIONS` | `50` | Maximum concurrent WebSocket connections. |
+| `ESP32CAM_MAX_WS_PENDING_EVENTS` | `256` | Maximum queued dashboard snapshot events. Events are dropped when the queue is full so device upload responses are not blocked. |
 | `ESP32CAM_MAX_MJPEG_STREAMS` | `10` | Maximum concurrent MJPEG stream viewers per camera. |
+| `ESP32CAM_MJPEG_STREAM_IDLE_TIMEOUT_SECONDS` | `0` | Minimum idle timeout in seconds. `0` derives it from the camera's expected interval plus 30 seconds, with a 30-second floor. |
 | `ESP32CAM_MAX_TRACKED_CAMERAS` | `500` | Maximum distinct `camera_id`s tracked by the in-process upload metrics registry; least-recently-active entries are evicted beyond this cap. Set `0` to disable the cap. |
 | `ESP32CAM_WEBHOOK_URL` | _(empty — disabled)_ | Webhook URL to POST when a person is detected. |
 | `ESP32CAM_WEBHOOK_MIN_SCORE` | `0.5` | Minimum score to trigger the webhook. |
@@ -299,6 +307,11 @@ All variables are optional unless marked **required for production**.
 | `ESP32CAM_RATELIMIT_STORAGE_URI` | `memory://` | Flask-Limiter storage. Use `redis://host:6379` for multi-worker deployments. |
 | `ESP32CAM_UPLOAD_WS_MIN_FRAME_INTERVAL_SECONDS` | `1.0` | Minimum seconds between WebSocket frames per connection. |
 | `ESP32CAM_LOG_FORMAT` | `text` | Log output format: `text` (human-readable) or `json` (structured, via python-json-logger). |
+
+When Gunicorn is configured with more than one worker while this setting remains
+`memory://`, the application emits a startup warning because rate-limit counters
+are independent per process. Use a shared backend such as Redis before scaling
+workers or application instances.
 
 Webhook delivery with retries is at-least-once: if the receiver processes an event
 but the response is lost or becomes a 5xx, the same event may be delivered again.

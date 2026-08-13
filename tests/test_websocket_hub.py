@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from datetime import datetime, timezone
 
 import pytest
@@ -18,6 +19,18 @@ class FakeWebSocket:
     def send(self, message: str) -> None:
         if self._fail_after is not None and len(self.messages) >= self._fail_after:
             raise RuntimeError("websocket disconnected")
+        self.messages.append(message)
+
+
+class BlockingWebSocket:
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.messages: list[str] = []
+
+    def send(self, message: str) -> None:
+        self.started.set()
+        self.release.wait(timeout=2)
         self.messages.append(message)
 
 
@@ -41,13 +54,15 @@ def test_websocket_hub_sends_snapshot_events_as_json_to_connected_socket():
     ws = FakeWebSocket()
 
     hub.connect(ws)
-    publisher.publish_snapshot_created(_snapshot())
+    publisher.publish_snapshot_created(_snapshot(), image_bytes=b"private-frame")
+    hub.flush()
 
     assert len(ws.messages) == 1
     event = json.loads(ws.messages[0])
     assert event["type"] == "snapshot.created"
     assert event["camera_id"] == "esp32cam-front-door"
     assert event["snapshot"]["url"] == "/files/image_20260508T010203000000_abcd.jpg"
+    assert "private-frame" not in ws.messages[0]
 
 
 def test_websocket_hub_filters_events_by_camera_id():
@@ -59,9 +74,23 @@ def test_websocket_hub_filters_events_by_camera_id():
     hub.connect(front_ws, camera_id="esp32cam-front-door")
     hub.connect(garden_ws, camera_id="esp32cam-garden")
     publisher.publish_snapshot_created(_snapshot("esp32cam-front-door"))
+    hub.flush()
 
     assert len(front_ws.messages) == 1
     assert garden_ws.messages == []
+
+
+def test_websocket_hub_can_count_connection_without_broadcasting_to_it():
+    publisher = SnapshotEventPublisher()
+    hub = WebSocketHub(publisher)
+    upload_ws = FakeWebSocket()
+
+    hub.connect(upload_ws, camera_id="esp32cam-front-door", receive_events=False)
+    publisher.publish_snapshot_created(_snapshot())
+    hub.flush()
+
+    assert hub.active_connections == 1
+    assert upload_ws.messages == []
 
 
 def test_websocket_hub_disconnect_stops_future_delivery():
@@ -86,9 +115,36 @@ def test_websocket_hub_removes_socket_when_send_fails():
     hub.connect(healthy_ws)
     publisher.publish_snapshot_created(_snapshot())
     publisher.publish_snapshot_created(_snapshot())
+    hub.flush()
 
     assert broken_ws.messages == []
     assert len(healthy_ws.messages) == 2
+
+
+def test_websocket_hub_does_not_block_publisher_on_slow_websocket():
+    publisher = SnapshotEventPublisher()
+    hub = WebSocketHub(publisher)
+    ws = BlockingWebSocket()
+    hub.connect(ws)
+    returned = threading.Event()
+
+    def publish() -> None:
+        publisher.publish_snapshot_created(_snapshot())
+        returned.set()
+
+    publish_thread = threading.Thread(target=publish)
+    publish_thread.start()
+
+    assert ws.started.wait(timeout=1)
+    assert returned.wait(timeout=0.2)
+
+    ws.release.set()
+    publish_thread.join(timeout=1)
+    hub.flush()
+    hub.close()
+
+    assert not publish_thread.is_alive()
+    assert len(ws.messages) == 1
 
 
 def test_websocket_hub_rejects_connection_when_limit_reached():

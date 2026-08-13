@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 from script.detector import Detection
 from script.metadata import ALLOWED_LOG_LEVELS, DesiredConfigVersionConflict, SQLiteMetadataStore
@@ -45,6 +46,44 @@ def test_metadata_store_registers_camera_and_snapshot(tmp_path):
     assert camera is not None
     assert snapshot.camera_id == "cam-a"
     assert snapshot.inference_status == "pending"
+
+
+def test_metadata_store_requires_sqlite_returning_support(tmp_path):
+    with patch("script.metadata.sqlite3.sqlite_version_info", (3, 34, 0)):
+        with pytest.raises(RuntimeError, match="SQLite 3.35.0 or newer"):
+            SQLiteMetadataStore(tmp_path / "state.sqlite3")
+
+
+def test_hot_write_paths_return_rows_without_follow_up_selects(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    traces: list[str] = []
+    store._get_connection().set_trace_callback(traces.append)
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+
+    store.record_snapshot(
+        _stored_image(
+            name="image_a.jpg",
+            relative_path="cam-a/images/image_a.jpg",
+            camera_id="cam-a",
+            captured_at=stored_at,
+            stored_at=stored_at,
+        )
+    )
+    store.record_video(
+        _stored_video(
+            name="video_a.mp4",
+            relative_path="cam-a/videos/video_a.mp4",
+            camera_id="cam-a",
+            captured_at=stored_at,
+            stored_at=stored_at,
+        )
+    )
+    store.record_device_log("cam-a", level="info", message="boot", logged_at=stored_at)
+
+    assert not any("SELECT * FROM cameras WHERE camera_id" in sql for sql in traces)
+    assert not any("SELECT * FROM snapshots WHERE filename" in sql for sql in traces)
+    assert not any("SELECT * FROM videos WHERE filename" in sql for sql in traces)
+    assert not any("SELECT * FROM device_logs WHERE id" in sql for sql in traces)
 
 
 def test_metadata_store_lists_camera_summaries_with_status(tmp_path):
@@ -361,6 +400,71 @@ def test_list_camera_snapshots_paginates_stably_with_duplicate_timestamps(tmp_pa
     assert [s.id for s in page2] == [first.id]
 
 
+def test_list_snapshots_supports_id_cursor(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    snapshots = [
+        store.record_snapshot(
+            _stored_image(
+                name=f"{index}.jpg",
+                relative_path=f"cam-a/images/{index}.jpg",
+                camera_id="cam-a",
+                captured_at=stored_at + timedelta(seconds=index),
+                stored_at=stored_at + timedelta(seconds=index),
+            )
+        )
+        for index in range(3)
+    ]
+
+    first_page = store.list_camera_snapshots("cam-a", limit=1)
+    cursor = (first_page[0].stored_at.isoformat(), first_page[0].id)
+    second_page = store.list_camera_snapshots("cam-a", limit=1, before=cursor)
+    recent_page = store.list_recent_snapshots(limit=1, before=cursor)
+
+    assert [snapshot.id for snapshot in first_page] == [snapshots[2].id]
+    assert [snapshot.id for snapshot in second_page] == [snapshots[1].id]
+    assert [snapshot.id for snapshot in recent_page] == [snapshots[1].id]
+
+
+def test_list_snapshots_cursor_handles_backfilled_stored_at(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    base = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    newest = store.record_snapshot(
+        _stored_image(
+            name="newest.jpg",
+            relative_path="cam-a/images/newest.jpg",
+            camera_id="cam-a",
+            captured_at=base + timedelta(seconds=10),
+            stored_at=base + timedelta(seconds=10),
+        )
+    )
+    oldest = store.record_snapshot(
+        _stored_image(
+            name="oldest.jpg",
+            relative_path="cam-a/images/oldest.jpg",
+            camera_id="cam-a",
+            captured_at=base,
+            stored_at=base,
+        )
+    )
+    middle = store.record_snapshot(
+        _stored_image(
+            name="middle.jpg",
+            relative_path="cam-a/images/middle.jpg",
+            camera_id="cam-a",
+            captured_at=base + timedelta(seconds=5),
+            stored_at=base + timedelta(seconds=5),
+        )
+    )
+
+    first_page = store.list_recent_snapshots(limit=1)
+    cursor = (first_page[0].stored_at.isoformat(), first_page[0].id)
+    remaining = store.list_recent_snapshots(limit=10, before=cursor)
+
+    assert first_page[0].id == newest.id
+    assert [snapshot.id for snapshot in remaining] == [middle.id, oldest.id]
+
+
 def test_list_detections_paginates_stably_with_duplicate_timestamps(tmp_path):
     store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
     stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
@@ -394,6 +498,34 @@ def test_list_detections_paginates_stably_with_duplicate_timestamps(tmp_path):
 
     assert [d["filename"] for d in page1] == [second.filename]
     assert [d["filename"] for d in page2] == [first.filename]
+
+
+def test_list_detections_supports_composite_cursor(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    snapshots = []
+    for index in range(3):
+        snapshot = store.record_snapshot(
+            _stored_image(
+                name=f"{index}.jpg",
+                relative_path=f"cam-a/images/{index}.jpg",
+                camera_id="cam-a",
+                captured_at=stored_at + timedelta(seconds=index),
+                stored_at=stored_at + timedelta(seconds=index),
+            )
+        )
+        store.mark_snapshot_result(
+            snapshot.id,
+            detections=[Detection(label="person", score=0.9, x1=0, y1=0, x2=1, y2=1)],
+        )
+        snapshots.append(snapshot)
+
+    first_page = store.list_detections(limit=1)
+    cursor = (first_page[0]["stored_at"], first_page[0]["snapshot_id"], first_page[0]["detection_id"])
+    second_page = store.list_detections(limit=1, before=cursor)
+
+    assert [row["filename"] for row in first_page] == [snapshots[2].filename]
+    assert [row["filename"] for row in second_page] == [snapshots[1].filename]
 
 
 def test_list_pending_snapshot_ids_returns_all_by_default(tmp_path):
@@ -522,6 +654,18 @@ def test_list_camera_summaries_returns_empty_for_empty_store(tmp_path):
     summaries = store.list_camera_summaries()
 
     assert summaries == []
+
+
+def test_list_camera_summaries_supports_bounded_pages(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    store.record_heartbeat("cam-a", seen_at=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc))
+    store.record_heartbeat("cam-b", seen_at=datetime(2026, 1, 1, 13, 0, tzinfo=timezone.utc))
+    store.record_heartbeat("cam-c", seen_at=datetime(2026, 1, 1, 14, 0, tzinfo=timezone.utc))
+
+    summaries = store.list_camera_summaries(limit=1, offset=1)
+
+    assert [summary.camera.camera_id for summary in summaries] == ["cam-b"]
+    assert store.count_cameras() == 3
 
 
 def test_list_camera_last_seen_returns_empty_for_empty_store(tmp_path):
@@ -682,6 +826,120 @@ def test_list_camera_summaries_ordered_by_last_seen_at_desc(tmp_path):
     camera_ids = [s.camera.camera_id for s in summaries]
 
     assert camera_ids.index("cam-late") < camera_ids.index("cam-early")
+
+
+def test_list_camera_summaries_spans_multiple_sqlite_in_clause_chunks(tmp_path):
+    # SQLite has a default limit on bound parameters per statement
+    # (SQLITE_MAX_VARIABLE_NUMBER). list_camera_summaries() binds every
+    # camera_id into IN (...) lookups for the latest snapshot/detection per
+    # camera, so a fleet larger than one chunk (_SQLITE_IN_CLAUSE_CHUNK_SIZE
+    # == 500) must still return correct, complete results instead of
+    # raising sqlite3.OperationalError or silently dropping cameras from
+    # the trailing chunk.
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    camera_count = 650
+
+    for i in range(camera_count):
+        store.record_heartbeat(f"cam-{i:04d}", seen_at=stored_at)
+
+    # Give a handful of cameras -- including some past the first 500-item
+    # chunk boundary -- an actual snapshot (with a detection on one of
+    # them) so the merge across chunks is exercised for both queries, not
+    # just the camera roster itself.
+    snapshot_camera_ids = [0, 250, 499, 500, 501, 649]
+    for i in snapshot_camera_ids:
+        snapshot = store.record_snapshot(
+            _stored_image(
+                name=f"cam-{i:04d}.jpg",
+                relative_path=f"cam-{i:04d}/images/cam-{i:04d}.jpg",
+                camera_id=f"cam-{i:04d}",
+                captured_at=stored_at,
+                stored_at=stored_at,
+            )
+        )
+        if i in (499, 649):
+            store.mark_snapshot_result(
+                snapshot.id,
+                detections=[
+                    Detection(label="person", score=0.9, x1=0.1, y1=0.1, x2=0.5, y2=0.5)
+                ],
+            )
+
+    summaries = store.list_camera_summaries()
+    assert len(summaries) == camera_count
+
+    summary_by_camera = {s.camera.camera_id: s for s in summaries}
+    for i in snapshot_camera_ids:
+        camera_id = f"cam-{i:04d}"
+        summary = summary_by_camera[camera_id]
+        assert summary.latest_snapshot is not None
+        assert summary.latest_snapshot.filename == f"cam-{i:04d}.jpg"
+        if i in (499, 649):
+            assert summary.latest_detection_at is not None
+        else:
+            assert summary.latest_detection_at is None
+
+    # A camera with no snapshot at all (most of the 650) still round-trips.
+    untouched = summary_by_camera["cam-0300"]
+    assert untouched.latest_snapshot is None
+    assert untouched.latest_detection_at is None
+
+
+def test_delete_snapshots_by_relative_paths_spans_multiple_sqlite_in_clause_chunks(
+    tmp_path,
+):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    count = 650
+
+    relative_paths = []
+    for i in range(count):
+        stored = store.record_snapshot(
+            _stored_image(
+                name=f"bulk-{i:04d}.jpg",
+                relative_path=f"cam-a/images/bulk-{i:04d}.jpg",
+                camera_id="cam-a",
+                captured_at=stored_at,
+                stored_at=stored_at,
+            )
+        )
+        relative_paths.append(stored.relative_path)
+
+    deleted = store.delete_snapshots_by_relative_paths(relative_paths)
+
+    assert deleted == count
+    assert store.total_snapshot_count() == 0
+
+
+def test_delete_videos_by_relative_paths_spans_multiple_sqlite_in_clause_chunks(
+    tmp_path,
+):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    count = 650
+
+    relative_paths = []
+    for i in range(count):
+        stored = store.record_video(
+            StoredVideo(
+                name=f"bulk-{i:04d}.mp4",
+                relative_path=f"cam-a/videos/bulk-{i:04d}.mp4",
+                size=123,
+                camera_id="cam-a",
+                captured_at=stored_at,
+                stored_at=stored_at,
+                duration_ms=1000,
+                content_type="video/mp4",
+                sha256="0" * 64,
+            )
+        )
+        relative_paths.append(stored.relative_path)
+
+    deleted = store.delete_videos_by_relative_paths(relative_paths)
+
+    assert deleted == count
+    assert store.list_videos(limit=1) == []
 
 
 def test_delete_camera_cascades_snapshots(tmp_path):
@@ -1065,6 +1323,63 @@ def test_list_snapshot_retention_candidates_empty_store(tmp_path):
 
     assert candidates == []
     assert total_bytes == 0
+
+
+def test_iter_snapshot_retention_candidates_uses_age_filter_and_keyset_batches(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    older = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    newer = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    store.record_snapshot(
+        _stored_image(
+            name="older.jpg",
+            relative_path="cam-a/images/older.jpg",
+            camera_id="cam-a",
+            captured_at=older,
+            stored_at=older,
+        )
+    )
+    store.record_snapshot(
+        _stored_image(
+            name="newer.jpg",
+            relative_path="cam-a/images/newer.jpg",
+            camera_id="cam-a",
+            captured_at=newer,
+            stored_at=newer,
+        )
+    )
+
+    candidates = list(
+        store.iter_snapshot_retention_candidates(
+            older_than=newer,
+            batch_size=1,
+        )
+    )
+
+    assert [relative_path for relative_path, _size, _stored_at in candidates] == [
+        "cam-a/images/older.jpg"
+    ]
+
+
+def test_iter_video_retention_candidates_orders_equal_timestamps_by_id(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    for name in ("first.mp4", "second.mp4"):
+        store.record_video(
+            _stored_video(
+                name=name,
+                relative_path=f"cam-a/videos/{name}",
+                camera_id="cam-a",
+                captured_at=stored_at,
+                stored_at=stored_at,
+            )
+        )
+
+    candidates = list(store.iter_video_retention_candidates(batch_size=1))
+
+    assert [relative_path for relative_path, _size, _stored_at in candidates] == [
+        "cam-a/videos/first.mp4",
+        "cam-a/videos/second.mp4",
+    ]
 
 
 def test_list_video_retention_candidates_orders_oldest_first(tmp_path):

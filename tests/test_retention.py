@@ -14,7 +14,7 @@ intermediate uploads skip the scan.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
@@ -25,7 +25,7 @@ from script.retention import (
     apply_video_upload_retention,
 )
 from script.app import create_app, start_retention_scheduler
-from script.config import gunicorn_preload_requested
+from script.config import gunicorn_preload_requested, gunicorn_worker_count
 from script.storage import StorageRetentionPolicy, StoredImage, StoredVideo
 from tests.conftest import MINIMAL_JPEG
 
@@ -333,6 +333,34 @@ def test_gunicorn_preload_detection_is_explicit():
     assert gunicorn_preload_requested(["pytest", "--preload"]) is False
 
 
+def test_gunicorn_worker_count_parses_common_worker_flags():
+    assert gunicorn_worker_count(["/venv/bin/gunicorn", "--workers", "4"]) == 4
+    assert gunicorn_worker_count(["/venv/bin/gunicorn", "--workers=3"]) == 3
+    assert gunicorn_worker_count(["/venv/bin/gunicorn", "-w", "2"]) == 2
+    assert gunicorn_worker_count(["/venv/bin/gunicorn", "-w2"]) == 2
+    assert gunicorn_worker_count(
+        ["/venv/bin/gunicorn", "--workers", "4"], command_args="--workers 2"
+    ) == 4
+    assert gunicorn_worker_count(["pytest", "--workers", "4"]) is None
+
+
+def test_memory_rate_limit_storage_warns_for_multiple_workers(app_factory, caplog):
+    with patch("script.app.gunicorn_worker_count", return_value=2):
+        app_factory(RATELIMIT_STORAGE_URI="memory://")
+
+    assert any("multiple Gunicorn workers" in record.message for record in caplog.records)
+
+
+@pytest.mark.parametrize("worker_count, storage_uri", [(1, "memory://"), (2, "redis://localhost")])
+def test_memory_rate_limit_warning_is_limited_to_unsafe_configuration(
+    app_factory, caplog, worker_count, storage_uri
+):
+    with patch("script.app.gunicorn_worker_count", return_value=worker_count):
+        app_factory(RATELIMIT_STORAGE_URI=storage_uri)
+
+    assert not any("multiple Gunicorn workers" in record.message for record in caplog.records)
+
+
 def test_scheduler_logs_lifecycle_and_scan_result(app_factory, caplog):
     import logging
     import threading
@@ -505,6 +533,53 @@ def test_run_retention_scan_reports_missing_file_candidates_as_deleted():
     # metadata rows), but deleted_bytes only counts the file actually freed.
     assert deleted == ["cam-a/missing.jpg", "cam-a/present.jpg"]
     assert deleted_bytes == 50
+
+
+def test_run_retention_scan_stops_after_ordered_candidates_are_not_expired():
+    from script.retention import _run_retention_scan
+
+    now = datetime.now(tz=timezone.utc)
+
+    def candidates():
+        yield "cam-a/old.jpg", 100, now - timedelta(hours=1)
+        yield "cam-a/current.jpg", 50, now
+        raise AssertionError("retention scan should stop at the first non-expired row")
+
+    deleted, deleted_bytes = _run_retention_scan(
+        policy=StorageRetentionPolicy(max_age_seconds=60),
+        candidates=candidates(),
+        total_bytes=150,
+        delete_file=lambda _relative_path: 100,
+    )
+
+    assert deleted == ["cam-a/old.jpg"]
+    assert deleted_bytes == 100
+
+
+def test_apply_retention_uses_age_filter_when_byte_limit_is_disabled(app_factory):
+    from script.retention import _apply_retention
+
+    app = app_factory()
+    iter_candidates = MagicMock(return_value=[])
+    list_candidates = MagicMock()
+
+    with app.app_context():
+        result = _apply_retention(
+            policy=StorageRetentionPolicy(max_age_seconds=60, max_bytes=0),
+            gate=None,
+            exclude_relative_paths=set(),
+            list_candidates=list_candidates,
+            delete_file=MagicMock(),
+            delete_metadata=MagicMock(return_value=0),
+            log_prefix="Storage",
+            honor_upload_gate=False,
+            iter_candidates=iter_candidates,
+            total_bytes_reader=MagicMock(return_value=0),
+        )
+
+    assert result == []
+    list_candidates.assert_not_called()
+    assert iter_candidates.call_args.kwargs["older_than"] is not None
 
 
 def test_disk_usage_check_default_interval_runs_every_upload(app_factory):
