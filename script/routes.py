@@ -634,6 +634,20 @@ def mjpeg_stream(camera_id: str):
     try:
         unsubscribe = publisher.subscribe(on_event, camera_id=camera_id)
 
+        camera = _metadata_store().get_camera(camera_id)
+        expected_interval_seconds = (
+            camera.expected_interval_seconds
+            if camera is not None
+            else current_app.config.get("CAMERA_EXPECTED_INTERVAL_SECONDS", 300)
+        )
+        configured_idle_timeout = current_app.config.get(
+            "MJPEG_STREAM_IDLE_TIMEOUT_SECONDS", 0
+        )
+        idle_timeout_seconds = max(
+            30.0,
+            float(expected_interval_seconds) + 30.0,
+            float(configured_idle_timeout),
+        )
         latest = _metadata_store().list_recent_snapshots(
             camera_id=camera_id, limit=1, include_detections=False
         )
@@ -661,7 +675,7 @@ def mjpeg_stream(camera_id: str):
                 yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + initial_frame + b"\r\n"
             while True:
                 try:
-                    data = frame_queue.get(timeout=30.0)
+                    data = frame_queue.get(timeout=idle_timeout_seconds)
                 except Empty:
                     break
                 yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + data + b"\r\n"
