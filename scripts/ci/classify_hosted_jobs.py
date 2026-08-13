@@ -49,7 +49,17 @@ def _select_expected_jobs(
     if not expected or len(set(expected)) != len(expected):
         raise ClassificationError("expected job names must be unique and non-empty")
 
-    selected = [job for job in jobs if job.get("name") in expected]
+    job_list = list(jobs)
+    if any(not isinstance(job, dict) for job in job_list):
+        raise ClassificationError("workflow job response contains a non-object")
+    names = [job.get("name") for job in job_list]
+    unexpected = sorted({str(name) for name in names if name not in expected})
+    if unexpected:
+        raise ClassificationError(
+            f"workflow job response contains unexpected jobs: {unexpected}"
+        )
+
+    selected = [job for job in job_list if job.get("name") in expected]
     names = [str(job.get("name")) for job in selected]
     missing = sorted(set(expected) - set(names))
     duplicates = sorted(name for name in set(names) if names.count(name) > 1)

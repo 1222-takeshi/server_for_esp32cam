@@ -122,7 +122,11 @@ def test_non_success_terminal_conclusions_fail_closed(conclusion):
 
 @pytest.mark.parametrize(
     "bad_jobs",
-    [successful_jobs()[:-1], successful_jobs() + [job(EXPECTED_JOBS[0], "success")]],
+    [
+        successful_jobs()[:-1],
+        successful_jobs() + [job(EXPECTED_JOBS[0], "success")],
+        successful_jobs() + [job("unreviewed-job", "success")],
+    ],
 )
 def test_missing_or_duplicate_expected_jobs_raise(bad_jobs):
     with pytest.raises(ClassificationError):
