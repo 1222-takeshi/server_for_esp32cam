@@ -1,0 +1,40 @@
+name: CI Fallback Reconcile
+
+on:
+  workflow_dispatch:
+    inputs:
+      check-id:
+        description: "完了できずに残った CI Fallback Gate の check run ID"
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  reconcile:
+    if: github.actor == github.repository_owner
+    runs-on: [self-hosted, Linux, ARM64, server-for-esp32cam-gate]
+    timeout-minutes: 10
+    permissions:
+      checks: write
+      contents: read
+    steps:
+      - name: Check out trusted control code
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: control
+          persist-credentials: false
+
+      - name: Mark abandoned check as failed
+        env:
+          CHECK_ID: ${{ inputs.check-id }}
+          GITHUB_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: >-
+          python3 control/scripts/ci/github_actions_gate.py complete
+          --repository "$REPOSITORY"
+          --check-id "$CHECK_ID"
+          --conclusion failure
+          --title "CI fallback reconciliation failed closed"
+          --summary "The check run could not be finalized by the original fallback workflow and was manually reconciled to failure."
