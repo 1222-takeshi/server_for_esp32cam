@@ -361,6 +361,71 @@ def test_list_camera_snapshots_paginates_stably_with_duplicate_timestamps(tmp_pa
     assert [s.id for s in page2] == [first.id]
 
 
+def test_list_snapshots_supports_id_cursor(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    snapshots = [
+        store.record_snapshot(
+            _stored_image(
+                name=f"{index}.jpg",
+                relative_path=f"cam-a/images/{index}.jpg",
+                camera_id="cam-a",
+                captured_at=stored_at + timedelta(seconds=index),
+                stored_at=stored_at + timedelta(seconds=index),
+            )
+        )
+        for index in range(3)
+    ]
+
+    first_page = store.list_camera_snapshots("cam-a", limit=1)
+    cursor = (first_page[0].stored_at.isoformat(), first_page[0].id)
+    second_page = store.list_camera_snapshots("cam-a", limit=1, before=cursor)
+    recent_page = store.list_recent_snapshots(limit=1, before=cursor)
+
+    assert [snapshot.id for snapshot in first_page] == [snapshots[2].id]
+    assert [snapshot.id for snapshot in second_page] == [snapshots[1].id]
+    assert [snapshot.id for snapshot in recent_page] == [snapshots[1].id]
+
+
+def test_list_snapshots_cursor_handles_backfilled_stored_at(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    base = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    newest = store.record_snapshot(
+        _stored_image(
+            name="newest.jpg",
+            relative_path="cam-a/images/newest.jpg",
+            camera_id="cam-a",
+            captured_at=base + timedelta(seconds=10),
+            stored_at=base + timedelta(seconds=10),
+        )
+    )
+    oldest = store.record_snapshot(
+        _stored_image(
+            name="oldest.jpg",
+            relative_path="cam-a/images/oldest.jpg",
+            camera_id="cam-a",
+            captured_at=base,
+            stored_at=base,
+        )
+    )
+    middle = store.record_snapshot(
+        _stored_image(
+            name="middle.jpg",
+            relative_path="cam-a/images/middle.jpg",
+            camera_id="cam-a",
+            captured_at=base + timedelta(seconds=5),
+            stored_at=base + timedelta(seconds=5),
+        )
+    )
+
+    first_page = store.list_recent_snapshots(limit=1)
+    cursor = (first_page[0].stored_at.isoformat(), first_page[0].id)
+    remaining = store.list_recent_snapshots(limit=10, before=cursor)
+
+    assert first_page[0].id == newest.id
+    assert [snapshot.id for snapshot in remaining] == [middle.id, oldest.id]
+
+
 def test_list_detections_paginates_stably_with_duplicate_timestamps(tmp_path):
     store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
     stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
@@ -394,6 +459,34 @@ def test_list_detections_paginates_stably_with_duplicate_timestamps(tmp_path):
 
     assert [d["filename"] for d in page1] == [second.filename]
     assert [d["filename"] for d in page2] == [first.filename]
+
+
+def test_list_detections_supports_composite_cursor(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    snapshots = []
+    for index in range(3):
+        snapshot = store.record_snapshot(
+            _stored_image(
+                name=f"{index}.jpg",
+                relative_path=f"cam-a/images/{index}.jpg",
+                camera_id="cam-a",
+                captured_at=stored_at + timedelta(seconds=index),
+                stored_at=stored_at + timedelta(seconds=index),
+            )
+        )
+        store.mark_snapshot_result(
+            snapshot.id,
+            detections=[Detection(label="person", score=0.9, x1=0, y1=0, x2=1, y2=1)],
+        )
+        snapshots.append(snapshot)
+
+    first_page = store.list_detections(limit=1)
+    cursor = (first_page[0]["stored_at"], first_page[0]["snapshot_id"], first_page[0]["detection_id"])
+    second_page = store.list_detections(limit=1, before=cursor)
+
+    assert [row["filename"] for row in first_page] == [snapshots[2].filename]
+    assert [row["filename"] for row in second_page] == [snapshots[1].filename]
 
 
 def test_list_pending_snapshot_ids_returns_all_by_default(tmp_path):

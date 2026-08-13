@@ -10,13 +10,19 @@
 
   {% if total_pages > 1 %}
   <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+    {% if before is not none %}
+    <a href="{{ url_for('server.list_files') }}" class="btn btn-sm">← First page</a>
+    {% else %}
     {% if page > 1 %}
     <a href="{{ url_for('server.list_files', page=page-1) }}" class="btn btn-sm">← Previous</a>
     {% else %}
     <span class="btn btn-sm" style="opacity:0.4;cursor:default;">← Previous</span>
     {% endif %}
+    {% endif %}
     <span style="font-size:12px;color:var(--text-3);">Page {{ page }} / {{ total_pages }}</span>
-    {% if page < total_pages %}
+    {% if next_before is not none %}
+    <a href="{{ url_for('server.list_files', before=next_before) }}" class="btn btn-sm">Next →</a>
+    {% elif page < total_pages %}
     <a href="{{ url_for('server.list_files', page=page+1) }}" class="btn btn-sm">Next →</a>
     {% else %}
     <span class="btn btn-sm" style="opacity:0.4;cursor:default;">Next →</span>

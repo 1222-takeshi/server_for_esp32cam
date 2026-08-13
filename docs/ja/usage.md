@@ -42,9 +42,11 @@
 
 *   **`GET /api/cameras/<camera_id>/snapshots`**
     *   **説明:** 指定 camera の最近の snapshots を JSON で返します。
+    *   **ページング:** 深い `offset` の走査を避けるには、レスポンスの `next_before` を次のリクエストの `before` に指定します。
 
 *   **`GET /api/detections`**
     *   **説明:** 最近の detections を JSON で返します。`camera_id` と `since` で絞り込みできます。
+    *   **ページング:** 深いページでは、レスポンスの不透明な `next_before` を次のリクエストの `before` に指定し、`offset` とは併用しません。
 
 *   **`GET /files`**
     *   **説明:** 保存済みファイルを新しい順に一覧表示するHTMLページ (`templates/files.html`) を表示し、利用可能なら保存済み metadata も併記します。
