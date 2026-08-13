@@ -67,6 +67,12 @@ docker compose version
 tailscale status
 ```
 
+このサーバーはメタデータの書き込みに SQLite の `INSERT ... RETURNING` を使用するため、
+SQLite 3.35.0 以上が必要です。Docker で運用する場合はイメージ内の Python にリンクされた
+SQLite が対象になります。Docker を使わず Raspberry Pi 上の Python 仮想環境で運用する場合は、
+`python3 -c 'import sqlite3; print(sqlite3.sqlite_version)'` で確認してください。
+要件を満たさない環境では、データベースを開く前にサーバーが明示的なエラーで終了します。
+
 ### 2. Deploy the server
 
 ```bash
