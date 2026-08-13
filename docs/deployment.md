@@ -317,6 +317,13 @@ Webhook delivery with retries is at-least-once: if the receiver processes an eve
 but the response is lost or becomes a 5xx, the same event may be delivered again.
 The receiver should deduplicate events; see [Issue #279](https://github.com/1222-takeshi/server_for_esp32cam/issues/279).
 
+Webhook delivery does not follow HTTP redirects. A 3xx response from
+`ESP32CAM_WEBHOOK_URL` is treated as a permanent, logged delivery failure
+rather than being transparently followed (this avoids surprise
+SSRF-via-redirect to an unexpected host). If your webhook receiver relies on
+a redirect (e.g. a canonical-domain redirect or an HTTP→HTTPS upgrade),
+point `ESP32CAM_WEBHOOK_URL` at the final URL directly.
+
 ---
 
 ## Production Checklist
