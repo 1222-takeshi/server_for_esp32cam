@@ -323,6 +323,15 @@ def _check_video_upload_auth(camera_id: str):
     return None
 
 
+def _sanitize_log_value(value: str | None) -> str:
+    """Truncate and strip newlines from untrusted input before logging it.
+
+    Prevents log injection (CRLF-separated fake log lines) from
+    attacker-controlled header/metadata values that fail validation.
+    """
+    return (value or "")[:64].replace("\n", "\\n").replace("\r", "\\r")
+
+
 def _parse_video_duration_ms(value: str | None) -> tuple[int | None, str | None]:
     if value is None or value.strip() == "":
         return None, None
@@ -341,7 +350,7 @@ def _parse_optional_captured_at(value: str | None) -> tuple[datetime | None, str
     try:
         return _parse_captured_at(value), None
     except ValueError:
-        safe_val = (value or "")[:64].replace("\n", "\\n").replace("\r", "\\r")
+        safe_val = _sanitize_log_value(value)
         current_app.logger.error("Invalid video captured_at metadata: %s", safe_val)
         return None, "Invalid captured_at metadata"
 
@@ -499,7 +508,7 @@ def upload_file():
     try:
         captured_at = _parse_captured_at(captured_at_raw)
     except ValueError:
-        safe_val = (captured_at_raw or "")[:64].replace("\n", "\\n").replace("\r", "\\r")
+        safe_val = _sanitize_log_value(captured_at_raw)
         current_app.logger.error("Invalid captured_at metadata: %s", safe_val)
         return jsonify({"message": "Invalid captured_at metadata"}), 400
 
