@@ -296,6 +296,7 @@ All variables are optional unless marked **required for production**.
 | `ESP32CAM_TRACKING_MAX_TRACKS_PER_CAMERA` | `50` | Maximum active tracks retained for each camera; excess detections remain untracked. |
 | `ESP32CAM_TRACKING_MAX_CAMERAS` | `500` | Maximum camera states retained in one process; least-recently-used camera state is evicted beyond this cap. |
 | `ESP32CAM_MAX_WS_CONNECTIONS` | `50` | Maximum concurrent WebSocket connections. |
+| `ESP32CAM_MAX_WS_PENDING_EVENTS` | `256` | Maximum queued dashboard snapshot events. Events are dropped when the queue is full so device upload responses are not blocked. |
 | `ESP32CAM_MAX_MJPEG_STREAMS` | `10` | Maximum concurrent MJPEG stream viewers per camera. |
 | `ESP32CAM_MJPEG_STREAM_IDLE_TIMEOUT_SECONDS` | `0` | Minimum idle timeout in seconds. `0` derives it from the camera's expected interval plus 30 seconds, with a 30-second floor. |
 | `ESP32CAM_MAX_TRACKED_CAMERAS` | `500` | Maximum distinct `camera_id`s tracked by the in-process upload metrics registry; least-recently-active entries are evicted beyond this cap. Set `0` to disable the cap. |

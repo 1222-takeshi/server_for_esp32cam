@@ -129,6 +129,7 @@ class Config:
     # the default auto-start behavior.
     RETENTION_SCHEDULER_AUTO_START = True
     MAX_WS_CONNECTIONS = int(os.getenv("ESP32CAM_MAX_WS_CONNECTIONS", "50"))
+    MAX_WS_PENDING_EVENTS = int(os.getenv("ESP32CAM_MAX_WS_PENDING_EVENTS", "256"))
     DEVICE_API_KEY = os.getenv("ESP32CAM_DEVICE_API_KEY", "")
     DEVICE_API_KEYS = _load_device_api_keys()
     SHARED_KEY_DEVICE_ID = os.getenv("ESP32CAM_SHARED_KEY_DEVICE_ID", "")
