@@ -47,6 +47,18 @@ def test_publish_snapshot_created_delivers_serialized_event_to_subscriber():
     ]
 
 
+def test_publish_snapshot_created_keeps_frame_bytes_out_of_public_event():
+    publisher = SnapshotEventPublisher()
+    received: list[dict[str, object]] = []
+    publisher.subscribe(received.append)
+
+    publisher.publish_snapshot_created(_snapshot(), image_bytes=b"jpeg-bytes")
+
+    assert received[0]["type"] == "snapshot.created"
+    assert received[0].raw_image == b"jpeg-bytes"
+    assert "raw_image" not in received[0]
+
+
 def test_publish_snapshot_created_filters_camera_scoped_subscribers():
     publisher = SnapshotEventPublisher()
     front_events: list[dict[str, object]] = []

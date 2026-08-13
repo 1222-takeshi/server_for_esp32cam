@@ -521,7 +521,7 @@ def upload_file():
         )
         snapshot = _metadata_store().record_snapshot(stored)
         _inference_service().enqueue_snapshot(snapshot.id)
-        _snapshot_event_publisher().publish_snapshot_created(snapshot)
+        _snapshot_event_publisher().publish_snapshot_created(snapshot, image_bytes=request.data)
         apply_upload_retention(stored)
         _check_disk_usage()
         metrics = current_app.extensions.get("app_metrics")
@@ -617,10 +617,12 @@ def mjpeg_stream(camera_id: str):
         relative_path = (event.get("snapshot") or {}).get("relative_path")
         if not relative_path:
             return
-        try:
-            data = storage.read_image_by_relative_path(relative_path)
-        except FileNotFoundError:
-            return
+        data = getattr(event, "raw_image", None)
+        if data is None:
+            try:
+                data = storage.read_image_by_relative_path(relative_path)
+            except FileNotFoundError:
+                return
         try:
             frame_queue.get_nowait()
         except Empty:

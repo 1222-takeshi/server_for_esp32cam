@@ -42,7 +42,9 @@ def handle_binary_snapshot_upload(
     )
     snapshot = current_app.extensions["metadata_store"].record_snapshot(stored)
     current_app.extensions["inference_service"].enqueue_snapshot(snapshot.id)
-    current_app.extensions["snapshot_event_publisher"].publish_snapshot_created(snapshot)
+    current_app.extensions["snapshot_event_publisher"].publish_snapshot_created(
+        snapshot, image_bytes=data
+    )
     current_app.extensions["upload_metrics"].record_frame(camera_id, len(data))
     apply_upload_retention(stored)
     return {
