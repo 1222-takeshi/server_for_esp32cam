@@ -66,3 +66,4 @@ For detailed information on setup, usage, troubleshooting, and future developmen
 *   [Future Development / Roadmap](docs/roadmap.md)
 *   [License](docs/license.md)
 *   [Acknowledgments](docs/acknowledgments.md)
+*   [Self-hosted CI fallback](docs/self-hosted-ci-fallback.md)

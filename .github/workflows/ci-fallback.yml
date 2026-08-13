@@ -1,0 +1,201 @@
+name: CI Fallback
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  group: ci-fallback-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    runs-on: [self-hosted, linux, x64, esp32cam-ci-gate]
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+    outputs:
+      decision: ${{ steps.inspect.outputs.decision }}
+      repository: ${{ steps.inspect.outputs.repository }}
+      head_sha: ${{ steps.inspect.outputs.head_sha }}
+      check_id: ${{ steps.inspect.outputs.check_id }}
+    steps:
+      - name: Check out trusted control code
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: control
+          persist-credentials: false
+
+      - name: Inspect GitHub-hosted jobs
+        id: inspect
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 control/scripts/ci/github_actions_gate.py inspect \
+            --event "$GITHUB_EVENT_PATH" \
+            --trusted-actor "${{ github.repository_owner }}" \
+            --expected "test (3.11)" \
+            --expected "test (3.12)" \
+            --expected "dependency-audit" \
+            --expected "compile-esp32-example" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Record GitHub-hosted success
+        if: steps.inspect.outputs.decision == 'hosted_success'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python3 control/scripts/ci/github_actions_gate.py complete
+          --repository "${{ steps.inspect.outputs.repository }}"
+          --check-id "${{ steps.inspect.outputs.check_id }}"
+          --conclusion success
+          --title "GitHub-hosted CI passed"
+          --summary "The GitHub-hosted source workflow passed. Its local fallback workload was not executed."
+
+      - name: Record non-billing failure
+        if: steps.inspect.outputs.decision == 'hard_failure'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python3 control/scripts/ci/github_actions_gate.py complete
+          --repository "${{ steps.inspect.outputs.repository }}"
+          --check-id "${{ steps.inspect.outputs.check_id }}"
+          --conclusion failure
+          --title "GitHub-hosted CI failed"
+          --summary "The failure did not contain complete billing-limit evidence, so local fallback was not executed."
+
+      - name: Fail closed for non-billing failure
+        if: steps.inspect.outputs.decision == 'hard_failure'
+        run: exit 1
+
+  fallback_test:
+    needs: inspect
+    if: needs.inspect.outputs.decision == 'billing_fallback'
+    runs-on: [self-hosted, linux, x64, esp32cam-ci-fallback]
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        python-version: ["3.11", "3.12"]
+    permissions:
+      contents: read
+    steps:
+      - name: Check out trusted repository commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ needs.inspect.outputs.head_sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Run lint and tests
+        run: scripts/ci/run-check.sh test
+
+  fallback_audit:
+    needs: inspect
+    if: needs.inspect.outputs.decision == 'billing_fallback'
+    runs-on: [self-hosted, linux, x64, esp32cam-ci-fallback]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Check out trusted repository commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ needs.inspect.outputs.head_sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.lock.txt
+
+      - name: Run dependency audit
+        run: scripts/ci/run-check.sh audit
+
+  fallback_compile:
+    needs: inspect
+    if: needs.inspect.outputs.decision == 'billing_fallback'
+    runs-on: [self-hosted, linux, x64, esp32cam-ci-fallback]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Check out trusted repository commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ needs.inspect.outputs.head_sha }}
+          persist-credentials: false
+
+      - name: Prepare config.h for CI
+        run: cp examples/esp32cam_snapshot_upload/config.h.example examples/esp32cam_snapshot_upload/config.h
+
+      - name: Compile ESP32-CAM example
+        uses: arduino/compile-sketches@25426ace8a446e747a3d3d7a9da759a6925613aa
+        with:
+          fqbn: esp32:esp32:esp32cam
+          platforms: |
+            - name: esp32:esp32
+              source-url: https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+          libraries: "[]"
+          sketch-paths: |
+            - examples/esp32cam_snapshot_upload
+          verbose: true
+
+  finalize:
+    needs: [inspect, fallback_test, fallback_audit, fallback_compile]
+    if: always() && needs.inspect.outputs.decision == 'billing_fallback'
+    runs-on: [self-hosted, linux, x64, esp32cam-ci-gate]
+    timeout-minutes: 10
+    permissions:
+      checks: write
+      contents: read
+    steps:
+      - name: Check out trusted control code
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: control
+          persist-credentials: false
+
+      - name: Record successful local fallback
+        if: needs.fallback_test.result == 'success' && needs.fallback_audit.result == 'success' && needs.fallback_compile.result == 'success'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python3 control/scripts/ci/github_actions_gate.py complete
+          --repository "${{ needs.inspect.outputs.repository }}"
+          --check-id "${{ needs.inspect.outputs.check_id }}"
+          --conclusion success
+          --title "Local fallback CI passed"
+          --summary "GitHub-hosted jobs could not start because of billing limits. The self-hosted runners completed all fallback workloads successfully."
+
+      - name: Record failed local fallback
+        if: needs.fallback_test.result != 'success' || needs.fallback_audit.result != 'success' || needs.fallback_compile.result != 'success'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python3 control/scripts/ci/github_actions_gate.py complete
+          --repository "${{ needs.inspect.outputs.repository }}"
+          --check-id "${{ needs.inspect.outputs.check_id }}"
+          --conclusion failure
+          --title "Local fallback CI failed"
+          --summary "The self-hosted runners did not complete all fallback workloads successfully."
+
+      - name: Enforce local fallback result
+        if: needs.fallback_test.result != 'success' || needs.fallback_audit.result != 'success' || needs.fallback_compile.result != 'success'
+        run: exit 1
