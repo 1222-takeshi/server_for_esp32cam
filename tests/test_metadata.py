@@ -684,6 +684,120 @@ def test_list_camera_summaries_ordered_by_last_seen_at_desc(tmp_path):
     assert camera_ids.index("cam-late") < camera_ids.index("cam-early")
 
 
+def test_list_camera_summaries_spans_multiple_sqlite_in_clause_chunks(tmp_path):
+    # SQLite has a default limit on bound parameters per statement
+    # (SQLITE_MAX_VARIABLE_NUMBER). list_camera_summaries() binds every
+    # camera_id into IN (...) lookups for the latest snapshot/detection per
+    # camera, so a fleet larger than one chunk (_SQLITE_IN_CLAUSE_CHUNK_SIZE
+    # == 500) must still return correct, complete results instead of
+    # raising sqlite3.OperationalError or silently dropping cameras from
+    # the trailing chunk.
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    camera_count = 650
+
+    for i in range(camera_count):
+        store.record_heartbeat(f"cam-{i:04d}", seen_at=stored_at)
+
+    # Give a handful of cameras -- including some past the first 500-item
+    # chunk boundary -- an actual snapshot (with a detection on one of
+    # them) so the merge across chunks is exercised for both queries, not
+    # just the camera roster itself.
+    snapshot_camera_ids = [0, 250, 499, 500, 501, 649]
+    for i in snapshot_camera_ids:
+        snapshot = store.record_snapshot(
+            _stored_image(
+                name=f"cam-{i:04d}.jpg",
+                relative_path=f"cam-{i:04d}/images/cam-{i:04d}.jpg",
+                camera_id=f"cam-{i:04d}",
+                captured_at=stored_at,
+                stored_at=stored_at,
+            )
+        )
+        if i in (499, 649):
+            store.mark_snapshot_result(
+                snapshot.id,
+                detections=[
+                    Detection(label="person", score=0.9, x1=0.1, y1=0.1, x2=0.5, y2=0.5)
+                ],
+            )
+
+    summaries = store.list_camera_summaries()
+    assert len(summaries) == camera_count
+
+    summary_by_camera = {s.camera.camera_id: s for s in summaries}
+    for i in snapshot_camera_ids:
+        camera_id = f"cam-{i:04d}"
+        summary = summary_by_camera[camera_id]
+        assert summary.latest_snapshot is not None
+        assert summary.latest_snapshot.filename == f"cam-{i:04d}.jpg"
+        if i in (499, 649):
+            assert summary.latest_detection_at is not None
+        else:
+            assert summary.latest_detection_at is None
+
+    # A camera with no snapshot at all (most of the 650) still round-trips.
+    untouched = summary_by_camera["cam-0300"]
+    assert untouched.latest_snapshot is None
+    assert untouched.latest_detection_at is None
+
+
+def test_delete_snapshots_by_relative_paths_spans_multiple_sqlite_in_clause_chunks(
+    tmp_path,
+):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    count = 650
+
+    relative_paths = []
+    for i in range(count):
+        stored = store.record_snapshot(
+            _stored_image(
+                name=f"bulk-{i:04d}.jpg",
+                relative_path=f"cam-a/images/bulk-{i:04d}.jpg",
+                camera_id="cam-a",
+                captured_at=stored_at,
+                stored_at=stored_at,
+            )
+        )
+        relative_paths.append(stored.relative_path)
+
+    deleted = store.delete_snapshots_by_relative_paths(relative_paths)
+
+    assert deleted == count
+    assert store.total_snapshot_count() == 0
+
+
+def test_delete_videos_by_relative_paths_spans_multiple_sqlite_in_clause_chunks(
+    tmp_path,
+):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    count = 650
+
+    relative_paths = []
+    for i in range(count):
+        stored = store.record_video(
+            StoredVideo(
+                name=f"bulk-{i:04d}.mp4",
+                relative_path=f"cam-a/videos/bulk-{i:04d}.mp4",
+                size=123,
+                camera_id="cam-a",
+                captured_at=stored_at,
+                stored_at=stored_at,
+                duration_ms=1000,
+                content_type="video/mp4",
+                sha256="0" * 64,
+            )
+        )
+        relative_paths.append(stored.relative_path)
+
+    deleted = store.delete_videos_by_relative_paths(relative_paths)
+
+    assert deleted == count
+    assert store.list_videos(limit=1) == []
+
+
 def test_delete_camera_cascades_snapshots(tmp_path):
     store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
     now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)

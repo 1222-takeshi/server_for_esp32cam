@@ -75,9 +75,18 @@ class CameraSummary:
 ALLOWED_LOG_LEVELS = frozenset({"info", "warning", "error", "critical"})
 
 # SQLite has a default limit on the number of bound parameters per statement
-# (SQLITE_MAX_VARIABLE_NUMBER, historically 999). Chunk filename lookups so a
-# large on-disk listing never exceeds that limit.
-_SYNC_LOOKUP_CHUNK_SIZE = 500
+# (SQLITE_MAX_VARIABLE_NUMBER, historically 999). Every `IN (...)` clause
+# built from a caller-supplied list (filenames, relative_paths, camera_ids,
+# snapshot_ids) must chunk against this limit instead of assuming the list
+# stays small -- a multi-camera fleet or a large retention sweep can easily
+# exceed 999 items, which previously raised sqlite3.OperationalError
+# ("too many SQL variables") instead of degrading gracefully.
+_SQLITE_IN_CLAUSE_CHUNK_SIZE = 500
+
+
+def _chunked(items: list[object], size: int) -> list[list[object]]:
+    """Split `items` into consecutive chunks of at most `size` elements."""
+    return [items[offset : offset + size] for offset in range(0, len(items), size)]
 
 
 @dataclass(frozen=True)
@@ -544,14 +553,17 @@ class SQLiteMetadataStore:
     def delete_videos_by_relative_paths(self, relative_paths: list[str]) -> int:
         if not relative_paths:
             return 0
-        placeholders = ",".join("?" for _ in relative_paths)
         conn = self._get_connection()
+        deleted = 0
         with conn:
-            cursor = conn.execute(
-                f"DELETE FROM videos WHERE relative_path IN ({placeholders})",
-                tuple(relative_paths),
-            )
-        return int(cursor.rowcount)
+            for chunk in _chunked(relative_paths, _SQLITE_IN_CLAUSE_CHUNK_SIZE):
+                placeholders = ",".join("?" for _ in chunk)
+                cursor = conn.execute(
+                    f"DELETE FROM videos WHERE relative_path IN ({placeholders})",
+                    tuple(chunk),
+                )
+                deleted += cursor.rowcount
+        return deleted
 
     def list_snapshot_retention_candidates(
         self, *, exclude_relative_paths: set[str] | None = None
@@ -627,8 +639,7 @@ class SQLiteMetadataStore:
         # the historical size of the snapshots table.
         names = [img.name for img in images]
         existing: set[str] = set()
-        for offset in range(0, len(names), _SYNC_LOOKUP_CHUNK_SIZE):
-            chunk = names[offset : offset + _SYNC_LOOKUP_CHUNK_SIZE]
+        for chunk in _chunked(names, _SQLITE_IN_CLAUSE_CHUNK_SIZE):
             placeholders = ",".join("?" for _ in chunk)
             rows = conn.execute(
                 f"SELECT filename FROM snapshots WHERE filename IN ({placeholders})",
@@ -678,14 +689,17 @@ class SQLiteMetadataStore:
     def delete_snapshots_by_relative_paths(self, relative_paths: list[str]) -> int:
         if not relative_paths:
             return 0
-        placeholders = ",".join("?" for _ in relative_paths)
         conn = self._get_connection()
+        deleted = 0
         with conn:
-            cursor = conn.execute(
-                f"DELETE FROM snapshots WHERE relative_path IN ({placeholders})",
-                tuple(relative_paths),
-            )
-        return int(cursor.rowcount)
+            for chunk in _chunked(relative_paths, _SQLITE_IN_CLAUSE_CHUNK_SIZE):
+                placeholders = ",".join("?" for _ in chunk)
+                cursor = conn.execute(
+                    f"DELETE FROM snapshots WHERE relative_path IN ({placeholders})",
+                    tuple(chunk),
+                )
+                deleted += cursor.rowcount
+        return deleted
 
     def ping(self) -> None:
         conn = self._get_connection()
@@ -816,32 +830,41 @@ class SQLiteMetadataStore:
             return []
 
         camera_ids = [row["camera_id"] for row in camera_rows]
-        placeholders = ",".join("?" for _ in camera_ids)
 
-        conn = self._get_connection()
-        snapshot_rows = conn.execute(
-            f"""
-            SELECT *
-            FROM (
-                SELECT *, ROW_NUMBER() OVER (PARTITION BY camera_id ORDER BY stored_at DESC) AS rn
-                FROM snapshots
-                WHERE camera_id IN ({placeholders})
-            ) ranked
-            WHERE rn = 1
-            """,
-            camera_ids,
-        ).fetchall()
-
-        detection_rows = conn.execute(
-            f"""
-            SELECT snapshots.camera_id, MAX(snapshots.stored_at) AS latest_detection_at
-            FROM detections
-            JOIN snapshots ON snapshots.id = detections.snapshot_id
-            WHERE snapshots.camera_id IN ({placeholders})
-            GROUP BY snapshots.camera_id
-            """,
-            camera_ids,
-        ).fetchall()
+        # camera_ids can grow past SQLite's bound-parameter limit for a
+        # larger camera fleet, so both lookups below are chunked
+        # (_SQLITE_IN_CLAUSE_CHUNK_SIZE) and their results merged, instead of
+        # binding every camera_id into a single IN (...) clause.
+        snapshot_rows = []
+        detection_rows = []
+        for chunk in _chunked(camera_ids, _SQLITE_IN_CLAUSE_CHUNK_SIZE):
+            placeholders = ",".join("?" for _ in chunk)
+            snapshot_rows.extend(
+                conn.execute(
+                    f"""
+                    SELECT *
+                    FROM (
+                        SELECT *, ROW_NUMBER() OVER (PARTITION BY camera_id ORDER BY stored_at DESC) AS rn
+                        FROM snapshots
+                        WHERE camera_id IN ({placeholders})
+                    ) ranked
+                    WHERE rn = 1
+                    """,
+                    chunk,
+                ).fetchall()
+            )
+            detection_rows.extend(
+                conn.execute(
+                    f"""
+                    SELECT snapshots.camera_id, MAX(snapshots.stored_at) AS latest_detection_at
+                    FROM detections
+                    JOIN snapshots ON snapshots.id = detections.snapshot_id
+                    WHERE snapshots.camera_id IN ({placeholders})
+                    GROUP BY snapshots.camera_id
+                    """,
+                    chunk,
+                ).fetchall()
+            )
 
         detections_by_id = self._detections_by_snapshot_id([row["id"] for row in snapshot_rows])
         latest_snapshot_by_camera: dict[str, SnapshotRecord] = {
@@ -1115,15 +1138,17 @@ class SQLiteMetadataStore:
         if not snapshot_ids:
             return {}
 
-        placeholders = ",".join("?" for _ in snapshot_ids)
-        query = f"""
-            SELECT snapshot_id, label, score, x1, y1, x2, y2, track_id
-            FROM detections
-            WHERE snapshot_id IN ({placeholders})
-            ORDER BY id ASC
-        """
         conn = self._get_connection()
-        rows = conn.execute(query, tuple(snapshot_ids)).fetchall()
+        rows = []
+        for chunk in _chunked(snapshot_ids, _SQLITE_IN_CLAUSE_CHUNK_SIZE):
+            placeholders = ",".join("?" for _ in chunk)
+            query = f"""
+                SELECT snapshot_id, label, score, x1, y1, x2, y2, track_id
+                FROM detections
+                WHERE snapshot_id IN ({placeholders})
+                ORDER BY id ASC
+            """
+            rows.extend(conn.execute(query, tuple(chunk)).fetchall())
 
         grouped: dict[int, list[DetectionRecord]] = {
             snapshot_id: [] for snapshot_id in snapshot_ids
