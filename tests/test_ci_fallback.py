@@ -84,7 +84,7 @@ class WorkflowDefinitionTests(unittest.TestCase):
         workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/ci-fallback-reconcile.yml").read_text()
 
         self.assertIn("workflow_dispatch", workflow)
-        self.assertIn("check-id", workflow)
+        self.assertIn("check_id", workflow)
         self.assertIn("github.actor == github.repository_owner", workflow)
         self.assertIn("checks: write", workflow)
         self.assertIn("--conclusion failure", workflow)

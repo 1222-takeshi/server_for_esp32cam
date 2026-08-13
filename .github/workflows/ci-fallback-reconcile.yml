@@ -3,7 +3,7 @@ name: CI Fallback Reconcile
 on:
   workflow_dispatch:
     inputs:
-      check-id:
+      check_id:
         description: "完了できずに残った CI Fallback Gate の check run ID"
         required: true
         type: string
@@ -28,7 +28,7 @@ jobs:
 
       - name: Mark abandoned check as failed
         env:
-          CHECK_ID: ${{ inputs.check-id }}
+          CHECK_ID: ${{ inputs.check_id }}
           GITHUB_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
         run: >-
