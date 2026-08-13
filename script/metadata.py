@@ -826,11 +826,21 @@ class SQLiteMetadataStore:
         rows = conn.execute("SELECT camera_id, last_seen_at FROM cameras").fetchall()
         return [(row["camera_id"], _parse_datetime(row["last_seen_at"])) for row in rows]
 
-    def list_camera_summaries(self) -> list[CameraSummary]:
+    def count_cameras(self) -> int:
         conn = self._get_connection()
-        camera_rows = conn.execute(
-            "SELECT * FROM cameras ORDER BY last_seen_at DESC, camera_id ASC"
-        ).fetchall()
+        row = conn.execute("SELECT COUNT(*) AS count FROM cameras").fetchone()
+        return int(row["count"])
+
+    def list_camera_summaries(
+        self, *, limit: int | None = None, offset: int = 0
+    ) -> list[CameraSummary]:
+        conn = self._get_connection()
+        query = "SELECT * FROM cameras ORDER BY last_seen_at DESC, camera_id ASC"
+        params: list[int] = []
+        if limit is not None:
+            query += " LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+        camera_rows = conn.execute(query, tuple(params)).fetchall()
 
         if not camera_rows:
             return []

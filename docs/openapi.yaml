@@ -164,8 +164,25 @@ paths:
   /api/cameras:
     get:
       summary: List all cameras
-      description: Returns all known cameras with their latest health status.
+      description: Returns known cameras with their latest health status. For backward compatibility, a request without `limit` or `offset` returns all cameras; include either query parameter to request a page.
       tags: [cameras]
+      parameters:
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - in: query
+          name: offset
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 10000000
+            default: 0
       responses:
         "200":
           description: Camera list
@@ -1139,6 +1156,16 @@ components:
     CameraList:
       type: object
       properties:
+        total:
+          type: integer
+          description: Total number of known cameras.
+        limit:
+          type: integer
+          nullable: true
+          description: Number of cameras requested for this page.
+        offset:
+          type: integer
+          description: Zero-based offset of this page.
         cameras:
           type: array
           items:
