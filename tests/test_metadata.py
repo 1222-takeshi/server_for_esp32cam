@@ -1325,6 +1325,63 @@ def test_list_snapshot_retention_candidates_empty_store(tmp_path):
     assert total_bytes == 0
 
 
+def test_iter_snapshot_retention_candidates_uses_age_filter_and_keyset_batches(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    older = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    newer = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    store.record_snapshot(
+        _stored_image(
+            name="older.jpg",
+            relative_path="cam-a/images/older.jpg",
+            camera_id="cam-a",
+            captured_at=older,
+            stored_at=older,
+        )
+    )
+    store.record_snapshot(
+        _stored_image(
+            name="newer.jpg",
+            relative_path="cam-a/images/newer.jpg",
+            camera_id="cam-a",
+            captured_at=newer,
+            stored_at=newer,
+        )
+    )
+
+    candidates = list(
+        store.iter_snapshot_retention_candidates(
+            older_than=newer,
+            batch_size=1,
+        )
+    )
+
+    assert [relative_path for relative_path, _size, _stored_at in candidates] == [
+        "cam-a/images/older.jpg"
+    ]
+
+
+def test_iter_video_retention_candidates_orders_equal_timestamps_by_id(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    for name in ("first.mp4", "second.mp4"):
+        store.record_video(
+            _stored_video(
+                name=name,
+                relative_path=f"cam-a/videos/{name}",
+                camera_id="cam-a",
+                captured_at=stored_at,
+                stored_at=stored_at,
+            )
+        )
+
+    candidates = list(store.iter_video_retention_candidates(batch_size=1))
+
+    assert [relative_path for relative_path, _size, _stored_at in candidates] == [
+        "cam-a/videos/first.mp4",
+        "cam-a/videos/second.mp4",
+    ]
+
+
 def test_list_video_retention_candidates_orders_oldest_first(tmp_path):
     store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
     older = datetime(2026, 1, 1, tzinfo=timezone.utc)
