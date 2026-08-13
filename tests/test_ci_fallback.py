@@ -75,6 +75,7 @@ class WorkflowDefinitionTests(unittest.TestCase):
     def test_pr_agent_issue_comments_require_an_owner_pr(self):
         workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pr-agent.yml").read_text()
 
+        self.assertIn("types: [created]", workflow)
         self.assertIn("github.event.issue.pull_request", workflow)
         self.assertIn("github.event.issue.user.login", workflow)
         self.assertIn("github.event.sender.login == github.repository_owner", workflow)

@@ -2,6 +2,7 @@ on:
   pull_request:
     types: [opened, reopened, ready_for_review]
   issue_comment:
+    types: [created]
 
 concurrency:
   group: pr-agent-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}

@@ -6,6 +6,7 @@ mode="${1:-}"
 run_test() {
   python -m pip install --upgrade pip setuptools
   python -m pip install -e ".[dev]"
+  python -m ruff check .
   PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest \
     -p pytest_cov \
     --cov=script \
