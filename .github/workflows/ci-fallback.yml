@@ -13,7 +13,10 @@ concurrency:
 
 jobs:
   inspect:
-    if: github.event.workflow_run.conclusion != 'cancelled' || github.event.workflow_run.event == 'push'
+    if: >-
+      github.event.workflow_run.conclusion != 'cancelled' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.triggering_actor.login == github.repository_owner
     runs-on: [self-hosted, Linux, ARM64, server-for-esp32cam-gate]
     timeout-minutes: 10
     permissions:

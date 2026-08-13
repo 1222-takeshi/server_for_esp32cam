@@ -54,7 +54,7 @@ class WorkflowDefinitionTests(unittest.TestCase):
         for job_name in HOSTED_EXPECTED:
             self.assertIn(f'--expected "{job_name}"', workflow)
 
-        self.assertIn("if: github.event.workflow_run.conclusion != 'cancelled'", workflow)
+        self.assertIn("github.event.workflow_run.conclusion != 'cancelled'", workflow)
         self.assertIn("server-for-esp32cam-gate", workflow)
         self.assertIn("server-for-esp32cam-fallback", workflow)
 
@@ -64,6 +64,20 @@ class WorkflowDefinitionTests(unittest.TestCase):
         self.assertNotIn('"feat/**"', workflow)
         self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", workflow)
         self.assertIn("persist-credentials: false", workflow)
+
+    def test_fallback_does_not_assign_gate_runner_to_untrusted_runs(self):
+        workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/ci-fallback.yml").read_text()
+
+        self.assertIn("github.event.workflow_run.head_repository.full_name", workflow)
+        self.assertIn("github.event.workflow_run.triggering_actor.login", workflow)
+        self.assertIn("github.repository_owner", workflow)
+
+    def test_pr_agent_issue_comments_require_an_owner_pr(self):
+        workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/pr-agent.yml").read_text()
+
+        self.assertIn("github.event.issue.pull_request", workflow)
+        self.assertIn("github.event.issue.user.login", workflow)
+        self.assertIn("github.event.sender.login == github.repository_owner", workflow)
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import time
 from typing import Any, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -29,6 +30,7 @@ _REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 _ALLOWED_EVENTS = {"pull_request", "push"}
 _ALLOWED_CONCLUSIONS = {"success", "failure"}
+_COMPLETION_RETRY_DELAYS = (0.0, 1.0, 2.0)
 
 
 class GitHubClient:
@@ -212,16 +214,27 @@ def complete_check_run(
 ) -> None:
     if conclusion not in _ALLOWED_CONCLUSIONS:
         raise ValueError(f"unsupported check conclusion: {conclusion}")
-    client.request(
-        "PATCH",
-        f"/repos/{repository}/check-runs/{check_id}",
-        {
-            "status": "completed",
-            "conclusion": conclusion,
-            "completed_at": datetime.now(timezone.utc).isoformat(),
-            "output": {"title": title[:255], "summary": summary[:65535]},
-        },
-    )
+    payload = {
+        "status": "completed",
+        "conclusion": conclusion,
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "output": {"title": title[:255], "summary": summary[:65535]},
+    }
+    last_error: GitHubResponseError | None = None
+    for delay in _COMPLETION_RETRY_DELAYS:
+        if delay:
+            time.sleep(delay)
+        try:
+            client.request(
+                "PATCH",
+                f"/repos/{repository}/check-runs/{check_id}",
+                payload,
+            )
+            return
+        except GitHubResponseError as exc:
+            last_error = exc
+    assert last_error is not None
+    raise last_error
 
 
 def inspect_run(
@@ -233,7 +246,6 @@ def inspect_run(
     check_name: str = "CI Fallback Gate",
 ) -> dict[str, Any]:
     authorized = authorize_workflow_run(event, trusted_actors=trusted_actors)
-    jobs = fetch_run_jobs(client, authorized["repository"], authorized["run_id"])
     check_id = create_check_run(
         client,
         repository=authorized["repository"],
@@ -243,12 +255,13 @@ def inspect_run(
         check_name=check_name,
     )
     try:
+        jobs = fetch_run_jobs(client, authorized["repository"], authorized["run_id"])
         classification = classify_jobs(jobs, expected_names=expected_names)
-    except ClassificationError as exc:
+    except (ClassificationError, GitHubResponseError) as exc:
         classification = {
             "decision": "hard_failure",
             "fallback": False,
-            "reason": f"hosted job classification failed: {exc}",
+            "reason": f"hosted job inspection failed: {exc}",
             "jobs": {},
         }
     return {**classification, **authorized, "check_id": check_id}
