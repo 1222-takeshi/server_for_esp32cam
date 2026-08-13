@@ -54,7 +54,7 @@ def test_websocket_hub_sends_snapshot_events_as_json_to_connected_socket():
     ws = FakeWebSocket()
 
     hub.connect(ws)
-    publisher.publish_snapshot_created(_snapshot())
+    publisher.publish_snapshot_created(_snapshot(), image_bytes=b"private-frame")
     hub.flush()
 
     assert len(ws.messages) == 1
@@ -62,6 +62,7 @@ def test_websocket_hub_sends_snapshot_events_as_json_to_connected_socket():
     assert event["type"] == "snapshot.created"
     assert event["camera_id"] == "esp32cam-front-door"
     assert event["snapshot"]["url"] == "/files/image_20260508T010203000000_abcd.jpg"
+    assert "private-frame" not in ws.messages[0]
 
 
 def test_websocket_hub_filters_events_by_camera_id():

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import csv
+import base64
+import binascii
 from functools import lru_cache
 from io import BytesIO, StringIO
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 from queue import Empty, Queue
 import shutil
@@ -14,6 +17,7 @@ import uuid
 from flask import (
     Blueprint,
     Response,
+    abort,
     current_app,
     jsonify,
     render_template,
@@ -85,6 +89,61 @@ def _parse_pagination() -> tuple[int, int] | tuple[None, None]:
     if limit < 1 or limit > _PAGINATION_LIMIT_MAX or offset < 0 or offset > _PAGINATION_OFFSET_MAX:
         return None, None
     return limit, offset
+
+
+def _encode_snapshot_cursor(snapshot: SnapshotRecord) -> str:
+    payload = json.dumps(
+        [snapshot.stored_at.isoformat(), snapshot.id],
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_snapshot_cursor(value: str) -> tuple[str, int] | None:
+    try:
+        padded = value + "=" * (-len(value) % 4)
+        stored_at, snapshot_id = json.loads(
+            base64.urlsafe_b64decode(padded).decode("utf-8")
+        )
+        parsed_stored_at = datetime.fromisoformat(stored_at.replace("Z", "+00:00"))
+        if (
+            parsed_stored_at.tzinfo is None
+            or isinstance(snapshot_id, bool)
+            or not isinstance(snapshot_id, int)
+            or snapshot_id < 1
+        ):
+            return None
+        return stored_at, snapshot_id
+    except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError, binascii.Error):
+        return None
+
+
+def _encode_detection_cursor(row: dict[str, object]) -> str:
+    payload = json.dumps(
+        [row["stored_at"], row["snapshot_id"], row["detection_id"]],
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_detection_cursor(value: str) -> tuple[str, int, int] | None:
+    try:
+        padded = value + "=" * (-len(value) % 4)
+        decoded = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+        stored_at, snapshot_id, detection_id = decoded
+        if (
+            not isinstance(stored_at, str)
+            or isinstance(snapshot_id, bool)
+            or not isinstance(snapshot_id, int)
+            or isinstance(detection_id, bool)
+            or not isinstance(detection_id, int)
+            or snapshot_id < 1
+            or detection_id < 1
+        ):
+            return None
+        return stored_at, snapshot_id, detection_id
+    except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError, binascii.Error):
+        return None
 
 
 def _check_disk_usage() -> None:
@@ -323,6 +382,15 @@ def _check_video_upload_auth(camera_id: str):
     return None
 
 
+def _sanitize_log_value(value: str | None) -> str:
+    """Truncate and strip newlines from untrusted input before logging it.
+
+    Prevents log injection (CRLF-separated fake log lines) from
+    attacker-controlled header/metadata values that fail validation.
+    """
+    return (value or "")[:64].replace("\n", "\\n").replace("\r", "\\r")
+
+
 def _parse_video_duration_ms(value: str | None) -> tuple[int | None, str | None]:
     if value is None or value.strip() == "":
         return None, None
@@ -341,7 +409,7 @@ def _parse_optional_captured_at(value: str | None) -> tuple[datetime | None, str
     try:
         return _parse_captured_at(value), None
     except ValueError:
-        safe_val = (value or "")[:64].replace("\n", "\\n").replace("\r", "\\r")
+        safe_val = _sanitize_log_value(value)
         current_app.logger.error("Invalid video captured_at metadata: %s", safe_val)
         return None, "Invalid captured_at metadata"
 
@@ -391,12 +459,21 @@ def _read_video_upload_payload() -> tuple[object | None, str | None, datetime | 
 @server.route("/")
 def index():
     store = _metadata_store()
-    camera_summaries = store.list_camera_summaries()
+    limit, offset = _parse_pagination()
+    if limit is None:
+        abort(400, description="Invalid pagination parameters")
+    camera_total = store.count_cameras()
+    if camera_total and offset >= camera_total:
+        offset = ((camera_total - 1) // limit) * limit
+    camera_summaries = store.list_camera_summaries(limit=limit, offset=offset)
     one_hour_ago = datetime.now(tz=timezone.utc) - timedelta(hours=1)
     cameras_with_errors = store.camera_ids_with_recent_errors(since=one_hour_ago)
     return render_template(
         "index.html",
         camera_summaries=camera_summaries,
+        camera_total=camera_total,
+        camera_limit=limit,
+        camera_offset=offset,
         image_count=store.total_snapshot_count(),
         cameras_with_errors=cameras_with_errors,
     )
@@ -499,7 +576,7 @@ def upload_file():
     try:
         captured_at = _parse_captured_at(captured_at_raw)
     except ValueError:
-        safe_val = (captured_at_raw or "")[:64].replace("\n", "\\n").replace("\r", "\\r")
+        safe_val = _sanitize_log_value(captured_at_raw)
         current_app.logger.error("Invalid captured_at metadata: %s", safe_val)
         return jsonify({"message": "Invalid captured_at metadata"}), 400
 
@@ -512,7 +589,7 @@ def upload_file():
         )
         snapshot = _metadata_store().record_snapshot(stored)
         _inference_service().enqueue_snapshot(snapshot.id)
-        _snapshot_event_publisher().publish_snapshot_created(snapshot)
+        _snapshot_event_publisher().publish_snapshot_created(snapshot, image_bytes=request.data)
         apply_upload_retention(stored)
         _check_disk_usage()
         metrics = current_app.extensions.get("app_metrics")
@@ -546,10 +623,22 @@ def list_files():
         page = 1
     limit = _PAGINATION_LIMIT_DEFAULT
     offset = (page - 1) * limit
+    before = None
+    before_str = request.args.get("before")
+    if before_str is not None:
+        before = _decode_snapshot_cursor(before_str)
+        if before is None:
+            return jsonify({"message": "Invalid before parameter"}), 400
+        offset = 0
     try:
         store = _metadata_store()
         total = store.count_snapshots()
-        files = store.list_recent_snapshots(limit=limit, offset=offset, include_detections=False)
+        files = store.list_recent_snapshots(
+            limit=limit,
+            offset=offset,
+            before=before,
+            include_detections=False,
+        )
         total_pages = max(1, (total + limit - 1) // limit)
         return render_template(
             "files.html",
@@ -557,6 +646,8 @@ def list_files():
             page=page,
             total_pages=total_pages,
             total=total,
+            before=before,
+            next_before=_encode_snapshot_cursor(files[-1]) if len(files) == limit else None,
         )
     except Exception as exc:  # pragma: no cover
         current_app.logger.error("Error listing files: %s", exc)
@@ -608,10 +699,12 @@ def mjpeg_stream(camera_id: str):
         relative_path = (event.get("snapshot") or {}).get("relative_path")
         if not relative_path:
             return
-        try:
-            data = storage.read_image_by_relative_path(relative_path)
-        except FileNotFoundError:
-            return
+        data = getattr(event, "raw_image", None)
+        if data is None:
+            try:
+                data = storage.read_image_by_relative_path(relative_path)
+            except FileNotFoundError:
+                return
         try:
             frame_queue.get_nowait()
         except Empty:
@@ -625,6 +718,20 @@ def mjpeg_stream(camera_id: str):
     try:
         unsubscribe = publisher.subscribe(on_event, camera_id=camera_id)
 
+        camera = _metadata_store().get_camera(camera_id)
+        expected_interval_seconds = (
+            camera.expected_interval_seconds
+            if camera is not None
+            else current_app.config.get("CAMERA_EXPECTED_INTERVAL_SECONDS", 300)
+        )
+        configured_idle_timeout = current_app.config.get(
+            "MJPEG_STREAM_IDLE_TIMEOUT_SECONDS", 0
+        )
+        idle_timeout_seconds = max(
+            30.0,
+            float(expected_interval_seconds) + 30.0,
+            float(configured_idle_timeout),
+        )
         latest = _metadata_store().list_recent_snapshots(
             camera_id=camera_id, limit=1, include_detections=False
         )
@@ -652,7 +759,7 @@ def mjpeg_stream(camera_id: str):
                 yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + initial_frame + b"\r\n"
             while True:
                 try:
-                    data = frame_queue.get(timeout=30.0)
+                    data = frame_queue.get(timeout=idle_timeout_seconds)
                 except Empty:
                     break
                 yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + data + b"\r\n"
@@ -673,8 +780,21 @@ def mjpeg_stream(camera_id: str):
 
 @server.route("/cameras")
 def list_cameras():
-    camera_summaries = _metadata_store().list_camera_summaries()
-    return render_template("cameras.html", camera_summaries=camera_summaries)
+    limit, offset = _parse_pagination()
+    if limit is None:
+        abort(400, description="Invalid pagination parameters")
+    store = _metadata_store()
+    camera_total = store.count_cameras()
+    if camera_total and offset >= camera_total:
+        offset = ((camera_total - 1) // limit) * limit
+    camera_summaries = store.list_camera_summaries(limit=limit, offset=offset)
+    return render_template(
+        "cameras.html",
+        camera_summaries=camera_summaries,
+        camera_total=camera_total,
+        camera_limit=limit,
+        camera_offset=offset,
+    )
 
 
 @server.route("/cameras/<camera_id>")
@@ -702,7 +822,34 @@ def camera_detail(camera_id: str):
 
 @server.route("/api/cameras")
 def api_cameras():
-    return jsonify({"cameras": [_serialize_camera_summary(item) for item in _metadata_store().list_camera_summaries()]})
+    store = _metadata_store()
+    if "limit" not in request.args and "offset" not in request.args:
+        return jsonify(
+            {
+                "total": store.count_cameras(),
+                "limit": None,
+                "offset": 0,
+                "cameras": [
+                    _serialize_camera_summary(item)
+                    for item in store.list_camera_summaries()
+                ],
+            }
+        )
+    limit, offset = _parse_pagination()
+    if limit is None:
+        return jsonify({"message": "Invalid pagination parameters"}), 400
+    total = store.count_cameras()
+    return jsonify(
+        {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "cameras": [
+                _serialize_camera_summary(item)
+                for item in store.list_camera_summaries(limit=limit, offset=offset)
+            ],
+        }
+    )
 
 
 @server.route("/api/cameras/<camera_id>/videos", methods=["POST"])
@@ -997,6 +1144,14 @@ def api_camera_snapshots(camera_id: str):
     limit, offset = _parse_pagination()
     if limit is None:
         return jsonify({"message": "Invalid pagination parameters"}), 400
+    before = None
+    before_str = request.args.get("before")
+    if before_str is not None:
+        before = _decode_snapshot_cursor(before_str)
+        if before is None:
+            return jsonify({"message": "Invalid before parameter"}), 400
+        if offset:
+            return jsonify({"message": "before cannot be combined with offset"}), 400
 
     since, until = None, None
     since_raw = request.args.get("since")
@@ -1032,7 +1187,7 @@ def api_camera_snapshots(camera_id: str):
 
     total = store.count_camera_snapshots(camera_id, since=since, until=until)
     snapshots = store.list_camera_snapshots(
-        camera_id, limit=limit, offset=offset, since=since, until=until
+        camera_id, limit=limit, offset=offset, before=before, since=since, until=until
     )
     return jsonify(
         {
@@ -1040,6 +1195,9 @@ def api_camera_snapshots(camera_id: str):
             "total": total,
             "limit": limit,
             "offset": offset,
+            "next_before": (
+                _encode_snapshot_cursor(snapshots[-1]) if len(snapshots) == limit else None
+            ),
             "snapshots": [_serialize_snapshot(s) for s in snapshots],
         }
     )
@@ -1117,16 +1275,32 @@ def api_detections():
     limit, offset = _parse_pagination()
     if limit is None:
         return jsonify({"message": "Invalid pagination parameters"}), 400
+    before = None
+    before_str = request.args.get("before")
+    if before_str is not None:
+        before = _decode_detection_cursor(before_str)
+        if before is None:
+            return jsonify({"message": "Invalid before parameter"}), 400
+        if offset:
+            return jsonify({"message": "before cannot be combined with offset"}), 400
 
     total = store.count_detections(camera_id=camera_id, since=since, confidence_min=confidence_min)
     detections = store.list_detections(
-        camera_id=camera_id, since=since, limit=limit, offset=offset, confidence_min=confidence_min
+        camera_id=camera_id,
+        since=since,
+        limit=limit,
+        offset=offset,
+        before=before,
+        confidence_min=confidence_min,
     )
     return jsonify(
         {
             "total": total,
             "limit": limit,
             "offset": offset,
+            "next_before": (
+                _encode_detection_cursor(detections[-1]) if len(detections) == limit else None
+            ),
             "detections": detections,
         }
     )

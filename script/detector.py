@@ -101,6 +101,7 @@ class TFLiteCpuDetector:
         input_detail = self._input_details[0]
         _, height, width, _channels = input_detail["shape"]
         image = self._image.open(BytesIO(image_bytes))
+        image.draft("RGB", (width, height))
         image = self._image_ops.exif_transpose(image).convert("RGB").resize((width, height))
         array = self._np.asarray(image)
 
