@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import gzip
 from io import BytesIO
 from unittest.mock import patch
 
@@ -1784,3 +1785,46 @@ def test_static_base_css_is_served_with_long_lived_cache_headers(client):
     assert len(response.data) > 0
     assert b":root" in response.data
     assert response.headers["Cache-Control"] == "public, max-age=31536000, immutable"
+
+
+def test_html_response_is_gzip_compressed_when_client_supports_it(client):
+    response = client.get("/api/docs", headers={"Accept-Encoding": "gzip"})
+
+    assert response.status_code == 200
+    assert response.headers.get("Content-Encoding") == "gzip"
+    assert response.headers.get("Vary") == "Accept-Encoding"
+    # The test client doesn't auto-decode Content-Encoding (unlike a real
+    # browser), so response.data is the raw gzip payload here.
+    decompressed = gzip.decompress(response.data)
+    assert len(response.data) < len(decompressed)
+    assert b"swagger-ui" in decompressed
+
+
+def test_response_is_not_compressed_when_client_omits_accept_encoding(client):
+    response = client.get("/api/docs", headers={"Accept-Encoding": ""})
+
+    assert response.status_code == 200
+    assert "Content-Encoding" not in response.headers
+
+
+def test_small_json_response_is_not_compressed(client):
+    # /healthz's body is well under the compression size floor; compressing
+    # it would spend CPU for a net-negative bandwidth result.
+    response = client.get("/healthz", headers={"Accept-Encoding": "gzip"})
+
+    assert response.status_code == 200
+    assert "Content-Encoding" not in response.headers
+
+
+def test_binary_image_response_is_not_gzip_compressed(client):
+    upload = client.post(
+        "/upload",
+        data=MINIMAL_JPEG,
+        headers=UPLOAD_HEADERS,
+    ).get_json()
+
+    response = client.get(f"/files/{upload['filename']}", headers={"Accept-Encoding": "gzip"})
+
+    assert response.status_code == 200
+    assert "Content-Encoding" not in response.headers
+    assert response.data == MINIMAL_JPEG
