@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from io import BytesIO
+import uuid
 from unittest.mock import patch
 
 from flask import request
@@ -93,6 +94,48 @@ def test_healthz_ready_low_disk(client):
     body = response.get_json()
     assert body["status"] == "degraded"
     assert body["disk_free_mb"] == 0
+
+
+def test_healthz_ready_storage_probe_is_cached_within_ttl(app):
+    # Regression test for #343: the write/read/delete probe should not run
+    # on every single call -- a second request within the TTL window must
+    # reuse the cached result instead of touching disk again.
+    with app.test_client() as c:
+        with patch("script.routes.uuid.uuid4", wraps=uuid.uuid4) as mock_uuid4:
+            first = c.get("/healthz/ready")
+            second = c.get("/healthz/ready")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.get_json()["storage"] == "ok"
+    assert second.get_json()["storage"] == "ok"
+    assert mock_uuid4.call_count == 1
+
+
+def test_healthz_ready_storage_probe_refreshes_after_ttl(app):
+    with app.test_client() as c:
+        with patch("script.routes.time.monotonic", side_effect=[0.0, 1.0, 10.0]):
+            with patch("script.routes.uuid.uuid4", wraps=uuid.uuid4) as mock_uuid4:
+                c.get("/healthz/ready")
+                c.get("/healthz/ready")
+                c.get("/healthz/ready")
+
+    # First call probes (cache miss), second reuses the cache (still fresh
+    # at t=1), third probes again once the TTL has elapsed (t=10).
+    assert mock_uuid4.call_count == 2
+
+
+def test_healthz_ready_storage_failure_is_cached_within_ttl(app):
+    with app.test_client() as c:
+        with patch("script.routes.Path.write_bytes", side_effect=OSError("disk full")) as mock_write:
+            first = c.get("/healthz/ready")
+            second = c.get("/healthz/ready")
+
+    assert first.status_code == 503
+    assert second.status_code == 503
+    assert first.get_json()["storage"] == "error"
+    assert second.get_json()["storage"] == "error"
+    assert mock_write.call_count == 1
 
 
 def test_healthz_ready_inference_worker_stopped(app):
