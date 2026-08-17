@@ -300,7 +300,7 @@
     updateFrameSize(snap);
 
     if (latImg && snap.url) {
-      latImg.src = snap.url + '?t=' + Date.now();
+      latImg.src = snap.url;
     }
     if (latTs && snap.captured_at) {
       const timestamp = formatTimestamp(snap.captured_at);
@@ -319,7 +319,7 @@
       a.onmouseout  = () => a.style.background = '';
       a.innerHTML = `
         <div style="width:56px;height:42px;border-radius:4px;overflow:hidden;background:#12131a;flex-shrink:0;">
-          <img src="${snap.url}?t=${Date.now()}" alt="" style="width:100%;height:100%;object-fit:cover;">
+          <img src="${snap.url}" alt="" style="width:100%;height:100%;object-fit:cover;">
         </div>
         <div style="flex:1;min-width:0;">
           <div style="font-size:11px;color:var(--text-1);font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${snap.filename}</div>
