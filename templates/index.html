@@ -254,7 +254,7 @@
     updateFrameSize(cid, snap);
 
     if (img && snap.url) {
-      img.src = snap.url + '?t=' + Date.now();
+      img.src = snap.url;
     }
     if (meta) {
       const timestamp = formatTimestamp(snap.captured_at || snap.stored_at);
