@@ -1820,6 +1820,24 @@ def test_index_page_links_to_external_base_css_instead_of_inline_style(client):
     assert '<link rel="stylesheet" href="/static/base.css">' in page
 
 
+def test_dashboard_pages_do_not_load_fonts_from_a_third_party_cdn(client):
+    # Regression test for #341: _base.html (shared by every full-page
+    # dashboard route) previously loaded Inter/JetBrains Mono from
+    # fonts.googleapis.com on every render -- the only remaining external CDN
+    # dependency after the Swagger UI vendoring fix (#316, see
+    # test_api_docs_does_not_load_assets_from_a_third_party_cdn above). Pages
+    # must render entirely from same-origin assets so a LAN/Tailscale-only
+    # deployment with no general internet egress isn't penalized by a
+    # render-relevant external network round-trip on every page load.
+    for path in ("/", "/cameras", "/files"):
+        response = client.get(path)
+        page = response.get_data(as_text=True)
+
+        assert response.status_code == 200
+        assert "fonts.googleapis.com" not in page
+        assert "fonts.gstatic.com" not in page
+
+
 def test_static_base_css_is_served_with_long_lived_cache_headers(client):
     response = client.get("/static/base.css")
 

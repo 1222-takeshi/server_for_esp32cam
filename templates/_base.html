@@ -4,7 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}ESP32-CAM{% endblock %} — CamServer</title>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <!-- Intentionally no external font CDN (see #341 / #316): this page must
+       render fully from same-origin assets so LAN/Tailscale-only
+       deployments with no general internet egress aren't penalized by a
+       render-relevant external network round-trip. static/base.css's
+       --sans/--mono variables already fall back to system-ui/ui-monospace
+       when 'Inter'/'JetBrains Mono' aren't installed locally. -->
   <link rel="stylesheet" href="{{ url_for('static', filename='base.css') }}">
   {% block head %}{% endblock %}
 </head>
