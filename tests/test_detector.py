@@ -167,6 +167,19 @@ def test_prepare_input_preserves_exif_orientation_with_draft(monkeypatch):
     assert pixel_distance(prepared.pixels[0], unrotated[0]) >= 100
 
 
+def test_shape_of_uses_fast_path_for_ndarray_like_objects():
+    array = FakeArray((1, 10, 4), FakeNumpy.float32)
+
+    assert TFLiteCpuDetector._shape_of(array) == (1, 10, 4)
+
+
+def test_shape_of_falls_back_correctly_for_nested_lists_and_tuples():
+    assert TFLiteCpuDetector._shape_of([[1, 2, 3, 4], [5, 6, 7, 8]]) == (2, 4)
+    assert TFLiteCpuDetector._shape_of(((1, 2), (3, 4), (5, 6))) == (3, 2)
+    assert TFLiteCpuDetector._shape_of([]) == (0,)
+    assert TFLiteCpuDetector._shape_of(0.5) == ()
+
+
 def _fake_module(name: str, **attrs):
     import types
 
