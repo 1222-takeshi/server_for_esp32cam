@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import atexit
 from datetime import datetime
+import gzip
 import threading
 from zoneinfo import ZoneInfo
 
@@ -28,6 +29,53 @@ from script.websocket_routes import register_websocket_routes
 
 
 JST = ZoneInfo("Asia/Tokyo")
+
+# JPEG/MP4 responses are already compressed and served via send_file with
+# long-lived Cache-Control (see storage/routes), so gzip only ever applies
+# to the text-ish payloads below (dashboard HTML, JSON APIs, vendored
+# CSS/JS). Small bodies are skipped since gzip overhead outweighs the
+# bandwidth saved below this size.
+_COMPRESSIBLE_MIMETYPES = frozenset(
+    {
+        "text/html",
+        "text/css",
+        "text/plain",
+        "text/javascript",
+        "application/javascript",
+        "application/json",
+        "image/svg+xml",
+    }
+)
+_MIN_COMPRESS_BYTES = 500
+
+
+def _maybe_compress_response(response):
+    """Gzip-compress compressible, non-streamed responses when the client
+    supports it. Reduces bandwidth for the dashboard/API without touching
+    already-compressed binary responses (images/video) or streaming
+    responses (MJPEG, WebSocket upgrades, Range/conditional send_file)."""
+
+    if response.direct_passthrough or response.is_streamed:
+        return response
+    if response.headers.get("Content-Encoding"):
+        return response
+    if "gzip" not in request.accept_encodings:
+        return response
+    if (response.mimetype or "") not in _COMPRESSIBLE_MIMETYPES:
+        return response
+
+    data = response.get_data()
+    if len(data) < _MIN_COMPRESS_BYTES:
+        return response
+
+    response.set_data(gzip.compress(data, compresslevel=6))
+    response.headers["Content-Encoding"] = "gzip"
+    vary = response.headers.get("Vary")
+    if not vary:
+        response.headers["Vary"] = "Accept-Encoding"
+    elif "Accept-Encoding" not in vary:
+        response.headers["Vary"] = f"{vary}, Accept-Encoding"
+    return response
 
 
 def _create_detector(app: Flask):
@@ -281,7 +329,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             # to cache aggressively, and this doesn't depend on Flask's
             # SEND_FILE_MAX_AGE_DEFAULT default of "no explicit max-age".
             response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
-        return response
+        return _maybe_compress_response(response)
 
     register_websocket_routes(
         app,
