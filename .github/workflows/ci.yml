@@ -19,6 +19,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      esp32_example: ${{ steps.filter.outputs.esp32_example }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            esp32_example:
+              - 'examples/esp32cam_snapshot_upload/**'
+              - '.github/workflows/ci.yml'
+
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -86,6 +100,12 @@ jobs:
         run: pip-audit --desc on
 
   compile-esp32-example:
+    needs: changes
+    # Skip on pushes/PRs that don't touch the example sketch or this
+    # workflow file -- arduino/compile-sketches (downloading the Arduino
+    # ESP32 core + compiling the sketch) is one of the slower jobs here and
+    # has no bearing on script/docs/tests-only changes. See #350.
+    if: needs.changes.outputs.esp32_example == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
