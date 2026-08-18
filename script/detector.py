@@ -141,14 +141,25 @@ class TFLiteCpuDetector:
 
     @staticmethod
     def _shape_of(tensor: object) -> tuple[int, ...]:
+        # Fast path: numpy arrays (the normal TFLite output) expose `.shape`
+        # directly, so this is the only branch exercised in production.
         shape = getattr(tensor, "shape", None)
         if shape is not None:
             return tuple(int(dim) for dim in shape)
-        if isinstance(tensor, (list, tuple)):
-            if not tensor:
-                return (0,)
-            return (len(tensor),) + TFLiteCpuDetector._shape_of(tensor[0])
-        return ()
+
+        # Fallback for genuinely non-ndarray inputs (nested list/tuple
+        # tensors, e.g. from lightweight test doubles). Walk iteratively
+        # instead of recursing per dimension to avoid Python-level call
+        # overhead on each `_shape_of` invocation.
+        dims: list[int] = []
+        node = tensor
+        while isinstance(node, (list, tuple)):
+            if not node:
+                dims.append(0)
+                return tuple(dims)
+            dims.append(len(node))
+            node = node[0]
+        return tuple(dims)
 
     @classmethod
     def _collapse_leading_singleton_dims(cls, tensor: object):
