@@ -542,7 +542,7 @@ def healthz_ready():
         degraded = True
 
     try:
-        usage = shutil.disk_usage(upload_dir)
+        usage = _cached_disk_usage(str(upload_dir))
         checks["disk_free_mb"] = usage.free // (1024 * 1024)
         if usage.free / usage.total < 0.05:
             degraded = True

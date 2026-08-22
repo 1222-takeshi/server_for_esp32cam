@@ -97,6 +97,22 @@ def test_healthz_ready_low_disk(client):
     assert body["disk_free_mb"] == 0
 
 
+def test_healthz_ready_disk_usage_is_cached_within_ttl(app):
+    # Regression test: healthz_ready() must reuse _cached_disk_usage() like
+    # /metrics does, instead of calling shutil.disk_usage() directly on every
+    # request.
+    usage = type("usage", (), {"free": 9_000, "total": 10_000, "used": 1_000})()
+    with app.test_client() as c:
+        with patch("script.routes.shutil.disk_usage", return_value=usage) as mock_disk_usage:
+            first = c.get("/healthz/ready")
+            second = c.get("/healthz/ready")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.get_json()["disk_free_mb"] == second.get_json()["disk_free_mb"]
+    assert mock_disk_usage.call_count == 1
+
+
 def test_healthz_ready_storage_probe_is_cached_within_ttl(app):
     # Regression test for #343: the write/read/delete probe should not run
     # on every single call -- a second request within the TTL window must
@@ -114,8 +130,11 @@ def test_healthz_ready_storage_probe_is_cached_within_ttl(app):
 
 
 def test_healthz_ready_storage_probe_refreshes_after_ttl(app):
+    # Each /healthz/ready call now takes two time.monotonic() readings --
+    # one for the storage probe cache, one for the disk usage cache -- so
+    # the mocked clock needs a matching value per reading, in call order.
     with app.test_client() as c:
-        with patch("script.routes.time.monotonic", side_effect=[0.0, 1.0, 10.0]):
+        with patch("script.routes.time.monotonic", side_effect=[0.0, 0.0, 1.0, 1.0, 10.0, 10.0]):
             with patch("script.routes.uuid.uuid4", wraps=uuid.uuid4) as mock_uuid4:
                 c.get("/healthz/ready")
                 c.get("/healthz/ready")
