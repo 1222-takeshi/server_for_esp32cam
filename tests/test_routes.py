@@ -1896,6 +1896,56 @@ def test_small_json_response_is_not_compressed(client):
     assert "Content-Encoding" not in response.headers
 
 
+def test_openapi_yaml_response_is_gzip_compressed_when_client_supports_it(client):
+    # Regression test: application/yaml was missing from
+    # _COMPRESSIBLE_MIMETYPES, so this highly-compressible ~40KB spec was
+    # served uncompressed on every /api/docs Swagger UI load.
+    response = client.get("/api/openapi.yaml", headers={"Accept-Encoding": "gzip"})
+
+    assert response.status_code == 200
+    assert response.headers.get("Content-Encoding") == "gzip"
+    decompressed = gzip.decompress(response.data)
+    assert len(response.data) < len(decompressed)
+    assert b"openapi:" in decompressed
+
+
+def test_csv_export_response_is_gzip_compressed_when_client_supports_it(app):
+    # Regression test: text/csv was missing from _COMPRESSIBLE_MIMETYPES, so
+    # /api/detections?export=csv (up to _EXPORT_ROW_LIMIT rows) was served
+    # uncompressed despite being a highly-compressible text body.
+    from script.detector import Detection
+
+    fake_det = FakePersonDetector(
+        [Detection(label="person", score=0.9, x1=0.1, y1=0.1, x2=0.5, y2=0.9)]
+    )
+    inference = app.extensions["inference_service"]
+    original_detector = inference.detector
+    inference.detector = fake_det
+
+    with app.test_client() as c:
+        for i in range(30):
+            c.post(
+                "/upload",
+                data=MINIMAL_JPEG,
+                content_type="image/jpeg",
+                headers={
+                    "X-Device-Id": f"cam-csv-gzip-{i}",
+                    "X-Captured-At": "2026-01-01T00:00:00Z",
+                },
+            )
+        response = c.get("/api/detections?export=csv", headers={"Accept-Encoding": "gzip"})
+
+    inference.detector = original_detector
+
+    assert response.status_code == 200
+    assert response.headers.get("Content-Encoding") == "gzip"
+    decompressed = gzip.decompress(response.data)
+    assert len(response.data) < len(decompressed)
+    assert decompressed.decode().splitlines()[0] == (
+        "camera_id,filename,captured_at,stored_at,label,score,track_id,x1,y1,x2,y2"
+    )
+
+
 def test_binary_image_response_is_not_gzip_compressed(client):
     upload = client.post(
         "/upload",
