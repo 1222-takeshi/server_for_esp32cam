@@ -44,6 +44,8 @@ _COMPRESSIBLE_MIMETYPES = frozenset(
         "application/javascript",
         "application/json",
         "image/svg+xml",
+        "application/yaml",
+        "text/csv",
     }
 )
 _MIN_COMPRESS_BYTES = 500
@@ -103,12 +105,20 @@ def _create_detector(app: Flask):
 
 
 def start_retention_scheduler(app: Flask) -> bool:
-    """Start retention in the current process when it is not a test app."""
+    """Start retention in the current process when it is not a test app.
+
+    Called from `_before_request` on every request when
+    RETENTION_SCHEDULER_AUTO_START is disabled (the `--preload` deployment
+    mode), so this checks the lock-free `is_running` property before
+    calling `scheduler.start()` — which re-acquires `_state_lock` on every
+    call — to avoid taking that lock on every request once the scheduler is
+    already up.
+    """
 
     if app.config.get("TESTING", False):
         return False
     scheduler = app.extensions.get("retention_scheduler")
-    if scheduler is None:
+    if scheduler is None or scheduler.is_running:
         return False
     return scheduler.start()
 

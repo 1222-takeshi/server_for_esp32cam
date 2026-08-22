@@ -299,6 +299,27 @@ def test_scheduler_can_be_deferred_until_worker_initialization(app_factory):
     assert scheduler.is_running is False
 
 
+def test_start_retention_scheduler_skips_lock_once_already_running(app_factory):
+    # Regression test: start_retention_scheduler() is called from
+    # _before_request on every request when RETENTION_SCHEDULER_AUTO_START
+    # is disabled. Once the scheduler is running, it must short-circuit on
+    # the lock-free is_running check instead of re-invoking scheduler.start()
+    # (which re-acquires _state_lock) on every subsequent request.
+    app = app_factory(TESTING=False, RETENTION_SCHEDULER_AUTO_START=False)
+    scheduler = app.extensions["retention_scheduler"]
+
+    assert start_retention_scheduler(app) is True
+    assert scheduler.is_running is True
+
+    start_calls = []
+    scheduler.start = lambda: start_calls.append(True) or True
+
+    assert start_retention_scheduler(app) is False
+    assert start_calls == [], "start() must not be re-invoked once already running"
+
+    scheduler.stop()
+
+
 def test_deferred_scheduler_starts_on_first_worker_request(app_factory):
     app = app_factory(TESTING=False, RETENTION_SCHEDULER_AUTO_START=False)
     scheduler = app.extensions["retention_scheduler"]
