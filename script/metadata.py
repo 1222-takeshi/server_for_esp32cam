@@ -837,6 +837,59 @@ class SQLiteMetadataStore:
         )
         return [self._snapshot_from_row(row, detections.get(row["id"], ())) for row in rows]
 
+    def list_recent_snapshots_page(
+        self,
+        *,
+        limit: int,
+        offset: int = 0,
+        before: tuple[str, int] | None = None,
+        camera_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        include_detections: bool = True,
+    ) -> tuple[list[SnapshotRecord], int]:
+        """Like list_recent_snapshots(), but also returns the total number
+        of matching rows without a separate COUNT(*) round trip (#342).
+
+        Uses SQLite's ``COUNT(*) OVER()`` window function so the total is
+        computed by the same query that fetches the page. When the page
+        itself comes back empty (e.g. an out-of-range offset) the window
+        function has no row to attach the total to, so this falls back to
+        a plain count_snapshots() call for that edge case only.
+        """
+        query = "SELECT *, COUNT(*) OVER() AS total_count FROM snapshots WHERE 1 = 1"
+        params: list[object] = []
+        if camera_id is not None:
+            query += " AND camera_id = ?"
+            params.append(camera_id)
+        if since is not None:
+            query += " AND stored_at >= ?"
+            params.append(since.astimezone(timezone.utc).isoformat())
+        if until is not None:
+            query += " AND stored_at <= ?"
+            params.append(until.astimezone(timezone.utc).isoformat())
+        if before is not None:
+            before_stored_at, before_id = before
+            query += " AND (stored_at < ? OR (stored_at = ? AND id < ?))"
+            params.extend([before_stored_at, before_stored_at, before_id])
+        query += " ORDER BY stored_at DESC, id DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
+        conn = self._get_connection()
+        rows = conn.execute(query, tuple(params)).fetchall()
+        if rows:
+            total = int(rows[0]["total_count"])
+        else:
+            total = self.count_snapshots(camera_id=camera_id, since=since, until=until)
+
+        detections = (
+            self._detections_by_snapshot_id([row["id"] for row in rows])
+            if include_detections
+            else {}
+        )
+        snapshots = [self._snapshot_from_row(row, detections.get(row["id"], ())) for row in rows]
+        return snapshots, total
+
     def get_camera(self, camera_id: str) -> CameraRecord | None:
         conn = self._get_connection()
         row = conn.execute(
@@ -1130,6 +1183,78 @@ class SQLiteMetadataStore:
             }
             for row in rows
         ]
+
+    def list_detections_page(
+        self,
+        *,
+        camera_id: str | None = None,
+        since: datetime | None = None,
+        limit: int = 50,
+        offset: int = 0,
+        before: tuple[str, int, int] | None = None,
+        confidence_min: float | None = None,
+    ) -> tuple[list[dict[str, object]], int]:
+        """Like list_detections(), but also returns the total number of
+        matching rows without a separate COUNT(*) round trip (#342).
+
+        See list_recent_snapshots_page() for why COUNT(*) OVER() is used
+        and when it falls back to a plain count_detections() call.
+        """
+        where, params = self._detection_where_clause(
+            camera_id=camera_id,
+            since=since,
+            confidence_min=confidence_min,
+            before=before,
+        )
+        query = f"""
+            SELECT
+                detections.id AS detection_id,
+                snapshots.id AS snapshot_id,
+                detections.label,
+                detections.score,
+                detections.x1,
+                detections.y1,
+                detections.x2,
+                detections.y2,
+                detections.track_id,
+                snapshots.filename,
+                snapshots.camera_id,
+                snapshots.captured_at,
+                snapshots.stored_at,
+                COUNT(*) OVER() AS total_count
+            FROM detections
+            JOIN snapshots ON snapshots.id = detections.snapshot_id
+            {where}
+            ORDER BY snapshots.stored_at DESC, snapshots.id DESC, detections.id DESC
+            LIMIT ? OFFSET ?
+        """
+        params.extend([limit, offset])
+
+        conn = self._get_connection()
+        rows = conn.execute(query, tuple(params)).fetchall()
+        if rows:
+            total = int(rows[0]["total_count"])
+        else:
+            total = self.count_detections(
+                camera_id=camera_id, since=since, confidence_min=confidence_min
+            )
+
+        detections = [
+            {
+                "detection_id": row["detection_id"],
+                "snapshot_id": row["snapshot_id"],
+                "label": row["label"],
+                "score": row["score"],
+                "bbox": [row["x1"], row["y1"], row["x2"], row["y2"]],
+                "track_id": row["track_id"],
+                "filename": row["filename"],
+                "camera_id": row["camera_id"],
+                "captured_at": row["captured_at"],
+                "stored_at": row["stored_at"],
+            }
+            for row in rows
+        ]
+        return detections, total
 
     def list_pending_snapshot_ids(self, *, limit: int | None = None) -> list[int]:
         conn = self._get_connection()
