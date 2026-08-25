@@ -18,6 +18,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- `/static/*`（vendored swagger-ui JS/CSS、`base.css` など）が `send_file` の `direct_passthrough` によりgzip圧縮をスキップしていた問題を修正。Range リクエストは従来通り無圧縮のまま扱う
+
 ### Added
 - OpenAPI 3.1 仕様 (`docs/openapi.yaml`) と Swagger UI (`GET /api/docs`)
 - 脅威モデルとセキュリティ運用チェックリスト (`docs/ja/security.md`)

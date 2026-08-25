@@ -1958,3 +1958,74 @@ def test_binary_image_response_is_not_gzip_compressed(client):
     assert response.status_code == 200
     assert "Content-Encoding" not in response.headers
     assert response.data == MINIMAL_JPEG
+
+
+def test_static_vendored_js_response_is_gzip_compressed_when_client_supports_it(client):
+    # Regression test: Flask's `static` endpoint serves files via send_file
+    # with direct_passthrough=True (an efficient wsgi.file_wrapper path),
+    # which made _maybe_compress_response's original direct_passthrough
+    # guard skip static assets entirely -- even though they are exactly the
+    # compressible, long-lived-cached content this function targets. The
+    # vendored ~1.5MB swagger-ui-bundle.js was served fully uncompressed on
+    # every uncached /api/docs load as a result.
+    response = client.get(
+        "/static/vendor/swagger-ui/swagger-ui-bundle.js",
+        headers={"Accept-Encoding": "gzip"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers.get("Content-Encoding") == "gzip"
+    assert response.headers.get("Cache-Control") == "public, max-age=31536000, immutable"
+    decompressed = gzip.decompress(response.data)
+    assert len(response.data) < len(decompressed)
+    assert b"SwaggerUIBundle" in decompressed
+
+
+def test_static_base_css_response_is_gzip_compressed_when_client_supports_it(client):
+    response = client.get("/static/base.css", headers={"Accept-Encoding": "gzip"})
+
+    assert response.status_code == 200
+    assert response.headers.get("Content-Encoding") == "gzip"
+    decompressed = gzip.decompress(response.data)
+    assert len(response.data) < len(decompressed)
+    assert b":root" in decompressed
+
+
+def test_static_response_is_not_compressed_when_client_omits_accept_encoding(client):
+    response = client.get("/static/base.css", headers={"Accept-Encoding": ""})
+
+    assert response.status_code == 200
+    assert "Content-Encoding" not in response.headers
+    assert b":root" in response.data
+
+
+def test_static_conditional_get_304_is_not_gzip_compressed(client):
+    # A 304 Not Modified response (send_file's conditional=True handling,
+    # matched via If-None-Match) has no body to compress; the compression
+    # path must recognize the non-200 status and leave it untouched.
+    first = client.get("/static/base.css", headers={"Accept-Encoding": "gzip"})
+    etag = first.headers.get("ETag")
+
+    response = client.get(
+        "/static/base.css",
+        headers={"Accept-Encoding": "gzip", "If-None-Match": etag},
+    )
+
+    assert response.status_code == 304
+    assert "Content-Encoding" not in response.headers
+    assert response.data == b""
+
+
+def test_static_range_request_is_not_gzip_compressed(client):
+    # A Range request expects byte-offset semantics against the
+    # uncompressed body; compressing here would make the offsets meaningless
+    # and break the response, so the compression path must leave it alone.
+    response = client.get(
+        "/static/vendor/swagger-ui/swagger-ui-bundle.js",
+        headers={"Accept-Encoding": "gzip", "Range": "bytes=0-99"},
+    )
+
+    assert response.status_code == 206
+    assert "Content-Encoding" not in response.headers
+    assert response.headers.get("Content-Range", "").startswith("bytes 0-99/")
+    assert len(response.data) == 100
