@@ -57,14 +57,33 @@ def _maybe_compress_response(response):
     already-compressed binary responses (images/video) or streaming
     responses (MJPEG, WebSocket upgrades, Range/conditional send_file)."""
 
-    if response.direct_passthrough or response.is_streamed:
-        return response
     if response.headers.get("Content-Encoding"):
         return response
     if "gzip" not in request.accept_encodings:
         return response
     if (response.mimetype or "") not in _COMPRESSIBLE_MIMETYPES:
         return response
+
+    if response.direct_passthrough or response.is_streamed:
+        # Flask's `static` endpoint (base.css, vendored swagger-ui JS/CSS,
+        # ...) is served via send_file with direct_passthrough=True (and a
+        # file-wrapper iterable, so also is_streamed) for efficient
+        # wsgi.file_wrapper delivery, which otherwise bypasses gzip
+        # entirely -- even though these are exactly the compressible,
+        # long-lived-cached assets this function targets (e.g. the ~1.5MB
+        # vendored swagger-ui-bundle.js served uncompressed on every
+        # uncached /api/docs load). Buffering the file into memory here is
+        # safe for this endpoint specifically: static assets are small
+        # (the largest vendored file is a few MB), and Range requests are
+        # left untouched below since compression would break byte-offset
+        # semantics.
+        if (
+            response.status_code != 200
+            or request.endpoint != "static"
+            or "Range" in request.headers
+        ):
+            return response
+        response.direct_passthrough = False
 
     data = response.get_data()
     if len(data) < _MIN_COMPRESS_BYTES:
