@@ -528,6 +528,105 @@ def test_list_detections_supports_composite_cursor(tmp_path):
     assert [row["filename"] for row in second_page] == [snapshots[1].filename]
 
 
+def test_list_recent_snapshots_page_matches_separate_count_and_list(tmp_path):
+    # #342: list_recent_snapshots_page() must return the same (rows, total)
+    # a caller would get from count_snapshots() + list_recent_snapshots(),
+    # but fused into a single query via COUNT(*) OVER() instead of two.
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    snapshots = [
+        store.record_snapshot(
+            _stored_image(
+                name=f"{index}.jpg",
+                relative_path=f"cam-a/images/{index}.jpg",
+                camera_id="cam-a",
+                captured_at=stored_at + timedelta(seconds=index),
+                stored_at=stored_at + timedelta(seconds=index),
+            )
+        )
+        for index in range(3)
+    ]
+
+    page, total = store.list_recent_snapshots_page(limit=2, offset=0)
+
+    assert total == store.count_snapshots() == 3
+    assert [s.id for s in page] == [snapshots[2].id, snapshots[1].id]
+    assert [s.id for s in page] == [s.id for s in store.list_recent_snapshots(limit=2, offset=0)]
+
+
+def test_list_recent_snapshots_page_falls_back_to_count_when_page_is_empty(tmp_path):
+    # An offset past the last row returns zero rows, so the COUNT(*) OVER()
+    # window has nothing to attach the total to; the total must still be
+    # correct via the count_snapshots() fallback.
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    store.record_snapshot(
+        _stored_image(
+            name="only.jpg",
+            relative_path="cam-a/images/only.jpg",
+            camera_id="cam-a",
+            captured_at=stored_at,
+            stored_at=stored_at,
+        )
+    )
+
+    page, total = store.list_recent_snapshots_page(limit=10, offset=50)
+
+    assert page == []
+    assert total == 1
+
+
+def test_list_detections_page_matches_separate_count_and_list(tmp_path):
+    # #342: list_detections_page() must return the same (rows, total) a
+    # caller would get from count_detections() + list_detections(), fused
+    # into a single query instead of two.
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    for index, label in enumerate(["person", "cat", "dog"]):
+        snapshot = store.record_snapshot(
+            _stored_image(
+                name=f"{index}.jpg",
+                relative_path=f"cam-a/images/{index}.jpg",
+                camera_id="cam-a",
+                captured_at=stored_at + timedelta(seconds=index),
+                stored_at=stored_at + timedelta(seconds=index),
+            )
+        )
+        store.mark_snapshot_result(
+            snapshot.id,
+            detections=[Detection(label=label, score=0.9, x1=0, y1=0, x2=1, y2=1)],
+        )
+
+    page, total = store.list_detections_page(camera_id="cam-a", limit=2, offset=0)
+
+    assert total == store.count_detections(camera_id="cam-a") == 3
+    assert [d["label"] for d in page] == ["dog", "cat"]
+    assert page == store.list_detections(camera_id="cam-a", limit=2, offset=0)
+
+
+def test_list_detections_page_falls_back_to_count_when_page_is_empty(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    snapshot = store.record_snapshot(
+        _stored_image(
+            name="only.jpg",
+            relative_path="cam-a/images/only.jpg",
+            camera_id="cam-a",
+            captured_at=stored_at,
+            stored_at=stored_at,
+        )
+    )
+    store.mark_snapshot_result(
+        snapshot.id,
+        detections=[Detection(label="person", score=0.9, x1=0, y1=0, x2=1, y2=1)],
+    )
+
+    page, total = store.list_detections_page(limit=10, offset=50)
+
+    assert page == []
+    assert total == 1
+
+
 def test_list_pending_snapshot_ids_returns_all_by_default(tmp_path):
     # A previous default of limit=100 silently dropped any pending snapshot
     # beyond the first 100 (oldest-first) from the one-time startup recovery

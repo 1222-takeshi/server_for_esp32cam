@@ -664,8 +664,7 @@ def list_files():
         offset = 0
     try:
         store = _metadata_store()
-        total = store.count_snapshots()
-        files = store.list_recent_snapshots(
+        files, total = store.list_recent_snapshots_page(
             limit=limit,
             offset=offset,
             before=before,
@@ -1316,8 +1315,7 @@ def api_detections():
         if offset:
             return jsonify({"message": "before cannot be combined with offset"}), 400
 
-    total = store.count_detections(camera_id=camera_id, since=since, confidence_min=confidence_min)
-    detections = store.list_detections(
+    detections, total = store.list_detections_page(
         camera_id=camera_id,
         since=since,
         limit=limit,
