@@ -1341,6 +1341,44 @@ def test_delete_camera_removes_associated_device_logs(client):
     assert logs_response.status_code == 404
 
 
+def test_delete_camera_removes_prometheus_metric_labels(client):
+    # #366: upload_total/camera_last_seen_timestamp .labels(camera_id=...)
+    # child metrics never expire on their own, so a deleted camera_id would
+    # otherwise keep showing up in every future /metrics scrape forever.
+    client.post(
+        "/upload",
+        data=MINIMAL_JPEG,
+        headers={
+            "Content-Type": "image/jpeg",
+            "X-Device-Id": "cam-metrics-del",
+            "X-Captured-At": "2026-01-01T12:00:00Z",
+        },
+    )
+
+    before = client.get("/metrics").get_data(as_text=True)
+    assert 'camera_id="cam-metrics-del"' in before
+
+    response = client.delete("/api/cameras/cam-metrics-del")
+    assert response.status_code == 200
+
+    after = client.get("/metrics").get_data(as_text=True)
+    assert 'camera_id="cam-metrics-del"' not in after
+
+
+def test_delete_camera_metrics_cleanup_tolerates_unlabeled_camera(client):
+    # A camera that was created but never uploaded/scraped has no
+    # .labels(camera_id=...) child metric yet -- deletion must not raise.
+    client.post(
+        "/api/status_update",
+        json={"device_id": "cam-metrics-never-labeled"},
+        content_type="application/json",
+    )
+
+    response = client.delete("/api/cameras/cam-metrics-never-labeled")
+
+    assert response.status_code == 200
+
+
 def test_upload_logs_disk_warning_at_85_percent(client, caplog):
     fake_usage = type("disk_usage", (), {"total": 100, "used": 86, "free": 14})()
     with patch("script.routes.shutil.disk_usage", return_value=fake_usage):

@@ -1011,6 +1011,10 @@ def api_delete_camera(camera_id: str):
 
     current_app.logger.info("Camera deleted: camera_id=%s delete_files=%s", camera_id, delete_files)
 
+    app_metrics = current_app.extensions.get("app_metrics")
+    if app_metrics is not None:
+        app_metrics.forget_camera(camera_id)
+
     storage_deleted = False
     if delete_files:
         try:
