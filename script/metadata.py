@@ -1062,6 +1062,58 @@ class SQLiteMetadataStore:
         detections = self._detections_by_snapshot_id([row["id"] for row in rows])
         return [self._snapshot_from_row(row, detections.get(row["id"], ())) for row in rows]
 
+    def list_camera_snapshots_page(
+        self,
+        camera_id: str,
+        *,
+        limit: int,
+        offset: int = 0,
+        before: tuple[str, int] | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        include_detections: bool = True,
+    ) -> tuple[list[SnapshotRecord], int]:
+        """Like list_camera_snapshots(), but also returns the total number
+        of matching rows without a separate COUNT(*) round trip (#342).
+
+        `GET /api/cameras/<camera_id>/snapshots` previously called
+        count_camera_snapshots() and list_camera_snapshots() back to back on
+        every request, so every page load paid for two full scans of the
+        camera_id index instead of one. See list_recent_snapshots_page() for
+        why COUNT(*) OVER() is used and when it falls back to a plain
+        count_camera_snapshots() call (an out-of-range offset leaves the
+        window with no row to attach the total to).
+        """
+        query = "SELECT *, COUNT(*) OVER() AS total_count FROM snapshots WHERE camera_id = ?"
+        params: list[object] = [camera_id]
+        if since is not None:
+            query += " AND stored_at >= ?"
+            params.append(since.astimezone(timezone.utc).isoformat())
+        if until is not None:
+            query += " AND stored_at <= ?"
+            params.append(until.astimezone(timezone.utc).isoformat())
+        if before is not None:
+            before_stored_at, before_id = before
+            query += " AND (stored_at < ? OR (stored_at = ? AND id < ?))"
+            params.extend([before_stored_at, before_stored_at, before_id])
+        query += " ORDER BY stored_at DESC, id DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
+        conn = self._get_connection()
+        rows = conn.execute(query, tuple(params)).fetchall()
+        if rows:
+            total = int(rows[0]["total_count"])
+        else:
+            total = self.count_camera_snapshots(camera_id, since=since, until=until)
+
+        detections = (
+            self._detections_by_snapshot_id([row["id"] for row in rows])
+            if include_detections
+            else {}
+        )
+        snapshots = [self._snapshot_from_row(row, detections.get(row["id"], ())) for row in rows]
+        return snapshots, total
+
     def _detection_where_clause(
         self,
         *,

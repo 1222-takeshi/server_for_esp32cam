@@ -576,6 +576,68 @@ def test_list_recent_snapshots_page_falls_back_to_count_when_page_is_empty(tmp_p
     assert total == 1
 
 
+def test_list_camera_snapshots_page_matches_separate_count_and_list(tmp_path):
+    # #342: list_camera_snapshots_page() must return the same (rows, total)
+    # a caller would get from count_camera_snapshots() +
+    # list_camera_snapshots(), but fused into a single query via
+    # COUNT(*) OVER() instead of two -- this is what GET
+    # /api/cameras/<camera_id>/snapshots calls on every request.
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    snapshots = [
+        store.record_snapshot(
+            _stored_image(
+                name=f"{index}.jpg",
+                relative_path=f"cam-a/images/{index}.jpg",
+                camera_id="cam-a",
+                captured_at=stored_at + timedelta(seconds=index),
+                stored_at=stored_at + timedelta(seconds=index),
+            )
+        )
+        for index in range(3)
+    ]
+    # Snapshot from a different camera must not affect cam-a's count/page.
+    store.record_snapshot(
+        _stored_image(
+            name="other.jpg",
+            relative_path="cam-b/images/other.jpg",
+            camera_id="cam-b",
+            captured_at=stored_at,
+            stored_at=stored_at,
+        )
+    )
+
+    page, total = store.list_camera_snapshots_page("cam-a", limit=2, offset=0)
+
+    assert total == store.count_camera_snapshots("cam-a") == 3
+    assert [s.id for s in page] == [snapshots[2].id, snapshots[1].id]
+    assert [s.id for s in page] == [
+        s.id for s in store.list_camera_snapshots("cam-a", limit=2, offset=0)
+    ]
+
+
+def test_list_camera_snapshots_page_falls_back_to_count_when_page_is_empty(tmp_path):
+    # An offset past the last row returns zero rows, so the COUNT(*) OVER()
+    # window has nothing to attach the total to; the total must still be
+    # correct via the count_camera_snapshots() fallback.
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    store.record_snapshot(
+        _stored_image(
+            name="only.jpg",
+            relative_path="cam-a/images/only.jpg",
+            camera_id="cam-a",
+            captured_at=stored_at,
+            stored_at=stored_at,
+        )
+    )
+
+    page, total = store.list_camera_snapshots_page("cam-a", limit=10, offset=50)
+
+    assert page == []
+    assert total == 1
+
+
 def test_list_detections_page_matches_separate_count_and_list(tmp_path):
     # #342: list_detections_page() must return the same (rows, total) a
     # caller would get from count_detections() + list_detections(), fused
