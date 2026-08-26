@@ -1216,8 +1216,7 @@ def api_camera_snapshots(camera_id: str):
             }
         )
 
-    total = store.count_camera_snapshots(camera_id, since=since, until=until)
-    snapshots = store.list_camera_snapshots(
+    snapshots, total = store.list_camera_snapshots_page(
         camera_id, limit=limit, offset=offset, before=before, since=since, until=until
     )
     return jsonify(
