@@ -402,47 +402,59 @@ class SQLiteMetadataStore:
             is_active=bool(row["is_active"]),
         )
 
-    def ensure_camera(self, camera_id: str, *, seen_at: datetime | None = None) -> CameraRecord:
+    def _upsert_camera_row(
+        self, conn: sqlite3.Connection, camera_id: str, seen_at: datetime | None
+    ) -> sqlite3.Row:
+        """Upsert a camera row without opening its own transaction.
+
+        Callers that need to write a related row (a snapshot, video, or
+        device log) in the same commit should call this directly inside
+        their own ``with conn:`` block instead of going through
+        `ensure_camera`, which commits on its own and would otherwise turn
+        one logical write into two separate SQLite transactions.
+        """
         effective_seen_at = (seen_at or datetime.now(tz=timezone.utc)).astimezone(timezone.utc)
         seen_iso = effective_seen_at.isoformat()
+        return conn.execute(
+            """
+            INSERT INTO cameras (
+                camera_id, display_name, expected_interval_seconds, first_seen_at, last_seen_at, is_active
+            ) VALUES (?, ?, ?, ?, ?, 1)
+            ON CONFLICT(camera_id) DO UPDATE SET
+                first_seen_at=CASE
+                    WHEN excluded.first_seen_at < cameras.first_seen_at THEN excluded.first_seen_at
+                    ELSE cameras.first_seen_at
+                END,
+                last_seen_at=CASE
+                    WHEN excluded.last_seen_at > cameras.last_seen_at THEN excluded.last_seen_at
+                    ELSE cameras.last_seen_at
+                END,
+                is_active=1
+            RETURNING *
+            """,
+            (
+                camera_id,
+                camera_id,
+                self._default_expected_interval_seconds,
+                seen_iso,
+                seen_iso,
+            ),
+        ).fetchone()
+
+    def ensure_camera(self, camera_id: str, *, seen_at: datetime | None = None) -> CameraRecord:
         conn = self._get_connection()
         with conn:
-            row = conn.execute(
-                """
-                INSERT INTO cameras (
-                    camera_id, display_name, expected_interval_seconds, first_seen_at, last_seen_at, is_active
-                ) VALUES (?, ?, ?, ?, ?, 1)
-                ON CONFLICT(camera_id) DO UPDATE SET
-                    first_seen_at=CASE
-                        WHEN excluded.first_seen_at < cameras.first_seen_at THEN excluded.first_seen_at
-                        ELSE cameras.first_seen_at
-                    END,
-                    last_seen_at=CASE
-                        WHEN excluded.last_seen_at > cameras.last_seen_at THEN excluded.last_seen_at
-                        ELSE cameras.last_seen_at
-                    END,
-                    is_active=1
-                RETURNING *
-                """,
-                (
-                    camera_id,
-                    camera_id,
-                    self._default_expected_interval_seconds,
-                    seen_iso,
-                    seen_iso,
-                ),
-            ).fetchone()
+            row = self._upsert_camera_row(conn, camera_id, seen_at)
         return self._camera_from_row(row)
 
     def record_snapshot(
         self, stored: StoredImage, *, default_pending: bool = True
     ) -> SnapshotRecord:
-        if stored.device_id is not None:
-            self.ensure_camera(stored.device_id, seen_at=stored.created_at)
-
         inference_status = "pending" if default_pending and stored.device_id else "succeeded"
         conn = self._get_connection()
         with conn:
+            if stored.device_id is not None:
+                self._upsert_camera_row(conn, stored.device_id, stored.created_at)
             row = conn.execute(
                 """
                 INSERT INTO snapshots (
@@ -469,9 +481,9 @@ class SQLiteMetadataStore:
         return self._snapshot_from_row(row)
 
     def record_video(self, stored: StoredVideo) -> VideoRecord:
-        self.ensure_camera(stored.camera_id, seen_at=stored.stored_at)
         conn = self._get_connection()
         with conn:
+            self._upsert_camera_row(conn, stored.camera_id, stored.stored_at)
             row = conn.execute(
                 """
                 INSERT INTO videos (
@@ -1612,10 +1624,10 @@ class SQLiteMetadataStore:
             raise ValueError(
                 f"Invalid log level: {level!r}. Must be one of {sorted(ALLOWED_LOG_LEVELS)}"
             )
-        self.ensure_camera(camera_id)
         effective_logged_at = (logged_at or datetime.now(tz=timezone.utc)).astimezone(timezone.utc)
         conn = self._get_connection()
         with conn:
+            self._upsert_camera_row(conn, camera_id, None)
             row = conn.execute(
                 """
                 INSERT INTO device_logs (camera_id, level, message, logged_at)

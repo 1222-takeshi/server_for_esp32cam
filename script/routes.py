@@ -151,7 +151,7 @@ def _check_disk_usage() -> None:
     if gate is not None and not gate.should_scan():
         return
     upload_dir = current_app.config["UPLOAD_DIR"]
-    usage = shutil.disk_usage(upload_dir)
+    usage = _cached_disk_usage(str(upload_dir))
     pct = usage.used * 100 / usage.total
     if pct >= 95:
         current_app.logger.error(
