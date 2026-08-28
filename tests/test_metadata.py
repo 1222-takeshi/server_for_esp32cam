@@ -935,6 +935,39 @@ def test_mark_snapshot_result_stores_multiple_detections_in_one_call(tmp_path):
     assert store.get_snapshot(snapshot.id).detections == ()
 
 
+def test_get_snapshot_skips_detections_query_when_not_requested(tmp_path):
+    """include_detections=False (used by InferenceService.process_snapshot())
+    must not run the detections lookup, even when detection rows exist."""
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    snapshot = store.record_snapshot(
+        _stored_image(
+            name="img.jpg",
+            relative_path="cam-a/images/img.jpg",
+            camera_id="cam-a",
+            captured_at=now,
+            stored_at=now,
+        )
+    )
+    store.mark_snapshot_result(
+        snapshot.id,
+        detections=[Detection(label="person", score=0.9, x1=0.0, y1=0.0, x2=1.0, y2=1.0)],
+    )
+
+    with patch.object(
+        SQLiteMetadataStore, "_detections_by_snapshot_id"
+    ) as mock_detections_lookup:
+        stored = store.get_snapshot(snapshot.id, include_detections=False)
+
+    mock_detections_lookup.assert_not_called()
+    assert stored is not None
+    assert stored.detections == ()
+
+    # The default (and explicit True) still returns detections as before.
+    assert store.get_snapshot(snapshot.id).detections != ()
+    assert store.get_snapshot(snapshot.id, include_detections=True).detections != ()
+
+
 def test_list_camera_summaries_returns_latest_snapshot_per_camera(tmp_path):
     store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
     t1 = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
