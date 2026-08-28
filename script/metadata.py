@@ -1334,7 +1334,9 @@ class SQLiteMetadataStore:
                 """
             )
 
-    def get_snapshot(self, snapshot_id: int) -> SnapshotRecord | None:
+    def get_snapshot(
+        self, snapshot_id: int, *, include_detections: bool = True
+    ) -> SnapshotRecord | None:
         conn = self._get_connection()
         row = conn.execute(
             "SELECT * FROM snapshots WHERE id = ?",
@@ -1342,6 +1344,19 @@ class SQLiteMetadataStore:
         ).fetchone()
         if row is None:
             return None
+        if not include_detections:
+            # InferenceService.process_snapshot() (script/inference.py) is the
+            # hot-path caller: it looks up a snapshot right after it was
+            # recorded, before any detection has run, purely to read
+            # relative_path/camera_id -- detections on the returned record are
+            # never used there. A snapshot in that state can never have
+            # detection rows yet (mark_snapshot_result()/mark_snapshot_skipped()
+            # are the only writers, and both run strictly after this lookup),
+            # so the chunked detections query below was a guaranteed-empty
+            # round trip on every single inference run (analogous to #286's
+            # list_recent_snapshots() fix). Callers that do need detections
+            # (get_snapshot() call sites in routes.py/tests) keep the default.
+            return self._snapshot_from_row(row)
         detections = self._detections_by_snapshot_id([snapshot_id])
         return self._snapshot_from_row(row, detections.get(snapshot_id, ()))
 
