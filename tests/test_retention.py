@@ -604,18 +604,27 @@ def test_apply_retention_uses_age_filter_when_byte_limit_is_disabled(app_factory
 
 
 def test_disk_usage_check_default_interval_runs_every_upload(app_factory):
+    import script.routes as routes_module
+
     app = app_factory()
     client = app.test_client()
 
     with patch("script.routes.shutil.disk_usage") as disk_usage:
         disk_usage.return_value = type("disk_usage", (), {"total": 100, "used": 1, "free": 99})()
         _upload(client, device_id="cam-disk", captured_at="2026-01-01T00:00:00Z")
+        # `_check_disk_usage()` reuses the same short-TTL cache as `/metrics`
+        # (see `_cached_disk_usage`); clear it so the second gate-permitted
+        # call actually re-scans instead of serving a still-fresh cache
+        # entry, keeping this test focused on the upload-count gate.
+        routes_module._disk_usage_cache.clear()
         _upload(client, device_id="cam-disk", captured_at="2026-01-01T01:00:00Z")
 
     assert disk_usage.call_count == 2
 
 
 def test_disk_usage_check_interval_skips_intermediate_uploads(app_factory):
+    import script.routes as routes_module
+
     app = app_factory(DISK_USAGE_CHECK_INTERVAL_UPLOADS=2)
     client = app.test_client()
 
@@ -623,6 +632,9 @@ def test_disk_usage_check_interval_skips_intermediate_uploads(app_factory):
         disk_usage.return_value = type("disk_usage", (), {"total": 100, "used": 1, "free": 99})()
         _upload(client, device_id="cam-disk", captured_at="2026-01-01T00:00:00Z")
         _upload(client, device_id="cam-disk", captured_at="2026-01-01T01:00:00Z")
+        # Call 2 is skipped by the gate itself (never reaches the cache), so
+        # only clear the TTL cache ahead of call 3's gate-permitted scan.
+        routes_module._disk_usage_cache.clear()
         _upload(client, device_id="cam-disk", captured_at="2026-01-01T02:00:00Z")
 
     # Scans on calls 1 and 3 (interval boundary), skips call 2.
