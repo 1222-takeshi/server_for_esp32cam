@@ -1253,6 +1253,81 @@ def test_migrate_schema_adds_detection_track_id_to_existing_db(tmp_path):
     assert snapshot.detections[0].track_id is None
 
 
+def test_initialize_schema_omits_unused_detection_score_index(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "fresh.sqlite3")
+
+    row = (
+        store._get_connection()
+        .execute(
+            "SELECT name FROM sqlite_master WHERE type='index' "
+            "AND name='idx_detections_snapshot_score'"
+        )
+        .fetchone()
+    )
+    assert row is None
+
+
+def test_migrate_schema_drops_unused_detection_score_index_from_existing_db(tmp_path):
+    import sqlite3
+
+    db_path = tmp_path / "legacy-score-index.sqlite3"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE cameras (
+            camera_id TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL,
+            expected_interval_seconds INTEGER NOT NULL,
+            first_seen_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TABLE snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT NOT NULL UNIQUE,
+            relative_path TEXT NOT NULL UNIQUE,
+            size INTEGER NOT NULL,
+            camera_id TEXT,
+            captured_at TEXT,
+            stored_at TEXT NOT NULL,
+            inference_status TEXT NOT NULL,
+            inference_error TEXT
+        );
+        CREATE TABLE detections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            snapshot_id INTEGER NOT NULL,
+            label TEXT NOT NULL,
+            score REAL NOT NULL,
+            x1 REAL NOT NULL,
+            y1 REAL NOT NULL,
+            x2 REAL NOT NULL,
+            y2 REAL NOT NULL,
+            track_id INTEGER
+        );
+        CREATE INDEX idx_detections_snapshot_score ON detections(snapshot_id, score DESC);
+        INSERT INTO cameras VALUES ('cam-a', 'Cam A', 300, '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00', 1);
+        INSERT INTO snapshots VALUES (1, 'img.jpg', 'cam-a/images/img.jpg', 100, 'cam-a', NULL, '2026-01-01T00:00:00+00:00', 'succeeded', NULL);
+        INSERT INTO detections VALUES (1, 1, 'person', 0.9, 0.1, 0.1, 0.4, 0.4, NULL);
+        """
+    )
+    conn.close()
+
+    store = SQLiteMetadataStore(db_path)
+
+    row = (
+        store._get_connection()
+        .execute(
+            "SELECT name FROM sqlite_master WHERE type='index' "
+            "AND name='idx_detections_snapshot_score'"
+        )
+        .fetchone()
+    )
+    assert row is None
+    snapshot = store.get_snapshot(1)
+    assert snapshot is not None
+    assert snapshot.detections[0].label == "person"
+
+
 def test_metadata_store_enables_wal_mode(tmp_path):
     store = SQLiteMetadataStore(tmp_path / "wal.sqlite3")
     row = store._get_connection().execute("PRAGMA journal_mode").fetchone()

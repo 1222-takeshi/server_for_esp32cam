@@ -250,6 +250,13 @@ class SQLiteMetadataStore:
             with conn:
                 conn.execute("ALTER TABLE detections ADD COLUMN track_id INTEGER")
 
+        # idx_detections_snapshot_score was never used by any query (nothing orders
+        # or filters detections by score) and its leftmost column duplicates
+        # idx_detections_snapshot_id, so it was pure write overhead on every
+        # detection insert. Drop it for databases created before its removal.
+        with conn:
+            conn.execute("DROP INDEX IF EXISTS idx_detections_snapshot_score")
+
     def _initialize_schema(self, conn: sqlite3.Connection) -> None:
         conn.executescript(
             """
@@ -332,9 +339,6 @@ class SQLiteMetadataStore:
 
                 CREATE INDEX IF NOT EXISTS idx_device_logs_camera_logged_at
                     ON device_logs(camera_id, logged_at DESC);
-
-                CREATE INDEX IF NOT EXISTS idx_detections_snapshot_score
-                    ON detections(snapshot_id, score DESC);
 
                 CREATE INDEX IF NOT EXISTS idx_device_logs_level_logged_at
                     ON device_logs(level, logged_at DESC);
