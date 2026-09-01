@@ -50,6 +50,16 @@ _COMPRESSIBLE_MIMETYPES = frozenset(
 )
 _MIN_COMPRESS_BYTES = 500
 
+# Vendored/static assets (e.g. the ~1.5MB swagger-ui-bundle.js) never change
+# at runtime, so re-running gzip.compress() on every cache-miss request (a
+# fresh client, or one that dropped its immutable browser cache) is wasted
+# CPU on the single-worker request path. Cache the compressed bytes per
+# request path, keyed by the file's ETag (set by send_file from its mtime +
+# size), so a changed file automatically invalidates its entry. Bounded by
+# the number of distinct files under static/, not by request volume.
+_compressed_static_cache: dict[str, tuple[str, bytes]] = {}
+_compressed_static_cache_lock = threading.Lock()
+
 
 def _maybe_compress_response(response):
     """Gzip-compress compressible, non-streamed responses when the client
@@ -85,11 +95,31 @@ def _maybe_compress_response(response):
             return response
         response.direct_passthrough = False
 
+    is_static = request.endpoint == "static"
+    etag = response.headers.get("ETag") if is_static else None
+    if is_static and etag:
+        with _compressed_static_cache_lock:
+            cached = _compressed_static_cache.get(request.path)
+        if cached is not None and cached[0] == etag:
+            response.set_data(cached[1])
+            response.headers["Content-Encoding"] = "gzip"
+            vary = response.headers.get("Vary")
+            if not vary:
+                response.headers["Vary"] = "Accept-Encoding"
+            elif "Accept-Encoding" not in vary:
+                response.headers["Vary"] = f"{vary}, Accept-Encoding"
+            return response
+
     data = response.get_data()
     if len(data) < _MIN_COMPRESS_BYTES:
         return response
 
-    response.set_data(gzip.compress(data, compresslevel=6))
+    compressed = gzip.compress(data, compresslevel=6)
+    if is_static and etag:
+        with _compressed_static_cache_lock:
+            _compressed_static_cache[request.path] = (etag, compressed)
+
+    response.set_data(compressed)
     response.headers["Content-Encoding"] = "gzip"
     vary = response.headers.get("Vary")
     if not vary:
