@@ -2054,6 +2054,48 @@ def test_static_conditional_get_304_is_not_gzip_compressed(client):
     assert response.data == b""
 
 
+def test_static_response_gzip_is_cached_across_requests(client):
+    # Regression test: static assets never change at runtime, so repeated
+    # cache-miss requests (e.g. from different clients) for the same file
+    # should reuse the previously compressed bytes instead of paying the
+    # gzip.compress() CPU cost again on every request.
+    from script import app as app_module
+
+    # The compressed-bytes cache is a module-level dict shared across Flask
+    # app instances within the process, so clear any entry a previous test
+    # left behind before asserting on a fresh compress() call count.
+    app_module._compressed_static_cache.pop("/static/base.css", None)
+
+    with patch.object(app_module.gzip, "compress", wraps=app_module.gzip.compress) as spy_compress:
+        first = client.get("/static/base.css", headers={"Accept-Encoding": "gzip"})
+        second = client.get("/static/base.css", headers={"Accept-Encoding": "gzip"})
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.headers.get("Content-Encoding") == "gzip"
+    assert second.headers.get("Content-Encoding") == "gzip"
+    assert first.data == second.data
+    assert spy_compress.call_count == 1
+
+
+def test_static_response_gzip_cache_invalidated_by_different_etag(client):
+    # A stale cache entry (different ETag than the current file) must not be
+    # served -- this simulates the file having changed between requests.
+    from script import app as app_module
+
+    client.get("/static/base.css", headers={"Accept-Encoding": "gzip"})
+    app_module._compressed_static_cache["/static/base.css"] = (
+        "stale-etag",
+        gzip.compress(b"stale cached body"),
+    )
+
+    response = client.get("/static/base.css", headers={"Accept-Encoding": "gzip"})
+
+    assert response.status_code == 200
+    assert gzip.decompress(response.data) != b"stale cached body"
+    assert b":root" in gzip.decompress(response.data)
+
+
 def test_static_range_request_is_not_gzip_compressed(client):
     # A Range request expects byte-offset semantics against the
     # uncompressed body; compressing here would make the offsets meaningless
