@@ -32,6 +32,11 @@ ESP32CAM_ADMIN_TOKEN=<strong-random-token>
 docker compose up -d --build
 ```
 
+> If you plan to enable `ESP32CAM_DETECTOR=tflite_cpu` (see step 2 of the
+> Raspberry Pi runbook below), build with the `ml` extra instead, or the
+> image will start fine but fail at first inference — see
+> [Enabling TFLite detection in the Docker image](#enabling-tflite-detection-in-the-docker-image).
+
 ### 3. Verify
 
 ```bash
@@ -108,6 +113,24 @@ ESP32CAM_INFERENCE_MODE=async
 Place model files on the host under `./models/`; Docker Compose mounts that
 directory read-only at `/app/models`. Do not commit model binaries to Git.
 
+#### Enabling TFLite detection in the Docker image
+
+Setting `ESP32CAM_DETECTOR=tflite_cpu` alone is not enough: the `Dockerfile`
+only installs the `server` extra (Flask/gunicorn/gevent) by default, not the
+`ml` extra (`numpy`/`tflite-runtime`/`ai-edge-litert`) that `script/detector.py`
+needs. Without it, the server starts and reports healthy, and the failure
+only surfaces on the first upload that reaches inference
+(`RuntimeError: Install the ml extra to use TFLite detection`). Build the
+image with the `ml` extra included:
+
+```bash
+docker compose build --build-arg PIP_EXTRAS=server,ml
+docker compose up -d
+```
+
+(`--build-arg` only affects the following `build`; repeat it on later
+rebuilds, e.g. after `git pull`.)
+
 To keep only snapshots with successful detections:
 
 ```dotenv
@@ -117,7 +140,10 @@ ESP32CAM_KEEP_ONLY_DETECTED_SNAPSHOTS=true
 This option deletes snapshots only when inference succeeds and returns zero detections.
 Snapshots are kept when inference is disabled, skipped, or failed.
 
-Start the service:
+Start the service (if `ESP32CAM_DETECTOR=tflite_cpu` is set, use the
+`docker compose build --build-arg ... && docker compose up -d` form above
+instead of plain `--build`, or this step's `--build` will rebuild without
+the `ml` extra and undo it):
 
 ```bash
 docker compose up -d --build
@@ -134,9 +160,17 @@ run the service with a Python virtual environment under the `ubuntu` user:
 cd ~/server_for_esp32cam
 python3 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip setuptools
-.venv/bin/python -m pip install . gunicorn gevent
+.venv/bin/python -m pip install ".[server]"
 mkdir -p uploads data models ~/.config/systemd/user
 ```
+
+> If you plan to set `ESP32CAM_DETECTOR=tflite_cpu` (see step 2 above),
+> install `".[server,ml]"` instead of `".[server]"` — the bare/`server`-only
+> install starts the service successfully but raises
+> `RuntimeError: Install the ml extra to use TFLite detection` on the first
+> inference attempt, not at boot. `scripts/deploy_raspi.sh` (2c below) only
+> reinstalls into this same venv, so the `ml` extra must be present from this
+> initial `pip install` for TFLite detection to keep working across syncs.
 
 Create `~/.config/systemd/user/esp32cam-server.service`:
 
@@ -336,6 +370,7 @@ point `ESP32CAM_WEBHOOK_URL` at the final URL directly.
 - [ ] Storage retention limits are configured (`MAX_AGE_SECONDS` and/or `MAX_BYTES`)
 - [ ] HTTPS termination is handled upstream (nginx/Caddy/cloud load balancer)
 - [ ] Confirm whether `/api/docs` should be exposed publicly. Its Swagger UI assets are self-hosted under `/static/vendor/swagger-ui/` (no third-party CDN dependency, see #316), so this is a documentation-exposure decision rather than a CDN-reachability/integrity concern.
+- [ ] If `ESP32CAM_DETECTOR=tflite_cpu` is set, confirm the running process actually has the `ml` extra installed (Docker: built with `--build-arg PIP_EXTRAS=server,ml`; non-Docker: venv created with `.[server,ml]`) — see [Enabling TFLite detection in the Docker image](#enabling-tflite-detection-in-the-docker-image) and step 2b. Otherwise the server starts healthy and fails only on first inference.
 
 ---
 
