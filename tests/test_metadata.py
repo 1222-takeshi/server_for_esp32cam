@@ -528,6 +528,167 @@ def test_list_detections_supports_composite_cursor(tmp_path):
     assert [row["filename"] for row in second_page] == [snapshots[1].filename]
 
 
+def test_list_recent_snapshots_page_matches_separate_count_and_list(tmp_path):
+    # #342: list_recent_snapshots_page() must return the same (rows, total)
+    # a caller would get from count_snapshots() + list_recent_snapshots(),
+    # but fused into a single query via COUNT(*) OVER() instead of two.
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    snapshots = [
+        store.record_snapshot(
+            _stored_image(
+                name=f"{index}.jpg",
+                relative_path=f"cam-a/images/{index}.jpg",
+                camera_id="cam-a",
+                captured_at=stored_at + timedelta(seconds=index),
+                stored_at=stored_at + timedelta(seconds=index),
+            )
+        )
+        for index in range(3)
+    ]
+
+    page, total = store.list_recent_snapshots_page(limit=2, offset=0)
+
+    assert total == store.count_snapshots() == 3
+    assert [s.id for s in page] == [snapshots[2].id, snapshots[1].id]
+    assert [s.id for s in page] == [s.id for s in store.list_recent_snapshots(limit=2, offset=0)]
+
+
+def test_list_recent_snapshots_page_falls_back_to_count_when_page_is_empty(tmp_path):
+    # An offset past the last row returns zero rows, so the COUNT(*) OVER()
+    # window has nothing to attach the total to; the total must still be
+    # correct via the count_snapshots() fallback.
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    store.record_snapshot(
+        _stored_image(
+            name="only.jpg",
+            relative_path="cam-a/images/only.jpg",
+            camera_id="cam-a",
+            captured_at=stored_at,
+            stored_at=stored_at,
+        )
+    )
+
+    page, total = store.list_recent_snapshots_page(limit=10, offset=50)
+
+    assert page == []
+    assert total == 1
+
+
+def test_list_camera_snapshots_page_matches_separate_count_and_list(tmp_path):
+    # #342: list_camera_snapshots_page() must return the same (rows, total)
+    # a caller would get from count_camera_snapshots() +
+    # list_camera_snapshots(), but fused into a single query via
+    # COUNT(*) OVER() instead of two -- this is what GET
+    # /api/cameras/<camera_id>/snapshots calls on every request.
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    snapshots = [
+        store.record_snapshot(
+            _stored_image(
+                name=f"{index}.jpg",
+                relative_path=f"cam-a/images/{index}.jpg",
+                camera_id="cam-a",
+                captured_at=stored_at + timedelta(seconds=index),
+                stored_at=stored_at + timedelta(seconds=index),
+            )
+        )
+        for index in range(3)
+    ]
+    # Snapshot from a different camera must not affect cam-a's count/page.
+    store.record_snapshot(
+        _stored_image(
+            name="other.jpg",
+            relative_path="cam-b/images/other.jpg",
+            camera_id="cam-b",
+            captured_at=stored_at,
+            stored_at=stored_at,
+        )
+    )
+
+    page, total = store.list_camera_snapshots_page("cam-a", limit=2, offset=0)
+
+    assert total == store.count_camera_snapshots("cam-a") == 3
+    assert [s.id for s in page] == [snapshots[2].id, snapshots[1].id]
+    assert [s.id for s in page] == [
+        s.id for s in store.list_camera_snapshots("cam-a", limit=2, offset=0)
+    ]
+
+
+def test_list_camera_snapshots_page_falls_back_to_count_when_page_is_empty(tmp_path):
+    # An offset past the last row returns zero rows, so the COUNT(*) OVER()
+    # window has nothing to attach the total to; the total must still be
+    # correct via the count_camera_snapshots() fallback.
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    store.record_snapshot(
+        _stored_image(
+            name="only.jpg",
+            relative_path="cam-a/images/only.jpg",
+            camera_id="cam-a",
+            captured_at=stored_at,
+            stored_at=stored_at,
+        )
+    )
+
+    page, total = store.list_camera_snapshots_page("cam-a", limit=10, offset=50)
+
+    assert page == []
+    assert total == 1
+
+
+def test_list_detections_page_matches_separate_count_and_list(tmp_path):
+    # #342: list_detections_page() must return the same (rows, total) a
+    # caller would get from count_detections() + list_detections(), fused
+    # into a single query instead of two.
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    for index, label in enumerate(["person", "cat", "dog"]):
+        snapshot = store.record_snapshot(
+            _stored_image(
+                name=f"{index}.jpg",
+                relative_path=f"cam-a/images/{index}.jpg",
+                camera_id="cam-a",
+                captured_at=stored_at + timedelta(seconds=index),
+                stored_at=stored_at + timedelta(seconds=index),
+            )
+        )
+        store.mark_snapshot_result(
+            snapshot.id,
+            detections=[Detection(label=label, score=0.9, x1=0, y1=0, x2=1, y2=1)],
+        )
+
+    page, total = store.list_detections_page(camera_id="cam-a", limit=2, offset=0)
+
+    assert total == store.count_detections(camera_id="cam-a") == 3
+    assert [d["label"] for d in page] == ["dog", "cat"]
+    assert page == store.list_detections(camera_id="cam-a", limit=2, offset=0)
+
+
+def test_list_detections_page_falls_back_to_count_when_page_is_empty(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    snapshot = store.record_snapshot(
+        _stored_image(
+            name="only.jpg",
+            relative_path="cam-a/images/only.jpg",
+            camera_id="cam-a",
+            captured_at=stored_at,
+            stored_at=stored_at,
+        )
+    )
+    store.mark_snapshot_result(
+        snapshot.id,
+        detections=[Detection(label="person", score=0.9, x1=0, y1=0, x2=1, y2=1)],
+    )
+
+    page, total = store.list_detections_page(limit=10, offset=50)
+
+    assert page == []
+    assert total == 1
+
+
 def test_list_pending_snapshot_ids_returns_all_by_default(tmp_path):
     # A previous default of limit=100 silently dropped any pending snapshot
     # beyond the first 100 (oldest-first) from the one-time startup recovery
@@ -772,6 +933,39 @@ def test_mark_snapshot_result_stores_multiple_detections_in_one_call(tmp_path):
     store.mark_snapshot_result(snapshot.id, detections=[])
 
     assert store.get_snapshot(snapshot.id).detections == ()
+
+
+def test_get_snapshot_skips_detections_query_when_not_requested(tmp_path):
+    """include_detections=False (used by InferenceService.process_snapshot())
+    must not run the detections lookup, even when detection rows exist."""
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    snapshot = store.record_snapshot(
+        _stored_image(
+            name="img.jpg",
+            relative_path="cam-a/images/img.jpg",
+            camera_id="cam-a",
+            captured_at=now,
+            stored_at=now,
+        )
+    )
+    store.mark_snapshot_result(
+        snapshot.id,
+        detections=[Detection(label="person", score=0.9, x1=0.0, y1=0.0, x2=1.0, y2=1.0)],
+    )
+
+    with patch.object(
+        SQLiteMetadataStore, "_detections_by_snapshot_id"
+    ) as mock_detections_lookup:
+        stored = store.get_snapshot(snapshot.id, include_detections=False)
+
+    mock_detections_lookup.assert_not_called()
+    assert stored is not None
+    assert stored.detections == ()
+
+    # The default (and explicit True) still returns detections as before.
+    assert store.get_snapshot(snapshot.id).detections != ()
+    assert store.get_snapshot(snapshot.id, include_detections=True).detections != ()
 
 
 def test_list_camera_summaries_returns_latest_snapshot_per_camera(tmp_path):
@@ -1057,6 +1251,81 @@ def test_migrate_schema_adds_detection_track_id_to_existing_db(tmp_path):
     snapshot = store.get_snapshot(1)
     assert snapshot is not None
     assert snapshot.detections[0].track_id is None
+
+
+def test_initialize_schema_omits_unused_detection_score_index(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "fresh.sqlite3")
+
+    row = (
+        store._get_connection()
+        .execute(
+            "SELECT name FROM sqlite_master WHERE type='index' "
+            "AND name='idx_detections_snapshot_score'"
+        )
+        .fetchone()
+    )
+    assert row is None
+
+
+def test_migrate_schema_drops_unused_detection_score_index_from_existing_db(tmp_path):
+    import sqlite3
+
+    db_path = tmp_path / "legacy-score-index.sqlite3"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE cameras (
+            camera_id TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL,
+            expected_interval_seconds INTEGER NOT NULL,
+            first_seen_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TABLE snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT NOT NULL UNIQUE,
+            relative_path TEXT NOT NULL UNIQUE,
+            size INTEGER NOT NULL,
+            camera_id TEXT,
+            captured_at TEXT,
+            stored_at TEXT NOT NULL,
+            inference_status TEXT NOT NULL,
+            inference_error TEXT
+        );
+        CREATE TABLE detections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            snapshot_id INTEGER NOT NULL,
+            label TEXT NOT NULL,
+            score REAL NOT NULL,
+            x1 REAL NOT NULL,
+            y1 REAL NOT NULL,
+            x2 REAL NOT NULL,
+            y2 REAL NOT NULL,
+            track_id INTEGER
+        );
+        CREATE INDEX idx_detections_snapshot_score ON detections(snapshot_id, score DESC);
+        INSERT INTO cameras VALUES ('cam-a', 'Cam A', 300, '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00', 1);
+        INSERT INTO snapshots VALUES (1, 'img.jpg', 'cam-a/images/img.jpg', 100, 'cam-a', NULL, '2026-01-01T00:00:00+00:00', 'succeeded', NULL);
+        INSERT INTO detections VALUES (1, 1, 'person', 0.9, 0.1, 0.1, 0.4, 0.4, NULL);
+        """
+    )
+    conn.close()
+
+    store = SQLiteMetadataStore(db_path)
+
+    row = (
+        store._get_connection()
+        .execute(
+            "SELECT name FROM sqlite_master WHERE type='index' "
+            "AND name='idx_detections_snapshot_score'"
+        )
+        .fetchone()
+    )
+    assert row is None
+    snapshot = store.get_snapshot(1)
+    assert snapshot is not None
+    assert snapshot.detections[0].label == "person"
 
 
 def test_metadata_store_enables_wal_mode(tmp_path):

@@ -34,6 +34,10 @@
 </nav>
 {% block body %}{% endblock %}
 
+<!-- Shared helpers (formatTimestamp/formatFrameSize/reconnect timing
+     constants) used by index.html's and camera_detail.html's own
+     per-page scripts below -- see #358. -->
+<script src="{{ url_for('static', filename='dashboard-shared.js') }}"></script>
 <script>
 // Shared WS status indicator
 (function() {

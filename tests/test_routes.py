@@ -97,6 +97,22 @@ def test_healthz_ready_low_disk(client):
     assert body["disk_free_mb"] == 0
 
 
+def test_healthz_ready_disk_usage_is_cached_within_ttl(app):
+    # Regression test: healthz_ready() must reuse _cached_disk_usage() like
+    # /metrics does, instead of calling shutil.disk_usage() directly on every
+    # request.
+    usage = type("usage", (), {"free": 9_000, "total": 10_000, "used": 1_000})()
+    with app.test_client() as c:
+        with patch("script.routes.shutil.disk_usage", return_value=usage) as mock_disk_usage:
+            first = c.get("/healthz/ready")
+            second = c.get("/healthz/ready")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.get_json()["disk_free_mb"] == second.get_json()["disk_free_mb"]
+    assert mock_disk_usage.call_count == 1
+
+
 def test_healthz_ready_storage_probe_is_cached_within_ttl(app):
     # Regression test for #343: the write/read/delete probe should not run
     # on every single call -- a second request within the TTL window must
@@ -114,8 +130,11 @@ def test_healthz_ready_storage_probe_is_cached_within_ttl(app):
 
 
 def test_healthz_ready_storage_probe_refreshes_after_ttl(app):
+    # Each /healthz/ready call now takes two time.monotonic() readings --
+    # one for the storage probe cache, one for the disk usage cache -- so
+    # the mocked clock needs a matching value per reading, in call order.
     with app.test_client() as c:
-        with patch("script.routes.time.monotonic", side_effect=[0.0, 1.0, 10.0]):
+        with patch("script.routes.time.monotonic", side_effect=[0.0, 0.0, 1.0, 1.0, 10.0, 10.0]):
             with patch("script.routes.uuid.uuid4", wraps=uuid.uuid4) as mock_uuid4:
                 c.get("/healthz/ready")
                 c.get("/healthz/ready")
@@ -1322,6 +1341,44 @@ def test_delete_camera_removes_associated_device_logs(client):
     assert logs_response.status_code == 404
 
 
+def test_delete_camera_removes_prometheus_metric_labels(client):
+    # #366: upload_total/camera_last_seen_timestamp .labels(camera_id=...)
+    # child metrics never expire on their own, so a deleted camera_id would
+    # otherwise keep showing up in every future /metrics scrape forever.
+    client.post(
+        "/upload",
+        data=MINIMAL_JPEG,
+        headers={
+            "Content-Type": "image/jpeg",
+            "X-Device-Id": "cam-metrics-del",
+            "X-Captured-At": "2026-01-01T12:00:00Z",
+        },
+    )
+
+    before = client.get("/metrics").get_data(as_text=True)
+    assert 'camera_id="cam-metrics-del"' in before
+
+    response = client.delete("/api/cameras/cam-metrics-del")
+    assert response.status_code == 200
+
+    after = client.get("/metrics").get_data(as_text=True)
+    assert 'camera_id="cam-metrics-del"' not in after
+
+
+def test_delete_camera_metrics_cleanup_tolerates_unlabeled_camera(client):
+    # A camera that was created but never uploaded/scraped has no
+    # .labels(camera_id=...) child metric yet -- deletion must not raise.
+    client.post(
+        "/api/status_update",
+        json={"device_id": "cam-metrics-never-labeled"},
+        content_type="application/json",
+    )
+
+    response = client.delete("/api/cameras/cam-metrics-never-labeled")
+
+    assert response.status_code == 200
+
+
 def test_upload_logs_disk_warning_at_85_percent(client, caplog):
     fake_usage = type("disk_usage", (), {"total": 100, "used": 86, "free": 14})()
     with patch("script.routes.shutil.disk_usage", return_value=fake_usage):
@@ -1877,6 +1934,56 @@ def test_small_json_response_is_not_compressed(client):
     assert "Content-Encoding" not in response.headers
 
 
+def test_openapi_yaml_response_is_gzip_compressed_when_client_supports_it(client):
+    # Regression test: application/yaml was missing from
+    # _COMPRESSIBLE_MIMETYPES, so this highly-compressible ~40KB spec was
+    # served uncompressed on every /api/docs Swagger UI load.
+    response = client.get("/api/openapi.yaml", headers={"Accept-Encoding": "gzip"})
+
+    assert response.status_code == 200
+    assert response.headers.get("Content-Encoding") == "gzip"
+    decompressed = gzip.decompress(response.data)
+    assert len(response.data) < len(decompressed)
+    assert b"openapi:" in decompressed
+
+
+def test_csv_export_response_is_gzip_compressed_when_client_supports_it(app):
+    # Regression test: text/csv was missing from _COMPRESSIBLE_MIMETYPES, so
+    # /api/detections?export=csv (up to _EXPORT_ROW_LIMIT rows) was served
+    # uncompressed despite being a highly-compressible text body.
+    from script.detector import Detection
+
+    fake_det = FakePersonDetector(
+        [Detection(label="person", score=0.9, x1=0.1, y1=0.1, x2=0.5, y2=0.9)]
+    )
+    inference = app.extensions["inference_service"]
+    original_detector = inference.detector
+    inference.detector = fake_det
+
+    with app.test_client() as c:
+        for i in range(30):
+            c.post(
+                "/upload",
+                data=MINIMAL_JPEG,
+                content_type="image/jpeg",
+                headers={
+                    "X-Device-Id": f"cam-csv-gzip-{i}",
+                    "X-Captured-At": "2026-01-01T00:00:00Z",
+                },
+            )
+        response = c.get("/api/detections?export=csv", headers={"Accept-Encoding": "gzip"})
+
+    inference.detector = original_detector
+
+    assert response.status_code == 200
+    assert response.headers.get("Content-Encoding") == "gzip"
+    decompressed = gzip.decompress(response.data)
+    assert len(response.data) < len(decompressed)
+    assert decompressed.decode().splitlines()[0] == (
+        "camera_id,filename,captured_at,stored_at,label,score,track_id,x1,y1,x2,y2"
+    )
+
+
 def test_binary_image_response_is_not_gzip_compressed(client):
     upload = client.post(
         "/upload",
@@ -1889,3 +1996,116 @@ def test_binary_image_response_is_not_gzip_compressed(client):
     assert response.status_code == 200
     assert "Content-Encoding" not in response.headers
     assert response.data == MINIMAL_JPEG
+
+
+def test_static_vendored_js_response_is_gzip_compressed_when_client_supports_it(client):
+    # Regression test: Flask's `static` endpoint serves files via send_file
+    # with direct_passthrough=True (an efficient wsgi.file_wrapper path),
+    # which made _maybe_compress_response's original direct_passthrough
+    # guard skip static assets entirely -- even though they are exactly the
+    # compressible, long-lived-cached content this function targets. The
+    # vendored ~1.5MB swagger-ui-bundle.js was served fully uncompressed on
+    # every uncached /api/docs load as a result.
+    response = client.get(
+        "/static/vendor/swagger-ui/swagger-ui-bundle.js",
+        headers={"Accept-Encoding": "gzip"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers.get("Content-Encoding") == "gzip"
+    assert response.headers.get("Cache-Control") == "public, max-age=31536000, immutable"
+    decompressed = gzip.decompress(response.data)
+    assert len(response.data) < len(decompressed)
+    assert b"SwaggerUIBundle" in decompressed
+
+
+def test_static_base_css_response_is_gzip_compressed_when_client_supports_it(client):
+    response = client.get("/static/base.css", headers={"Accept-Encoding": "gzip"})
+
+    assert response.status_code == 200
+    assert response.headers.get("Content-Encoding") == "gzip"
+    decompressed = gzip.decompress(response.data)
+    assert len(response.data) < len(decompressed)
+    assert b":root" in decompressed
+
+
+def test_static_response_is_not_compressed_when_client_omits_accept_encoding(client):
+    response = client.get("/static/base.css", headers={"Accept-Encoding": ""})
+
+    assert response.status_code == 200
+    assert "Content-Encoding" not in response.headers
+    assert b":root" in response.data
+
+
+def test_static_conditional_get_304_is_not_gzip_compressed(client):
+    # A 304 Not Modified response (send_file's conditional=True handling,
+    # matched via If-None-Match) has no body to compress; the compression
+    # path must recognize the non-200 status and leave it untouched.
+    first = client.get("/static/base.css", headers={"Accept-Encoding": "gzip"})
+    etag = first.headers.get("ETag")
+
+    response = client.get(
+        "/static/base.css",
+        headers={"Accept-Encoding": "gzip", "If-None-Match": etag},
+    )
+
+    assert response.status_code == 304
+    assert "Content-Encoding" not in response.headers
+    assert response.data == b""
+
+
+def test_static_response_gzip_is_cached_across_requests(client):
+    # Regression test: static assets never change at runtime, so repeated
+    # cache-miss requests (e.g. from different clients) for the same file
+    # should reuse the previously compressed bytes instead of paying the
+    # gzip.compress() CPU cost again on every request.
+    from script import app as app_module
+
+    # The compressed-bytes cache is a module-level dict shared across Flask
+    # app instances within the process, so clear any entry a previous test
+    # left behind before asserting on a fresh compress() call count.
+    app_module._compressed_static_cache.pop("/static/base.css", None)
+
+    with patch.object(app_module.gzip, "compress", wraps=app_module.gzip.compress) as spy_compress:
+        first = client.get("/static/base.css", headers={"Accept-Encoding": "gzip"})
+        second = client.get("/static/base.css", headers={"Accept-Encoding": "gzip"})
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.headers.get("Content-Encoding") == "gzip"
+    assert second.headers.get("Content-Encoding") == "gzip"
+    assert first.data == second.data
+    assert spy_compress.call_count == 1
+
+
+def test_static_response_gzip_cache_invalidated_by_different_etag(client):
+    # A stale cache entry (different ETag than the current file) must not be
+    # served -- this simulates the file having changed between requests.
+    from script import app as app_module
+
+    client.get("/static/base.css", headers={"Accept-Encoding": "gzip"})
+    app_module._compressed_static_cache["/static/base.css"] = (
+        "stale-etag",
+        gzip.compress(b"stale cached body"),
+    )
+
+    response = client.get("/static/base.css", headers={"Accept-Encoding": "gzip"})
+
+    assert response.status_code == 200
+    assert gzip.decompress(response.data) != b"stale cached body"
+    assert b":root" in gzip.decompress(response.data)
+
+
+def test_static_range_request_is_not_gzip_compressed(client):
+    # A Range request expects byte-offset semantics against the
+    # uncompressed body; compressing here would make the offsets meaningless
+    # and break the response, so the compression path must leave it alone.
+    response = client.get(
+        "/static/vendor/swagger-ui/swagger-ui-bundle.js",
+        headers={"Accept-Encoding": "gzip", "Range": "bytes=0-99"},
+    )
+
+    assert response.status_code == 206
+    assert "Content-Encoding" not in response.headers
+    assert response.headers.get("Content-Range", "").startswith("bytes 0-99/")
+    assert len(response.data) == 100

@@ -44,9 +44,21 @@ _COMPRESSIBLE_MIMETYPES = frozenset(
         "application/javascript",
         "application/json",
         "image/svg+xml",
+        "application/yaml",
+        "text/csv",
     }
 )
 _MIN_COMPRESS_BYTES = 500
+
+# Vendored/static assets (e.g. the ~1.5MB swagger-ui-bundle.js) never change
+# at runtime, so re-running gzip.compress() on every cache-miss request (a
+# fresh client, or one that dropped its immutable browser cache) is wasted
+# CPU on the single-worker request path. Cache the compressed bytes per
+# request path, keyed by the file's ETag (set by send_file from its mtime +
+# size), so a changed file automatically invalidates its entry. Bounded by
+# the number of distinct files under static/, not by request volume.
+_compressed_static_cache: dict[str, tuple[str, bytes]] = {}
+_compressed_static_cache_lock = threading.Lock()
 
 
 def _maybe_compress_response(response):
@@ -55,8 +67,6 @@ def _maybe_compress_response(response):
     already-compressed binary responses (images/video) or streaming
     responses (MJPEG, WebSocket upgrades, Range/conditional send_file)."""
 
-    if response.direct_passthrough or response.is_streamed:
-        return response
     if response.headers.get("Content-Encoding"):
         return response
     if "gzip" not in request.accept_encodings:
@@ -64,11 +74,52 @@ def _maybe_compress_response(response):
     if (response.mimetype or "") not in _COMPRESSIBLE_MIMETYPES:
         return response
 
+    if response.direct_passthrough or response.is_streamed:
+        # Flask's `static` endpoint (base.css, vendored swagger-ui JS/CSS,
+        # ...) is served via send_file with direct_passthrough=True (and a
+        # file-wrapper iterable, so also is_streamed) for efficient
+        # wsgi.file_wrapper delivery, which otherwise bypasses gzip
+        # entirely -- even though these are exactly the compressible,
+        # long-lived-cached assets this function targets (e.g. the ~1.5MB
+        # vendored swagger-ui-bundle.js served uncompressed on every
+        # uncached /api/docs load). Buffering the file into memory here is
+        # safe for this endpoint specifically: static assets are small
+        # (the largest vendored file is a few MB), and Range requests are
+        # left untouched below since compression would break byte-offset
+        # semantics.
+        if (
+            response.status_code != 200
+            or request.endpoint != "static"
+            or "Range" in request.headers
+        ):
+            return response
+        response.direct_passthrough = False
+
+    is_static = request.endpoint == "static"
+    etag = response.headers.get("ETag") if is_static else None
+    if is_static and etag:
+        with _compressed_static_cache_lock:
+            cached = _compressed_static_cache.get(request.path)
+        if cached is not None and cached[0] == etag:
+            response.set_data(cached[1])
+            response.headers["Content-Encoding"] = "gzip"
+            vary = response.headers.get("Vary")
+            if not vary:
+                response.headers["Vary"] = "Accept-Encoding"
+            elif "Accept-Encoding" not in vary:
+                response.headers["Vary"] = f"{vary}, Accept-Encoding"
+            return response
+
     data = response.get_data()
     if len(data) < _MIN_COMPRESS_BYTES:
         return response
 
-    response.set_data(gzip.compress(data, compresslevel=6))
+    compressed = gzip.compress(data, compresslevel=6)
+    if is_static and etag:
+        with _compressed_static_cache_lock:
+            _compressed_static_cache[request.path] = (etag, compressed)
+
+    response.set_data(compressed)
     response.headers["Content-Encoding"] = "gzip"
     vary = response.headers.get("Vary")
     if not vary:
@@ -103,12 +154,20 @@ def _create_detector(app: Flask):
 
 
 def start_retention_scheduler(app: Flask) -> bool:
-    """Start retention in the current process when it is not a test app."""
+    """Start retention in the current process when it is not a test app.
+
+    Called from `_before_request` on every request when
+    RETENTION_SCHEDULER_AUTO_START is disabled (the `--preload` deployment
+    mode), so this checks the lock-free `is_running` property before
+    calling `scheduler.start()` — which re-acquires `_state_lock` on every
+    call — to avoid taking that lock on every request once the scheduler is
+    already up.
+    """
 
     if app.config.get("TESTING", False):
         return False
     scheduler = app.extensions.get("retention_scheduler")
-    if scheduler is None:
+    if scheduler is None or scheduler.is_running:
         return False
     return scheduler.start()
 

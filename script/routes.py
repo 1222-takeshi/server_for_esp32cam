@@ -151,7 +151,7 @@ def _check_disk_usage() -> None:
     if gate is not None and not gate.should_scan():
         return
     upload_dir = current_app.config["UPLOAD_DIR"]
-    usage = shutil.disk_usage(upload_dir)
+    usage = _cached_disk_usage(str(upload_dir))
     pct = usage.used * 100 / usage.total
     if pct >= 95:
         current_app.logger.error(
@@ -542,7 +542,7 @@ def healthz_ready():
         degraded = True
 
     try:
-        usage = shutil.disk_usage(upload_dir)
+        usage = _cached_disk_usage(str(upload_dir))
         checks["disk_free_mb"] = usage.free // (1024 * 1024)
         if usage.free / usage.total < 0.05:
             degraded = True
@@ -664,8 +664,7 @@ def list_files():
         offset = 0
     try:
         store = _metadata_store()
-        total = store.count_snapshots()
-        files = store.list_recent_snapshots(
+        files, total = store.list_recent_snapshots_page(
             limit=limit,
             offset=offset,
             before=before,
@@ -1012,6 +1011,10 @@ def api_delete_camera(camera_id: str):
 
     current_app.logger.info("Camera deleted: camera_id=%s delete_files=%s", camera_id, delete_files)
 
+    app_metrics = current_app.extensions.get("app_metrics")
+    if app_metrics is not None:
+        app_metrics.forget_camera(camera_id)
+
     storage_deleted = False
     if delete_files:
         try:
@@ -1217,8 +1220,7 @@ def api_camera_snapshots(camera_id: str):
             }
         )
 
-    total = store.count_camera_snapshots(camera_id, since=since, until=until)
-    snapshots = store.list_camera_snapshots(
+    snapshots, total = store.list_camera_snapshots_page(
         camera_id, limit=limit, offset=offset, before=before, since=since, until=until
     )
     return jsonify(
@@ -1316,8 +1318,7 @@ def api_detections():
         if offset:
             return jsonify({"message": "before cannot be combined with offset"}), 400
 
-    total = store.count_detections(camera_id=camera_id, since=since, confidence_min=confidence_min)
-    detections = store.list_detections(
+    detections, total = store.list_detections_page(
         camera_id=camera_id,
         since=since,
         limit=limit,

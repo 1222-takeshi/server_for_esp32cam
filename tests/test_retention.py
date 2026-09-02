@@ -299,6 +299,27 @@ def test_scheduler_can_be_deferred_until_worker_initialization(app_factory):
     assert scheduler.is_running is False
 
 
+def test_start_retention_scheduler_skips_lock_once_already_running(app_factory):
+    # Regression test: start_retention_scheduler() is called from
+    # _before_request on every request when RETENTION_SCHEDULER_AUTO_START
+    # is disabled. Once the scheduler is running, it must short-circuit on
+    # the lock-free is_running check instead of re-invoking scheduler.start()
+    # (which re-acquires _state_lock) on every subsequent request.
+    app = app_factory(TESTING=False, RETENTION_SCHEDULER_AUTO_START=False)
+    scheduler = app.extensions["retention_scheduler"]
+
+    assert start_retention_scheduler(app) is True
+    assert scheduler.is_running is True
+
+    start_calls = []
+    scheduler.start = lambda: start_calls.append(True) or True
+
+    assert start_retention_scheduler(app) is False
+    assert start_calls == [], "start() must not be re-invoked once already running"
+
+    scheduler.stop()
+
+
 def test_deferred_scheduler_starts_on_first_worker_request(app_factory):
     app = app_factory(TESTING=False, RETENTION_SCHEDULER_AUTO_START=False)
     scheduler = app.extensions["retention_scheduler"]
@@ -583,18 +604,27 @@ def test_apply_retention_uses_age_filter_when_byte_limit_is_disabled(app_factory
 
 
 def test_disk_usage_check_default_interval_runs_every_upload(app_factory):
+    import script.routes as routes_module
+
     app = app_factory()
     client = app.test_client()
 
     with patch("script.routes.shutil.disk_usage") as disk_usage:
         disk_usage.return_value = type("disk_usage", (), {"total": 100, "used": 1, "free": 99})()
         _upload(client, device_id="cam-disk", captured_at="2026-01-01T00:00:00Z")
+        # `_check_disk_usage()` reuses the same short-TTL cache as `/metrics`
+        # (see `_cached_disk_usage`); clear it so the second gate-permitted
+        # call actually re-scans instead of serving a still-fresh cache
+        # entry, keeping this test focused on the upload-count gate.
+        routes_module._disk_usage_cache.clear()
         _upload(client, device_id="cam-disk", captured_at="2026-01-01T01:00:00Z")
 
     assert disk_usage.call_count == 2
 
 
 def test_disk_usage_check_interval_skips_intermediate_uploads(app_factory):
+    import script.routes as routes_module
+
     app = app_factory(DISK_USAGE_CHECK_INTERVAL_UPLOADS=2)
     client = app.test_client()
 
@@ -602,6 +632,9 @@ def test_disk_usage_check_interval_skips_intermediate_uploads(app_factory):
         disk_usage.return_value = type("disk_usage", (), {"total": 100, "used": 1, "free": 99})()
         _upload(client, device_id="cam-disk", captured_at="2026-01-01T00:00:00Z")
         _upload(client, device_id="cam-disk", captured_at="2026-01-01T01:00:00Z")
+        # Call 2 is skipped by the gate itself (never reaches the cache), so
+        # only clear the TTL cache ahead of call 3's gate-permitted scan.
+        routes_module._disk_usage_cache.clear()
         _upload(client, device_id="cam-disk", captured_at="2026-01-01T02:00:00Z")
 
     # Scans on calls 1 and 3 (interval boundary), skips call 2.
