@@ -89,6 +89,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Cache Arduino CLI data
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.arduino15
+            ~/Arduino/libraries
+          key: arduino15-esp32cam-${{ hashFiles('.github/workflows/ci.yml') }}
+          restore-keys: |
+            arduino15-esp32cam-
       - name: Prepare config.h for CI
         run: cp examples/esp32cam_snapshot_upload/config.h.example examples/esp32cam_snapshot_upload/config.h
       - name: Compile ESP32-CAM example
