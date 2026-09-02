@@ -1,1 +1,132 @@
-bmFtZTogQ0kKCm9uOgogIHB1c2g6CiAgICBicmFuY2hlczoKICAgICAgLSBtYWluCiAgICAgIC0gImZlYXQvKioiCiAgICAgIC0gImZpeC8qKiIKICAgICAgLSAiY2hvcmUvKioiCiAgICAgIC0gInRlc3QvKioiCiAgICAgIC0gInBlcmYvKioiCiAgcHVsbF9yZXF1ZXN0OgoKcGVybWlzc2lvbnM6CiAgY29udGVudHM6IHJlYWQKCmNvbmN1cnJlbmN5OgogIGdyb3VwOiAke3sgZ2l0aHViLndvcmtmbG93IH19LSR7eyBnaXRodWIucmVmIH19CiAgY2FuY2VsLWluLXByb2dyZXNzOiB0cnVlCgpqb2JzOgogIGNoYW5nZXM6CiAgICBydW5zLW9uOiB1YnVudHUtbGF0ZXN0CiAgICBwZXJtaXNzaW9uczoKICAgICAgIyBkb3JueS9wYXRocy1maWx0ZXJAdjMgZmFsbHMgYmFjayB0byB0aGUgR2l0SHViIEFQSSdzIGxpc3RGaWxlcygpCiAgICAgICMgd2hlbiBpdCBjYW4ndCBkaWZmIGxvY2FsbHkgKGFjdGlvbnMvY2hlY2tvdXQncyBkZWZhdWx0IGZldGNoLWRlcHRoOjEKICAgICAgIyBsZWF2ZXMgbm8gbG9jYWwgYmFzZSByZWYpLCB3aGljaCBuZWVkcyBwdWxsLXJlcXVlc3RzOnJlYWQgb24gdG9wIG9mCiAgICAgICMgdGhlIHdvcmtmbG93LWxldmVsIGNvbnRlbnRzOnJlYWQgb3IgaXQgNDAzcyB3aXRoICJSZXNvdXJjZSBub3QKICAgICAgIyBhY2Nlc3NpYmxlIGJ5IGludGVncmF0aW9uIiBvbiBldmVyeSBwdWxsX3JlcXVlc3QgcnVuLgogICAgICBwdWxsLXJlcXVlc3RzOiByZWFkCiAgICBvdXRwdXRzOgogICAgICBlc3AzMl9leGFtcGxlOiAke3sgc3RlcHMuZmlsdGVyLm91dHB1dHMuZXNwMzJfZXhhbXBsZSB9fQogICAgc3RlcHM6CiAgICAgIC0gdXNlczogYWN0aW9ucy9jaGVja291dEB2NAogICAgICAtIHVzZXM6IGRvcm55L3BhdGhzLWZpbHRlckB2MwogICAgICAgIGlkOiBmaWx0ZXIKICAgICAgICB3aXRoOgogICAgICAgICAgZmlsdGVyczogfAogICAgICAgICAgICBlc3AzMl9leGFtcGxlOgogICAgICAgICAgICAgIC0gJ2V4YW1wbGVzL2VzcDMyY2FtX3NuYXBzaG90X3VwbG9hZC8qKicKICAgICAgICAgICAgICAtICcuZ2l0aHViL3dvcmtmbG93cy9jaS55bWwnCgogIHRlc3Q6CiAgICBydW5zLW9uOiB1YnVudHUtbGF0ZXN0CiAgICBzdHJhdGVneToKICAgICAgZmFpbC1mYXN0OiBmYWxzZQogICAgICBtYXRyaXg6CiAgICAgICAgIyAzLjExIG1hdGNoZXMgdGhlIERvY2tlcmZpbGUncyBwcm9kdWN0aW9uIHJ1bnRpbWUgKGFuZCBpdHMKICAgICAgICAjIHRmbGl0ZS1ydW50aW1lIGRlcGVuZGVuY3kgYnJhbmNoKTsgMy4xMiBpcyB0aGUgZm9yd2FyZC1sb29raW5nCiAgICAgICAgIyB2ZXJzaW9uLiBUZXN0aW5nIG9ubHkgb25lIGxlZnQgdGhlIG90aGVyJ3MgcnVudGltZSBwYXRoIHVudmVyaWZpZWQuCiAgICAgICAgcHl0aG9uLXZlcnNpb246IFsiMy4xMSIsICIzLjEyIl0KICAgIHN0ZXBzOgogICAgICAtIHVzZXM6IGFjdGlvbnMvY2hlY2tvdXRAdjQKICAgICAgLSB1c2VzOiBhY3Rpb25zL3NldHVwLXB5dGhvbkB2NQogICAgICAgIHdpdGg6CiAgICAgICAgICBweXRob24tdmVyc2lvbjogJHt7IG1hdHJpeC5weXRob24tdmVyc2lvbiB9fQogICAgICAgICAgY2FjaGU6ICJwaXAiCiAgICAgICAgICBjYWNoZS1kZXBlbmRlbmN5LXBhdGg6IHB5cHJvamVjdC50b21sCiAgICAgIC0gbmFtZTogSW5zdGFsbCBkZXBlbmRlbmNpZXMKICAgICAgICBydW46IHwKICAgICAgICAgIHB5dGhvbiAtbSBwaXAgaW5zdGFsbCAtLXVwZ3JhZGUgcGlwIHNldHVwdG9vbHMKICAgICAgICAgIHBpcCBpbnN0YWxsIC1lICIuW2Rldl0iCiAgICAgIC0gbmFtZTogUnVmZgogICAgICAgIHJ1bjogcnVmZiBjaGVjayAuCiAgICAgIC0gbmFtZTogUHl0ZXN0IHdpdGggY292ZXJhZ2UKICAgICAgICBydW46IHwKICAgICAgICAgIFBZVEVTVF9ESVNBQkxFX1BMVUdJTl9BVVRPTE9BRD0xIHB5dGVzdCBcCiAgICAgICAgICAgIC1wIHB5dGVzdF9jb3YgXAogICAgICAgICAgICAtLWNvdj1zY3JpcHQgXAogICAgICAgICAgICAtLWNvdi1yZXBvcnQ9eG1sIFwKICAgICAgICAgICAgLS1jb3YtcmVwb3J0PXRlcm0tbWlzc2luZyBcCiAgICAgICAgICAgIC0tY292LWZhaWwtdW5kZXI9ODAgXAogICAgICAgICAgICAtLWR1cmF0aW9ucz0xMAogICAgICAtIG5hbWU6IFVwbG9hZCBjb3ZlcmFnZSB0byBHaXRIdWIgQWN0aW9ucyBTdW1tYXJ5CiAgICAgICAgaWY6IGFsd2F5cygpCiAgICAgICAgcnVuOiB8CiAgICAgICAgICBweXRob24gLW0gY292ZXJhZ2UgcmVwb3J0IC0tZm9ybWF0PW1hcmtkb3duID4+ICIkR0lUSFVCX1NURVBfU1VNTUFSWSIgMj4vZGV2L251bGwgfHwgdHJ1ZQoKICBkZXBlbmRlbmN5LWF1ZGl0OgogICAgcnVucy1vbjogdWJ1bnR1LWxhdGVzdAogICAgc3RlcHM6CiAgICAgIC0gdXNlczogYWN0aW9ucy9jaGVja291dEB2NAogICAgICAtIHVzZXM6IGFjdGlvbnMvc2V0dXAtcHl0aG9uQHY1CiAgICAgICAgd2l0aDoKICAgICAgICAgICMgQXVkaXRzIHRoZSByZXNvbHZlZCBkZXBlbmRlbmN5IHNldCwgd2hpY2ggZG9lc24ndCB2YXJ5IGJ5CiAgICAgICAgICAjIGludGVycHJldGVyIHZlcnNpb24gLS0gcnVuIG9uY2UgaW5zdGVhZCBvZiBvbmNlIHBlciBgdGVzdGAKICAgICAgICAgICMgbWF0cml4IGxlZyAod2FzIHByZXZpb3VzbHkgZHVwbGljYXRlZCBhY3Jvc3MgUHl0aG9uIDMuMTEvMy4xMikuCiAgICAgICAgICBweXRob24tdmVyc2lvbjogIjMuMTEiCiAgICAgICAgICBjYWNoZTogInBpcCIKICAgICAgICAgIGNhY2hlLWRlcGVuZGVuY3ktcGF0aDogcmVxdWlyZW1lbnRzLmxvY2sudHh0CiAgICAgIC0gbmFtZTogSW5zdGFsbCBkZXBlbmRlbmNpZXMgZnJvbSBsb2NrZmlsZQogICAgICAgIHJ1bjogfAogICAgICAgICAgcHl0aG9uIC1tIHBpcCBpbnN0YWxsIC0tdXBncmFkZSBwaXAgc2V0dXB0b29scwogICAgICAgICAgIyBJbnN0YWxsIHRoZSBwaW5uZWQsIGhhc2hlZCBkZXBlbmRlbmN5IHNldCAoZGV2K3NlcnZlcittbCBleHRyYXMsCiAgICAgICAgICAjIGdlbmVyYXRlZCB2aWEgYHV2IHBpcCBjb21waWxlIC0tZ2VuZXJhdGUtaGFzaGVzYCkgaW5zdGVhZCBvZgogICAgICAgICAgIyByZS1yZXNvbHZpbmcgZnJvbSBweXByb2plY3QudG9tbCdzIHZlcnNpb24gcmFuZ2VzLiBUaGlzIG1ha2VzCiAgICAgICAgICAjIHBpcC1hdWRpdCdzIHJlc3VsdHMgcmVwcm9kdWNpYmxlIGFjcm9zcyBDSSBydW5zIG9mIHRoZSBzYW1lCiAgICAgICAgICAjIGNvbW1pdCAtLSB0cmFuc2l0aXZlLWRlcGVuZGVuY3kgZHJpZnQgbm8gbG9uZ2VyIGNoYW5nZXMgd2hhdAogICAgICAgICAgIyBnZXRzIGF1ZGl0ZWQuIFNlZSAjMjM2LgogICAgICAgICAgcGlwIGluc3RhbGwgLS1yZXF1aXJlLWhhc2hlcyAtciByZXF1aXJlbWVudHMubG9jay50eHQKICAgICAgICAgICMgVGhlIGxvY2tmaWxlIG9ubHkgcGlucyB0aGlyZC1wYXJ0eSBwYWNrYWdlcywgbm90IHRoaXMgcHJvamVjdAogICAgICAgICAgIyBpdHNlbGYuIEluc3RhbGwgaXQgc2VwYXJhdGVseSB3aXRoIC0tbm8tZGVwcyBzbyBwaXAtYXVkaXQgc2VlcwogICAgICAgICAgIyBpdCBhcyBpbnN0YWxsZWQgd2l0aG91dCB0cmlnZ2VyaW5nIGEgZnJlc2ggZGVwZW5kZW5jeQogICAgICAgICAgIyByZXNvbHV0aW9uIHRoYXQgd291bGQgYnlwYXNzIHRoZSBwaW5uZWQvaGFzaGVkIHZlcnNpb25zIGFib3ZlLgogICAgICAgICAgcGlwIGluc3RhbGwgLS1uby1kZXBzIC1lIC4KICAgICAgLSBuYW1lOiBEZXBlbmRlbmN5IHZ1bG5lcmFiaWxpdHkgYXVkaXQKICAgICAgICBydW46IHBpcC1hdWRpdCAtLWRlc2Mgb24KCiAgY29tcGlsZS1lc3AzMi1leGFtcGxlOgogICAgbmVlZHM6IGNoYW5nZXMKICAgICMgU2tpcCBvbiBwdXNoZXMvUFJzIHRoYXQgZG9uJ3QgdG91Y2ggdGhlIGV4YW1wbGUgc2tldGNoIG9yIHRoaXMKICAgICMgd29ya2Zsb3cgZmlsZSAtLSBhcmR1aW5vL2NvbXBpbGUtc2tldGNoZXMgKGRvd25sb2FkaW5nIHRoZSBBcmR1aW5vCiAgICAjIEVTUDMyIGNvcmUgKyBjb21waWxpbmcgdGhlIHNrZXRjaCkgaXMgb25lIG9mIHRoZSBzbG93ZXIgam9icyBoZXJlIGFuZAogICAgIyBoYXMgbm8gYmVhcmluZyBvbiBzY3JpcHQvZG9jcy90ZXN0cy1vbmx5IGNoYW5nZXMuIFNlZSAjMzUwLgogICAgaWY6IG5lZWRzLmNoYW5nZXMub3V0cHV0cy5lc3AzMl9leGFtcGxlID09ICd0cnVlJwogICAgcnVucy1vbjogdWJ1bnR1LWxhdGVzdAogICAgc3RlcHM6CiAgICAgIC0gdXNlczogYWN0aW9ucy9jaGVja291dEB2NAogICAgICAtIG5hbWU6IFByZXBhcmUgY29uZmlnLmggZm9yIENJCiAgICAgICAgcnVuOiBjcCBleGFtcGxlcy9lc3AzMmNhbV9zbmFwc2hvdF91cGxvYWQvY29uZmlnLmguZXhhbXBsZSBleGFtcGxlcy9lc3AzMmNhbV9zbmFwc2hvdF91cGxvYWQvY29uZmlnLmgKICAgICAgLSBuYW1lOiBDb21waWxlIEVTUDMyLUNBTSBleGFtcGxlCiAgICAgICAgIyBhcmR1aW5vL2NvbXBpbGUtc2tldGNoZXMgdjEuMS4yCiAgICAgICAgdXNlczogYXJkdWluby9jb21waWxlLXNrZXRjaGVzQDI1NDI2YWNlOGE0NDZlNzQ3YTNkM2Q3YTlkYTc1OWE2OTI1NjEzYWEKICAgICAgICB3aXRoOgogICAgICAgICAgZnFibjogZXNwMzI6ZXNwMzI6ZXNwMzJjYW0KICAgICAgICAgIHBsYXRmb3JtczogfAogICAgICAgICAgICAtIG5hbWU6IGVzcDMyOmVzcDMyCiAgICAgICAgICAgICAgc291cmNlLXVybDogaHR0cHM6Ly9yYXcuZ2l0aHVidXNlcmNvbnRlbnQuY29tL2VzcHJlc3NpZi9hcmR1aW5vLWVzcDMyL2doLXBhZ2VzL3BhY2thZ2VfZXNwMzJfaW5kZXguanNvbgogICAgICAgICAgbGlicmFyaWVzOiAiW10iCiAgICAgICAgICBza2V0Y2gtcGF0aHM6IHwKICAgICAgICAgICAgLSBleGFtcGxlcy9lc3AzMmNhbV9zbmFwc2hvdF91cGxvYWQKICAgICAgICAgIHZlcmJvc2U6IHRydWUK
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - "feat/**"
+      - "fix/**"
+      - "chore/**"
+      - "test/**"
+      - "perf/**"
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      # dorny/paths-filter@v3 falls back to the GitHub API's listFiles()
+      # when it can't diff locally (actions/checkout's default fetch-depth:1
+      # leaves no local base ref), which needs pull-requests:read on top of
+      # the workflow-level contents:read or it 403s with "Resource not
+      # accessible by integration" on every pull_request run.
+      pull-requests: read
+    outputs:
+      esp32_example: ${{ steps.filter.outputs.esp32_example }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            esp32_example:
+              - 'examples/esp32cam_snapshot_upload/**'
+              - '.github/workflows/ci.yml'
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 matches the Dockerfile's production runtime (and its
+        # tflite-runtime dependency branch); 3.12 is the forward-looking
+        # version. Testing only one left the other's runtime path unverified.
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+          cache-dependency-path: pyproject.toml
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools
+          pip install -e ".[dev]"
+      - name: Ruff
+        run: ruff check .
+      - name: Pytest with coverage
+        run: |
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest \
+            -p pytest_cov \
+            --cov=script \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --cov-fail-under=80 \
+            --durations=10
+      - name: Upload coverage to GitHub Actions Summary
+        if: always()
+        run: |
+          python -m coverage report --format=markdown >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # Audits the resolved dependency set, which doesn't vary by
+          # interpreter version -- run once instead of once per `test`
+          # matrix leg (was previously duplicated across Python 3.11/3.12).
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements.lock.txt
+      - name: Install dependencies from lockfile
+        run: |
+          python -m pip install --upgrade pip setuptools
+          # Install the pinned, hashed dependency set (dev+server+ml extras,
+          # generated via `uv pip compile --generate-hashes`) instead of
+          # re-resolving from pyproject.toml's version ranges. This makes
+          # pip-audit's results reproducible across CI runs of the same
+          # commit -- transitive-dependency drift no longer changes what
+          # gets audited. See #236.
+          pip install --require-hashes -r requirements.lock.txt
+          # The lockfile only pins third-party packages, not this project
+          # itself. Install it separately with --no-deps so pip-audit sees
+          # it as installed without triggering a fresh dependency
+          # resolution that would bypass the pinned/hashed versions above.
+          pip install --no-deps -e .
+      - name: Dependency vulnerability audit
+        run: pip-audit --desc on
+
+  compile-esp32-example:
+    needs: changes
+    # Skip on pushes/PRs that don't touch the example sketch or this
+    # workflow file -- arduino/compile-sketches (downloading the Arduino
+    # ESP32 core + compiling the sketch) is one of the slower jobs here and
+    # has no bearing on script/docs/tests-only changes. See #350.
+    if: needs.changes.outputs.esp32_example == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare config.h for CI
+        run: cp examples/esp32cam_snapshot_upload/config.h.example examples/esp32cam_snapshot_upload/config.h
+      - name: Compile ESP32-CAM example
+        # arduino/compile-sketches v1.1.2
+        uses: arduino/compile-sketches@25426ace8a446e747a3d3d7a9da759a6925613aa
+        with:
+          fqbn: esp32:esp32:esp32cam
+          platforms: |
+            - name: esp32:esp32
+              source-url: https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+          libraries: "[]"
+          sketch-paths: |
+            - examples/esp32cam_snapshot_upload
+          verbose: true
