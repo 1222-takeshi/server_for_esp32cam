@@ -86,7 +86,13 @@ class InferenceService:
                 self._queue.task_done()
 
     def process_snapshot(self, snapshot_id: int) -> None:
-        snapshot = self.metadata_store.get_snapshot(snapshot_id)
+        # include_detections=False: this snapshot was just enqueued and has
+        # not been through mark_snapshot_result()/mark_snapshot_skipped() yet,
+        # so it can't have any detection rows -- and only .relative_path /
+        # .camera_id from the returned record are used below. Fetching
+        # detections here is a wasted query on every single inference run
+        # (see script/metadata.py's get_snapshot()).
+        snapshot = self.metadata_store.get_snapshot(snapshot_id, include_detections=False)
         if snapshot is None:
             return
 

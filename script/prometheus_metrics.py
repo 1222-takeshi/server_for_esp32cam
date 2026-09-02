@@ -60,3 +60,21 @@ class AppMetrics:
         self.http_requests_total.labels(
             method=safe_method, endpoint=endpoint, status=str(status)
         ).inc()
+
+    def forget_camera(self, camera_id: str) -> None:
+        """Drop the per-camera_id child metrics created via `.labels(...)`.
+
+        `upload_total`/`camera_last_seen_timestamp` child metrics are
+        created lazily on first use and never expire on their own -- a
+        deleted/decommissioned camera_id would otherwise keep showing up
+        in every future `/metrics` scrape for the lifetime of the process
+        (see #366). Call this once the camera row itself has been deleted.
+        Either label may not exist yet (e.g. a camera that was created but
+        never uploaded or was never scraped), so each removal is
+        independently best-effort.
+        """
+        for metric in (self.upload_total, self.camera_last_seen_timestamp):
+            try:
+                metric.remove(camera_id)
+            except KeyError:
+                pass
