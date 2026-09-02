@@ -193,8 +193,6 @@ class SQLiteMetadataStore:
             init_conn.execute("PRAGMA journal_mode = WAL")
             init_conn.execute("PRAGMA synchronous = NORMAL")
             init_conn.execute(f"PRAGMA busy_timeout = {self._BUSY_TIMEOUT_MS}")
-            with init_conn:
-                init_conn.execute("PRAGMA foreign_keys = ON")
             self._initialize_schema(init_conn)
             self._migrate_schema(init_conn)
             with init_conn:
@@ -989,16 +987,26 @@ class SQLiteMetadataStore:
         detection_rows = []
         for chunk in _chunked(camera_ids, _SQLITE_IN_CLAUSE_CHUNK_SIZE):
             placeholders = ",".join("?" for _ in chunk)
+            # A ROW_NUMBER() OVER (PARTITION BY camera_id ...) here would force
+            # SQLite to materialize every row of each camera's partition before
+            # it can filter rn = 1, so it can't use idx_snapshots_camera_stored_at
+            # as anything but a non-covering per-camera search. Grouping by
+            # MAX(stored_at) first lets SQLite answer that aggregate straight
+            # from the index (one seek per camera_id), then the join back onto
+            # snapshots is an indexed equality lookup for just the winning rows.
             snapshot_rows.extend(
                 conn.execute(
                     f"""
-                    SELECT *
-                    FROM (
-                        SELECT *, ROW_NUMBER() OVER (PARTITION BY camera_id ORDER BY stored_at DESC) AS rn
+                    SELECT s.*
+                    FROM snapshots s
+                    JOIN (
+                        SELECT camera_id, MAX(stored_at) AS latest_stored_at
                         FROM snapshots
                         WHERE camera_id IN ({placeholders})
-                    ) ranked
-                    WHERE rn = 1
+                        GROUP BY camera_id
+                    ) latest
+                      ON latest.camera_id = s.camera_id
+                     AND latest.latest_stored_at = s.stored_at
                     """,
                     chunk,
                 ).fetchall()
