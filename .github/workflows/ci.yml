@@ -22,11 +22,16 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     permissions:
-      # dorny/paths-filter@v3 falls back to the GitHub API's listFiles()
-      # when it can't diff locally (actions/checkout's default fetch-depth:1
-      # leaves no local base ref), which needs pull-requests:read on top of
-      # the workflow-level contents:read or it 403s with "Resource not
-      # accessible by integration" on every pull_request run.
+      # Job-level `permissions:` replaces (not merges with) the
+      # workflow-level block above, so both are spelled out explicitly here:
+      # contents:read lets actions/checkout fetch this PR's merge ref, and
+      # pull-requests:read covers dorny/paths-filter@v3's GitHub API
+      # listFiles() fallback (used when it can't diff locally because
+      # actions/checkout's default fetch-depth:1 leaves no local base ref).
+      # Without pull-requests:read that fallback 403s with "Resource not
+      # accessible by integration"; without contents:read checkout itself
+      # fails with "Repository not found".
+      contents: read
       pull-requests: read
     outputs:
       esp32_example: ${{ steps.filter.outputs.esp32_example }}
