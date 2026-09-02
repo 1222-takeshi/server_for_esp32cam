@@ -90,6 +90,75 @@ def test_tflite_detector_normalizes_standard_ssd_output_shapes():
     assert detections[0].y2 == 0.30
 
 
+def test_output_map_caches_role_classification_after_first_call():
+    detector = TFLiteCpuDetector.__new__(TFLiteCpuDetector)
+    detector._output_details = [
+        {"index": 1, "name": "boxes"},
+        {"index": 2, "name": "classes"},
+        {"index": 3, "name": "scores"},
+        {"index": 4, "name": "count"},
+    ]
+    detector._interpreter = FakeInterpreter(
+        {1: "boxes-tensor", 2: "classes-tensor", 3: "scores-tensor", 4: "count-tensor"}
+    )
+
+    first = detector._output_map()
+    assert first == {
+        "boxes": "boxes-tensor",
+        "classes": "classes-tensor",
+        "scores": "scores-tensor",
+        "count": "count-tensor",
+    }
+    assert detector._output_role_indices_cache == {
+        "boxes": 1,
+        "classes": 2,
+        "scores": 3,
+        "count": 4,
+    }
+
+    # Mutating output_details afterward must not change subsequent behavior --
+    # confirms the name -> role classification runs once and is cached,
+    # rather than being re-derived from _output_details on every
+    # _output_map() call (the tensors themselves are still re-fetched each
+    # call, since their contents change after every invoke()).
+    detector._output_details = []
+    detector._interpreter = FakeInterpreter(
+        {1: "boxes-tensor-2", 2: "classes-tensor-2", 3: "scores-tensor-2", 4: "count-tensor-2"}
+    )
+    second = detector._output_map()
+    assert second == {
+        "boxes": "boxes-tensor-2",
+        "classes": "classes-tensor-2",
+        "scores": "scores-tensor-2",
+        "count": "count-tensor-2",
+    }
+
+
+def test_output_map_falls_back_to_rank_when_names_are_unrecognized():
+    detector = TFLiteCpuDetector.__new__(TFLiteCpuDetector)
+    detector._output_details = [
+        {"index": 1, "name": "StatefulPartitionedCall:0"},
+        {"index": 2, "name": "StatefulPartitionedCall:1"},
+        {"index": 3, "name": "StatefulPartitionedCall:2"},
+        {"index": 4, "name": "StatefulPartitionedCall:3"},
+    ]
+    detector._interpreter = FakeInterpreter(
+        {
+            1: [[[0.1, 0.2, 0.3, 0.4]]],
+            2: [[0]],
+            3: [[0.9]],
+            4: [1],
+        }
+    )
+
+    output_map = detector._output_map()
+
+    assert output_map["boxes"] == [[[0.1, 0.2, 0.3, 0.4]]]
+    assert output_map["classes"] == [[0]]
+    assert output_map["scores"] == [[0.9]]
+    assert output_map["count"] == [1]
+
+
 def test_prepare_input_requests_jpeg_draft_before_resizing(monkeypatch):
     detector = TFLiteCpuDetector.__new__(TFLiteCpuDetector)
     detector._input_details = [
@@ -165,6 +234,19 @@ def test_prepare_input_preserves_exif_orientation_with_draft(monkeypatch):
     assert prepared.shape == (1, 300, 300, 3)
     assert pixel_distance(prepared.pixels[0], expected[0]) <= 20
     assert pixel_distance(prepared.pixels[0], unrotated[0]) >= 100
+
+
+def test_shape_of_uses_fast_path_for_ndarray_like_objects():
+    array = FakeArray((1, 10, 4), FakeNumpy.float32)
+
+    assert TFLiteCpuDetector._shape_of(array) == (1, 10, 4)
+
+
+def test_shape_of_falls_back_correctly_for_nested_lists_and_tuples():
+    assert TFLiteCpuDetector._shape_of([[1, 2, 3, 4], [5, 6, 7, 8]]) == (2, 4)
+    assert TFLiteCpuDetector._shape_of(((1, 2), (3, 4), (5, 6))) == (3, 2)
+    assert TFLiteCpuDetector._shape_of([]) == (0,)
+    assert TFLiteCpuDetector._shape_of(0.5) == ()
 
 
 def _fake_module(name: str, **attrs):

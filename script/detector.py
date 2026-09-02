@@ -113,23 +113,44 @@ class TFLiteCpuDetector:
 
         return self._np.expand_dims(array, axis=0)
 
-    def _output_map(self) -> dict[str, object]:
-        output_map: dict[str, object] = {}
+    def _output_role_indices(self) -> dict[str, int]:
+        """Classify each output tensor's role (boxes/classes/scores/count) by
+        name, cached after the first call.
+
+        `self._output_details` (and each entry's `"name"`) is fixed once the
+        model is loaded and never changes between `detect()` calls, so
+        re-parsing every output name on every single inference was redundant
+        work done while holding `self._lock` (see `detect()`) -- on every
+        uploaded image, for the lifetime of the process. Classifying by name
+        is only done once here, lazily, and the resulting name -> tensor
+        index mapping is reused; `_output_map()` still fetches fresh tensors
+        (via `get_tensor()`) from that mapping on every call, since tensor
+        contents change after each `invoke()`.
+        """
+        cached = getattr(self, "_output_role_indices_cache", None)
+        if cached is not None:
+            return cached
+
+        roles: dict[str, int] = {}
         for detail in self._output_details:
             name = detail["name"].lower()
-            tensor = self._interpreter.get_tensor(detail["index"])
             if "box" in name:
-                output_map["boxes"] = tensor
+                roles["boxes"] = detail["index"]
             elif "class" in name:
-                output_map["classes"] = tensor
+                roles["classes"] = detail["index"]
             elif "score" in name:
-                output_map["scores"] = tensor
+                roles["scores"] = detail["index"]
             elif "count" in name:
-                output_map["count"] = tensor
+                roles["count"] = detail["index"]
+        self._output_role_indices_cache = roles
+        return roles
 
-        if output_map:
-            return output_map
+    def _output_map(self) -> dict[str, object]:
+        roles = self._output_role_indices()
+        if roles:
+            return {role: self._interpreter.get_tensor(index) for role, index in roles.items()}
 
+        output_map: dict[str, object] = {}
         tensors = [self._interpreter.get_tensor(detail["index"]) for detail in self._output_details]
         by_rank = sorted(tensors, key=lambda tensor: len(self._shape_of(tensor)), reverse=True)
         output_map["boxes"] = by_rank[0]
@@ -141,14 +162,25 @@ class TFLiteCpuDetector:
 
     @staticmethod
     def _shape_of(tensor: object) -> tuple[int, ...]:
+        # Fast path: numpy arrays (the normal TFLite output) expose `.shape`
+        # directly, so this is the only branch exercised in production.
         shape = getattr(tensor, "shape", None)
         if shape is not None:
             return tuple(int(dim) for dim in shape)
-        if isinstance(tensor, (list, tuple)):
-            if not tensor:
-                return (0,)
-            return (len(tensor),) + TFLiteCpuDetector._shape_of(tensor[0])
-        return ()
+
+        # Fallback for genuinely non-ndarray inputs (nested list/tuple
+        # tensors, e.g. from lightweight test doubles). Walk iteratively
+        # instead of recursing per dimension to avoid Python-level call
+        # overhead on each `_shape_of` invocation.
+        dims: list[int] = []
+        node = tensor
+        while isinstance(node, (list, tuple)):
+            if not node:
+                dims.append(0)
+                return tuple(dims)
+            dims.append(len(node))
+            node = node[0]
+        return tuple(dims)
 
     @classmethod
     def _collapse_leading_singleton_dims(cls, tensor: object):

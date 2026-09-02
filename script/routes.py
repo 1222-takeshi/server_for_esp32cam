@@ -151,7 +151,7 @@ def _check_disk_usage() -> None:
     if gate is not None and not gate.should_scan():
         return
     upload_dir = current_app.config["UPLOAD_DIR"]
-    usage = shutil.disk_usage(upload_dir)
+    usage = _cached_disk_usage(str(upload_dir))
     pct = usage.used * 100 / usage.total
     if pct >= 95:
         current_app.logger.error(
@@ -484,6 +484,43 @@ def healthz():
     return jsonify({"status": "ok"}), 200
 
 
+_STORAGE_PROBE_CACHE_SECONDS = 5.0
+_storage_probe_cache: dict[str, tuple[float, bool]] = {}
+
+
+def _cached_storage_probe(upload_dir: Path) -> bool:
+    """Write/read/delete probe of upload_dir's writability, with a short TTL cache.
+
+    Mirrors `_cached_disk_usage()` below: storage writability doesn't flip
+    state sub-second in normal operation, so polling `/healthz/ready` faster
+    than the TTL (Dockerfile's HEALTHCHECK, external monitoring,
+    docs/deployment.md's curl loops, deploy scripts' wait loops) would
+    otherwise create a fresh, uniquely-named probe file -- and pay a
+    write/read/delete cycle on the SD card -- on every single call. Failures
+    are cached too (not just successes), so a real storage fault is still
+    surfaced within one TTL window rather than being hidden indefinitely,
+    while still bounding how often the check touches disk.
+    """
+    key = str(upload_dir)
+    now = time.monotonic()
+    cached = _storage_probe_cache.get(key)
+    if cached is not None and now - cached[0] < _STORAGE_PROBE_CACHE_SECONDS:
+        return cached[1]
+
+    try:
+        probe = upload_dir / f".healthz-probe-{uuid.uuid4().hex}"
+        probe.write_bytes(b"\x00")
+        probe.read_bytes()
+        probe.unlink()
+        ok = True
+    except Exception as exc:
+        current_app.logger.error("healthz/ready: storage check failed: %s", exc)
+        ok = False
+
+    _storage_probe_cache[key] = (now, ok)
+    return ok
+
+
 @server.route("/healthz/ready")
 def healthz_ready():
     checks: dict[str, object] = {}
@@ -498,19 +535,14 @@ def healthz_ready():
         degraded = True
 
     upload_dir = Path(current_app.config["UPLOAD_DIR"])
-    try:
-        probe = upload_dir / f".healthz-probe-{uuid.uuid4().hex}"
-        probe.write_bytes(b"\x00")
-        probe.read_bytes()
-        probe.unlink()
+    if _cached_storage_probe(upload_dir):
         checks["storage"] = "ok"
-    except Exception as exc:
-        current_app.logger.error("healthz/ready: storage check failed: %s", exc)
+    else:
         checks["storage"] = "error"
         degraded = True
 
     try:
-        usage = shutil.disk_usage(upload_dir)
+        usage = _cached_disk_usage(str(upload_dir))
         checks["disk_free_mb"] = usage.free // (1024 * 1024)
         if usage.free / usage.total < 0.05:
             degraded = True
@@ -632,8 +664,7 @@ def list_files():
         offset = 0
     try:
         store = _metadata_store()
-        total = store.count_snapshots()
-        files = store.list_recent_snapshots(
+        files, total = store.list_recent_snapshots_page(
             limit=limit,
             offset=offset,
             before=before,
@@ -980,6 +1011,10 @@ def api_delete_camera(camera_id: str):
 
     current_app.logger.info("Camera deleted: camera_id=%s delete_files=%s", camera_id, delete_files)
 
+    app_metrics = current_app.extensions.get("app_metrics")
+    if app_metrics is not None:
+        app_metrics.forget_camera(camera_id)
+
     storage_deleted = False
     if delete_files:
         try:
@@ -1185,8 +1220,7 @@ def api_camera_snapshots(camera_id: str):
             }
         )
 
-    total = store.count_camera_snapshots(camera_id, since=since, until=until)
-    snapshots = store.list_camera_snapshots(
+    snapshots, total = store.list_camera_snapshots_page(
         camera_id, limit=limit, offset=offset, before=before, since=since, until=until
     )
     return jsonify(
@@ -1284,8 +1318,7 @@ def api_detections():
         if offset:
             return jsonify({"message": "before cannot be combined with offset"}), 400
 
-    total = store.count_detections(camera_id=camera_id, since=since, confidence_min=confidence_min)
-    detections = store.list_detections(
+    detections, total = store.list_detections_page(
         camera_id=camera_id,
         since=since,
         limit=limit,
