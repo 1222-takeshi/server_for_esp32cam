@@ -456,6 +456,34 @@ def _read_video_upload_payload() -> tuple[object | None, str | None, datetime | 
     return stream, content_type, captured_at, duration_ms, None
 
 
+_SNAPSHOT_COUNT_CACHE_SECONDS = 5.0
+_snapshot_count_cache: dict[str, tuple[float, int]] = {}
+
+
+def _cached_total_snapshot_count(store) -> int:
+    """`SQLiteMetadataStore.total_snapshot_count()` with a short TTL cache.
+
+    `SELECT COUNT(*) FROM snapshots` has no WHERE clause, so SQLite answers it
+    by scanning every row in the table (or its smallest index) rather than an
+    indexed point lookup -- unlike the other dashboard queries in this module,
+    which are all bounded by LIMIT/OFFSET or an indexed WHERE. `/` is the
+    single most frequently reloaded page (manual refreshes, monitoring, the
+    Raspberry Pi CPU-only deployment target this project explicitly plans
+    for), and this count is a purely informational stat tile, not data the
+    page's correctness depends on -- so mirror the `_cached_disk_usage()` /
+    `_cached_storage_probe()` pattern above instead of re-scanning `snapshots`
+    on every single load.
+    """
+    key = str(current_app.config["DB_PATH"])
+    now = time.monotonic()
+    cached = _snapshot_count_cache.get(key)
+    if cached is not None and now - cached[0] < _SNAPSHOT_COUNT_CACHE_SECONDS:
+        return cached[1]
+    count = store.total_snapshot_count()
+    _snapshot_count_cache[key] = (now, count)
+    return count
+
+
 @server.route("/")
 def index():
     store = _metadata_store()
@@ -474,7 +502,7 @@ def index():
         camera_total=camera_total,
         camera_limit=limit,
         camera_offset=offset,
-        image_count=store.total_snapshot_count(),
+        image_count=_cached_total_snapshot_count(store),
         cameras_with_errors=cameras_with_errors,
     )
 
