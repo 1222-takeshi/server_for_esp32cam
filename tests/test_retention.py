@@ -21,6 +21,7 @@ from uuid import uuid4
 from script.retention import (
     RetentionScanGate,
     RetentionScheduler,
+    apply_device_log_retention,
     apply_upload_retention,
     apply_video_upload_retention,
 )
@@ -223,12 +224,76 @@ def test_scheduler_runs_image_and_video_retention_without_an_upload(app_factory)
     app.extensions["storage"] = storage
 
     scheduler = RetentionScheduler(app, interval_seconds=3600)
-    deleted_images, deleted_videos = scheduler.run_once()
+    deleted_images, deleted_videos, deleted_device_logs = scheduler.run_once()
 
     assert deleted_images == ["cam-a/old.jpg"]
     assert deleted_videos == ["cam-a/old.mp4"]
+    assert deleted_device_logs == 0
     metadata_store.delete_snapshots_by_relative_paths.assert_called_once_with(["cam-a/old.jpg"])
     metadata_store.delete_videos_by_relative_paths.assert_called_once_with(["cam-a/old.mp4"])
+    metadata_store.delete_device_logs_older_than.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# apply_device_log_retention() (#357): device_logs has no on-disk file and
+# no byte budget, so this is a single age-based DELETE, disabled by default.
+# ---------------------------------------------------------------------------
+
+
+def test_apply_device_log_retention_disabled_by_default_skips_metadata_query(app):
+    fake_metadata_store = MagicMock()
+    app.extensions["metadata_store"] = fake_metadata_store
+
+    with app.app_context():
+        deleted = apply_device_log_retention()
+
+    assert deleted == 0
+    fake_metadata_store.delete_device_logs_older_than.assert_not_called()
+
+
+def test_apply_device_log_retention_deletes_rows_older_than_configured_age(app_factory):
+    app = app_factory(DEVICE_LOG_RETENTION_MAX_AGE_SECONDS=60)
+    fake_metadata_store = MagicMock()
+    fake_metadata_store.delete_device_logs_older_than.return_value = 3
+    app.extensions["metadata_store"] = fake_metadata_store
+
+    with app.app_context():
+        deleted = apply_device_log_retention()
+
+    assert deleted == 3
+    fake_metadata_store.delete_device_logs_older_than.assert_called_once()
+    (cutoff,) = fake_metadata_store.delete_device_logs_older_than.call_args.args
+    age = datetime.now(tz=timezone.utc) - cutoff
+    assert timedelta(seconds=55) < age < timedelta(seconds=65)
+
+
+def test_apply_device_log_retention_zero_age_is_disabled(app_factory):
+    app = app_factory(DEVICE_LOG_RETENTION_MAX_AGE_SECONDS=0)
+    fake_metadata_store = MagicMock()
+    app.extensions["metadata_store"] = fake_metadata_store
+
+    with app.app_context():
+        deleted = apply_device_log_retention()
+
+    assert deleted == 0
+    fake_metadata_store.delete_device_logs_older_than.assert_not_called()
+
+
+def test_scheduler_runs_device_log_retention_when_enabled(app_factory):
+    app = app_factory(DEVICE_LOG_RETENTION_MAX_AGE_SECONDS=60)
+    metadata_store = MagicMock()
+    metadata_store.list_snapshot_retention_candidates.return_value = ([], 0)
+    metadata_store.list_video_retention_candidates.return_value = ([], 0)
+    metadata_store.delete_device_logs_older_than.return_value = 5
+    app.extensions["metadata_store"] = metadata_store
+
+    scheduler = RetentionScheduler(app, interval_seconds=3600)
+    deleted_images, deleted_videos, deleted_device_logs = scheduler.run_once()
+
+    assert deleted_images == []
+    assert deleted_videos == []
+    assert deleted_device_logs == 5
+    metadata_store.delete_device_logs_older_than.assert_called_once()
 
 
 def test_scheduler_logs_failure_and_continues_loop(app_factory, caplog):
@@ -405,7 +470,10 @@ def test_scheduler_logs_lifecycle_and_scan_result(app_factory, caplog):
         scheduler.stop()
 
     assert "Storage retention scheduler started (interval_seconds=3600.0)" in caplog.text
-    assert "Scheduled retention completed (images_deleted=0, videos_deleted=0)" in caplog.text
+    assert (
+        "Scheduled retention completed (images_deleted=0, videos_deleted=0, "
+        "device_logs_deleted=0)" in caplog.text
+    )
     assert "Storage retention scheduler stopped" in caplog.text
 
 

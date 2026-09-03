@@ -809,6 +809,34 @@ def test_list_device_logs_respects_limit(tmp_path):
     assert len(logs) == 3
 
 
+def test_delete_device_logs_older_than_removes_only_expired_rows(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    store.record_heartbeat("cam-a")
+    old_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    new_time = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    store.record_device_log("cam-a", level="info", message="old", logged_at=old_time)
+    store.record_device_log("cam-a", level="info", message="new", logged_at=new_time)
+
+    deleted = store.delete_device_logs_older_than(datetime(2026, 3, 1, tzinfo=timezone.utc))
+
+    assert deleted == 1
+    remaining = store.list_device_logs("cam-a")
+    assert [log.message for log in remaining] == ["new"]
+
+
+def test_delete_device_logs_older_than_returns_zero_when_nothing_expired(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    store.record_heartbeat("cam-a")
+    store.record_device_log(
+        "cam-a", level="info", message="recent", logged_at=datetime(2026, 6, 1, tzinfo=timezone.utc)
+    )
+
+    deleted = store.delete_device_logs_older_than(datetime(2026, 1, 1, tzinfo=timezone.utc))
+
+    assert deleted == 0
+    assert len(store.list_device_logs("cam-a")) == 1
+
+
 def test_list_camera_summaries_returns_empty_for_empty_store(tmp_path):
     store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
 
