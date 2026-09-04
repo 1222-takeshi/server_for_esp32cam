@@ -1710,3 +1710,18 @@ class SQLiteMetadataStore:
             )
             for row in rows
         ]
+
+    def delete_device_logs_older_than(self, cutoff: datetime) -> int:
+        """Delete device_logs rows older than ``cutoff``.
+
+        Unlike snapshots/videos, device_logs rows have no backing file on
+        disk and no byte budget, so pruning is a single age-based DELETE
+        rather than a candidate-list + file-eviction scan (#357).
+        """
+        conn = self._get_connection()
+        with conn:
+            cursor = conn.execute(
+                "DELETE FROM device_logs WHERE logged_at < ?",
+                (cutoff.astimezone(timezone.utc).isoformat(),),
+            )
+        return cursor.rowcount

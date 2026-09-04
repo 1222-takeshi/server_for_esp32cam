@@ -153,6 +153,14 @@ class Config:
     VIDEO_RETENTION_SCAN_INTERVAL_UPLOADS = int(
         os.getenv("ESP32CAM_VIDEO_RETENTION_SCAN_INTERVAL_UPLOADS", "1")
     )
+    # Unlike snapshots/videos, device_logs has no on-disk file and no byte
+    # budget -- only an age cutoff. Default disabled (0) like video
+    # retention: this prunes existing rows for every deployment the moment
+    # it is enabled, so it opts in rather than silently starting to delete
+    # data on upgrade. See #357.
+    DEVICE_LOG_RETENTION_MAX_AGE_SECONDS = int(
+        os.getenv("ESP32CAM_DEVICE_LOG_RETENTION_MAX_AGE_SECONDS", "0")
+    )
     MAX_MJPEG_STREAMS = int(os.getenv("ESP32CAM_MAX_MJPEG_STREAMS", "10"))
     # 0 derives the timeout from each camera's expected interval plus a grace
     # period, so a sparse camera does not disconnect while it is healthy.

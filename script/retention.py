@@ -229,7 +229,29 @@ def apply_video_upload_retention(stored: StoredVideo) -> list[str]:
     )
 
 
-def apply_scheduled_retention() -> tuple[list[str], list[str]]:
+def apply_device_log_retention() -> int:
+    """Delete device_logs rows older than the configured max age.
+
+    device_logs has no on-disk file and no byte budget, so unlike
+    apply_upload_retention()/apply_video_upload_retention() this only needs
+    an age cutoff and a single DELETE -- no candidate scan. Disabled by
+    default (`DEVICE_LOG_RETENTION_MAX_AGE_SECONDS` <= 0). Runs on the same
+    RetentionScheduler cadence as image/video retention rather than a
+    separate background loop (#357).
+    """
+    max_age_seconds = current_app.config.get("DEVICE_LOG_RETENTION_MAX_AGE_SECONDS", 0)
+    if not max_age_seconds or max_age_seconds <= 0:
+        return 0
+
+    metadata_store = current_app.extensions["metadata_store"]
+    cutoff = datetime.now(tz=timezone.utc) - timedelta(seconds=max_age_seconds)
+    deleted = metadata_store.delete_device_logs_older_than(cutoff)
+    if deleted:
+        _logger.info("Device log retention deleted %s rows", deleted)
+    return deleted
+
+
+def apply_scheduled_retention() -> tuple[list[str], list[str], int]:
     """Run both retention policies without depending on a new upload."""
 
     metadata_store = current_app.extensions["metadata_store"]
@@ -268,7 +290,8 @@ def apply_scheduled_retention() -> tuple[list[str], list[str]]:
         iter_candidates=video_iter_candidates,
         total_bytes_reader=video_total_bytes_reader,
     )
-    return image_paths, video_paths
+    device_logs_deleted = apply_device_log_retention()
+    return image_paths, video_paths, device_logs_deleted
 
 
 class RetentionScheduler:
@@ -325,15 +348,17 @@ class RetentionScheduler:
             return
         _logger.info("Storage retention scheduler stop requested")
 
-    def run_once(self) -> tuple[list[str], list[str]]:
+    def run_once(self) -> tuple[list[str], list[str], int]:
         with self._app.app_context():
-            image_paths, video_paths = apply_scheduled_retention()
+            image_paths, video_paths, device_logs_deleted = apply_scheduled_retention()
         _logger.info(
-            "Scheduled retention completed (images_deleted=%s, videos_deleted=%s)",
+            "Scheduled retention completed (images_deleted=%s, videos_deleted=%s, "
+            "device_logs_deleted=%s)",
             len(image_paths),
             len(video_paths),
+            device_logs_deleted,
         )
-        return image_paths, video_paths
+        return image_paths, video_paths, device_logs_deleted
 
     def _run_loop(self) -> None:
         while not self._stop_event.is_set():
