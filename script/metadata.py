@@ -921,22 +921,34 @@ class SQLiteMetadataStore:
         display_name: str | None = None,
         expected_interval_seconds: int | None = None,
     ) -> CameraRecord | None:
-        camera = self.get_camera(camera_id)
-        if camera is None:
-            return None
-        new_display_name = display_name if display_name is not None else camera.display_name
-        new_interval = (
-            expected_interval_seconds
-            if expected_interval_seconds is not None
-            else camera.expected_interval_seconds
-        )
+        """Apply a partial update (None fields left unchanged) to a camera row.
+
+        Previously did a SELECT to read current values (to fill in the
+        unchanged fields) + UPDATE + a second SELECT to return the new state
+        -- three round trips for what `PATCH /api/cameras/<id>` (routes.py)
+        does on every call, including the common all-fields-None no-op path
+        (see test_patch_camera_with_no_fields_is_idempotent). SQLite's
+        COALESCE(?, column) lets the UPDATE itself decide which columns to
+        keep, and RETURNING * (already used elsewhere in this module, e.g.
+        _upsert_camera_row/record_snapshot/record_device_log) hands back the
+        post-update row in the same statement, so a missing camera_id (no
+        row updated) and the new state are both determined by one query.
+        """
         conn = self._get_connection()
         with conn:
-            conn.execute(
-                "UPDATE cameras SET display_name = ?, expected_interval_seconds = ? WHERE camera_id = ?",
-                (new_display_name, new_interval, camera_id),
-            )
-        return self.get_camera(camera_id)
+            row = conn.execute(
+                """
+                UPDATE cameras
+                SET display_name = COALESCE(?, display_name),
+                    expected_interval_seconds = COALESCE(?, expected_interval_seconds)
+                WHERE camera_id = ?
+                RETURNING *
+                """,
+                (display_name, expected_interval_seconds, camera_id),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._camera_from_row(row)
 
     def delete_camera(self, camera_id: str) -> bool:
         conn = self._get_connection()
