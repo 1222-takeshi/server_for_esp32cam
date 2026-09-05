@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-import threading
 
 
 @dataclass(frozen=True)
@@ -83,7 +82,6 @@ class TFLiteCpuDetector:
         self.threshold = threshold
         self.person_label = person_label
         self.person_class_id = person_class_id
-        self._lock = threading.Lock()
         self._interpreter = Interpreter(model_path=str(model_path))
         self._interpreter.allocate_tensors()
         self._input_details = self._interpreter.get_input_details()
@@ -120,12 +118,11 @@ class TFLiteCpuDetector:
         `self._output_details` (and each entry's `"name"`) is fixed once the
         model is loaded and never changes between `detect()` calls, so
         re-parsing every output name on every single inference was redundant
-        work done while holding `self._lock` (see `detect()`) -- on every
-        uploaded image, for the lifetime of the process. Classifying by name
-        is only done once here, lazily, and the resulting name -> tensor
-        index mapping is reused; `_output_map()` still fetches fresh tensors
-        (via `get_tensor()`) from that mapping on every call, since tensor
-        contents change after each `invoke()`.
+        work done on every uploaded image, for the lifetime of the process.
+        Classifying by name is only done once here, lazily, and the
+        resulting name -> tensor index mapping is reused; `_output_map()`
+        still fetches fresh tensors (via `get_tensor()`) from that mapping
+        on every call, since tensor contents change after each `invoke()`.
         """
         cached = getattr(self, "_output_role_indices_cache", None)
         if cached is not None:
@@ -229,10 +226,17 @@ class TFLiteCpuDetector:
     def detect(self, image_bytes: bytes) -> list[Detection]:
         input_tensor = self._prepare_input(image_bytes)
 
-        with self._lock:
-            self._interpreter.set_tensor(self._input_details[0]["index"], input_tensor)
-            self._interpreter.invoke()
-            output_map = self._output_map()
+        # Not lock-protected: the async pipeline (script/inference.py) funnels
+        # every detect() call through a single worker thread, and "sync" mode
+        # runs it inline on the (single, cooperatively-scheduled) gevent
+        # request greenlet -- either way, exactly one caller ever executes
+        # this section at a time in the current architecture, so a
+        # threading.Lock here was unused scaffolding rather than an active
+        # safeguard (see #261). Re-add one (protecting per-instance state
+        # correctly) if concurrent inference is ever introduced.
+        self._interpreter.set_tensor(self._input_details[0]["index"], input_tensor)
+        self._interpreter.invoke()
+        output_map = self._output_map()
 
         boxes = self._normalize_box_rows(output_map["boxes"])
         classes = self._normalize_values(output_map["classes"])
