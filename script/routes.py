@@ -640,6 +640,17 @@ def upload_file():
         current_app.logger.error("Invalid captured_at metadata: %s", safe_val)
         return jsonify({"message": "Invalid captured_at metadata"}), 400
 
+    # Backpressure for the single detect-at-a-time inference pipeline
+    # (script/inference.py): with no cap, a burst of uploads outpacing
+    # detection grows this queue without bound (see #376). Checked after
+    # auth/validation so only accepted uploads count against it, and
+    # before the storage write below so a rejected upload doesn't leave
+    # an image on disk that will never get inferred. Disabled (0) by
+    # default -- see INFERENCE_QUEUE_MAX_DEPTH's definition in config.py.
+    max_queue_depth = current_app.config.get("INFERENCE_QUEUE_MAX_DEPTH", 0)
+    if max_queue_depth > 0 and _inference_service().queue_length() >= max_queue_depth:
+        return jsonify({"message": "Server busy, try again later"}), 429
+
     try:
         stored = _storage().save_image(
             request.data,

@@ -155,7 +155,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorMessage"
         "429":
-          description: Rate limit exceeded
+          description: Rate limit exceeded, or the inference queue is at `INFERENCE_QUEUE_MAX_DEPTH` (default disabled)
           content:
             application/json:
               schema:

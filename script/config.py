@@ -162,6 +162,13 @@ class Config:
         os.getenv("ESP32CAM_DEVICE_LOG_RETENTION_MAX_AGE_SECONDS", "0")
     )
     MAX_MJPEG_STREAMS = int(os.getenv("ESP32CAM_MAX_MJPEG_STREAMS", "10"))
+    # Default disabled (0) like the retention settings above: the single
+    # detect-at-a-time inference pipeline (script/inference.py) has no
+    # built-in bound on how deep its queue can grow if uploads outpace it,
+    # but the "right" depth to cap it at depends on camera count/upload
+    # cadence this project can't guess -- opt in once you've measured your
+    # own deployment. See #376.
+    INFERENCE_QUEUE_MAX_DEPTH = int(os.getenv("ESP32CAM_INFERENCE_QUEUE_MAX_DEPTH", "0"))
     # 0 derives the timeout from each camera's expected interval plus a grace
     # period, so a sparse camera does not disconnect while it is healthy.
     MJPEG_STREAM_IDLE_TIMEOUT_SECONDS = int(

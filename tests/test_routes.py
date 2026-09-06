@@ -705,6 +705,44 @@ def test_upload_returns_413_for_large_payload(app, client):
     assert response.get_json()["message"] == "Payload too large"
 
 
+def test_upload_returns_429_when_inference_queue_is_at_max_depth(app, client):
+    # Regression test for #376: nothing previously stopped the inference
+    # queue from growing without bound if uploads (from one or more
+    # cameras) outpace the single-worker detection pipeline. Opt-in via
+    # ESP32CAM_INFERENCE_QUEUE_MAX_DEPTH (default 0 = no limit, matching
+    # this codebase's convention for other not-urgent-by-default
+    # operational caps) so existing small deployments that never approach
+    # any reasonable threshold see no behavior change.
+    app.config["INFERENCE_QUEUE_MAX_DEPTH"] = 1
+    inference = app.extensions["inference_service"]
+    inference._queue.put(1)  # simulate one snapshot already queued
+
+    response = client.post("/upload", data=MINIMAL_JPEG, headers=UPLOAD_HEADERS)
+
+    assert response.status_code == 429
+    assert response.get_json()["message"] == "Server busy, try again later"
+
+
+def test_upload_max_depth_disabled_by_default_regardless_of_queue_length(app, client):
+    inference = app.extensions["inference_service"]
+    inference._queue.put(1)
+    inference._queue.put(2)
+
+    response = client.post("/upload", data=MINIMAL_JPEG, headers=UPLOAD_HEADERS)
+
+    assert response.status_code == 200
+
+
+def test_upload_succeeds_when_queue_is_below_the_configured_max_depth(app, client):
+    app.config["INFERENCE_QUEUE_MAX_DEPTH"] = 2
+    inference = app.extensions["inference_service"]
+    inference._queue.put(1)
+
+    response = client.post("/upload", data=MINIMAL_JPEG, headers=UPLOAD_HEADERS)
+
+    assert response.status_code == 200
+
+
 def test_upload_sets_snapshot_limit_before_body_read(app, client):
     app.config["MAX_CONTENT_LENGTH"] = 999
     app.config["SNAPSHOT_MAX_CONTENT_LENGTH"] = 8
