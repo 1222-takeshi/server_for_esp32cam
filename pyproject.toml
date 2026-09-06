@@ -12,6 +12,11 @@ dependencies = [
   "Flask>=3.1.3,<4.0",
   "Flask-Limiter>=3.5,<5.0",
   "Flask-Sock>=0.7,<0.8",
+  # Not just a production-server runtime choice: script/inference.py
+  # dispatches detect() calls through gevent.threadpool.ThreadPool (see
+  # #244/#259), so it's imported unconditionally by script/app.py now,
+  # regardless of which extras are installed.
+  "gevent>=24,<27",
   "Pillow>=12.2,<13.0",
   "python-json-logger>=2.0,<4.0",
   "prometheus-client>=0.20,<0.27",
@@ -33,7 +38,6 @@ ml = [
 ]
 server = [
   "gunicorn>=23,<27",
-  "gevent>=24,<27",
 ]
 
 [tool.pytest.ini_options]

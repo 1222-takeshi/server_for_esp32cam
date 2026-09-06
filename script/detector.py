@@ -226,14 +226,15 @@ class TFLiteCpuDetector:
     def detect(self, image_bytes: bytes) -> list[Detection]:
         input_tensor = self._prepare_input(image_bytes)
 
-        # Not lock-protected: the async pipeline (script/inference.py) funnels
-        # every detect() call through a single worker thread, and "sync" mode
-        # runs it inline on the (single, cooperatively-scheduled) gevent
-        # request greenlet -- either way, exactly one caller ever executes
-        # this section at a time in the current architecture, so a
-        # threading.Lock here was unused scaffolding rather than an active
-        # safeguard (see #261). Re-add one (protecting per-instance state
-        # correctly) if concurrent inference is ever introduced.
+        # Not lock-protected: InferenceService (script/inference.py) funnels
+        # every detect() call -- from either the async worker loop or a
+        # "sync"-mode request greenlet -- through a single-thread
+        # gevent.threadpool.ThreadPool, so exactly one caller ever executes
+        # this section at a time in the current architecture, and never
+        # concurrently with itself. A threading.Lock here would be unused
+        # scaffolding rather than an active safeguard (see #261). Re-add one
+        # (protecting per-instance state correctly) if concurrent inference
+        # is ever introduced (e.g. a pool size > 1).
         self._interpreter.set_tensor(self._input_details[0]["index"], input_tensor)
         self._interpreter.invoke()
         output_map = self._output_map()
