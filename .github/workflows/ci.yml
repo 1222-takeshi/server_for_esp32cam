@@ -11,16 +11,7 @@ on:
     # no corresponding `pull_request` event of its own.
     branches:
       - main
-    # Doc-only changes don't affect anything test/ruff/pip-audit/the Arduino
-    # sketch compile actually check. `paths-ignore` is per-event, not
-    # shared under `on:` -- it has to be repeated under `pull_request` below.
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
   pull_request:
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
 
 permissions:
   contents: read
@@ -133,7 +124,11 @@ jobs:
     # has no bearing on script/docs/tests-only changes. See #350.
     if: needs.changes.outputs.esp32_example == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The Arduino toolchain cache key includes hashFiles of this workflow
+    # file, so any future edit to it invalidates the cache -- give this job
+    # enough headroom for a fully cold core download + compile, not just
+    # the warm-cache case.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Cache Arduino CLI data
