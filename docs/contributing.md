@@ -15,7 +15,7 @@ Contributions to this project are welcome! If you'd like to contribute, please f
     Implement your feature or bug fix.
     *   Ensure your code follows the existing style and structure.
     *   If you add new features, consider adding relevant documentation or examples.
-    *   If you add or change a Python dependency in `pyproject.toml`, regenerate the pinned lockfile: `uv pip compile pyproject.toml --extra dev --extra server --extra ml --generate-hashes -o requirements.lock.txt`.
+    *   If you add or change a Python dependency in `pyproject.toml`, regenerate the pinned lockfile: `uv pip compile pyproject.toml --extra dev --extra server --extra ml --generate-hashes --python-platform x86_64-unknown-linux-gnu -o requirements.lock.txt` (the platform pin matches CI's `dependency-audit` job, which installs this lockfile on `ubuntu-latest`; omitting it on a non-Linux host can produce hashes that don't match what's actually installable there). Add `--upgrade` to pick up new releases within the ranges already declared in `pyproject.toml` instead of keeping the existing pins.
     *   `static/vendor/swagger-ui/` vendors a specific `swagger-ui-dist` release (currently `5.32.12`) so `GET /api/docs` doesn't depend on a third-party CDN (see #316). To update it, download the new version's tarball (`https://registry.npmjs.org/swagger-ui-dist/-/swagger-ui-dist-<version>.tgz`) and replace `swagger-ui.css`, `swagger-ui-bundle.js`, `swagger-ui-standalone-preset.js`, `LICENSE`, and `NOTICE` with the corresponding files from the new release.
 
 4.  **Test Your Changes:**
