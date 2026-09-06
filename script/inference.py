@@ -73,18 +73,28 @@ class InferenceService:
         self._stop_event.set()
         if self._worker is not None:
             self._worker.join(timeout=1.0)
-            self._worker = None
-            # Only reachable when this service actually had a worker to
-            # stop (async mode). In "sync" mode, script/app.py's
+            # Only kill the pool if the worker actually finished within
+            # the join timeout above. In "sync" mode, script/app.py's
             # teardown_appcontext calls stop() after *every* request --
-            # ThreadPool.kill() blocks the calling greenlet until any
-            # in-flight detect() call finishes, with no timeout, so
-            # calling it unconditionally here let one request's teardown
-            # stall on a completely unrelated concurrent request's
-            # inference. Gating it on _worker (which sync mode never
-            # sets) keeps that path a no-op, as it was before detect()
-            # moved onto this pool.
-            self._detect_pool.kill()
+            # self._worker is never set for that mode, so this whole
+            # branch (and the pool) is untouched there, same as before
+            # detect() moved onto this pool.
+            #
+            # ThreadPool.kill() blocks the calling greenlet until the
+            # pool's worker thread goes idle, with no timeout of its own.
+            # If the worker loop's last process_snapshot() call is still
+            # running past the 1s join() above (a single slow frame, or a
+            # detector that hangs), that same in-flight detect() call is
+            # still occupying the pool's one thread -- calling kill() here
+            # regardless would trade the bounded join() timeout for an
+            # unbounded wait on that call to finish. Skipping it in that
+            # case leaves the pool's thread to exit on its own once the
+            # call completes; a leaked idle ThreadPool worker thread does
+            # not block process exit.
+            worker_stopped_in_time = not self._worker.is_alive()
+            self._worker = None
+            if worker_stopped_in_time:
+                self._detect_pool.kill()
 
     def enqueue_snapshot(self, snapshot_id: int) -> None:
         if self.mode == "sync":

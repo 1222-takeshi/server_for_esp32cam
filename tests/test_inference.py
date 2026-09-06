@@ -82,6 +82,46 @@ class RaisingDetector:
         raise self.exc
 
 
+class FakeWorkerThread:
+    """Stands in for InferenceService._worker so stop()'s branching on
+    "did the worker actually stop within the join timeout" can be tested
+    deterministically. A real threading.Thread spawned via .start() would
+    work for the "still alive" case too, but in a plain (non
+    gevent.monkey.patch_all()'d) test process it's a genuine foreign OS
+    thread, and gevent.threadpool.ThreadPool.apply() called from a thread
+    it doesn't own falls back to running the call inline on that thread
+    instead of dispatching it to the pool -- confirmed empirically, this
+    made an earlier version of these tests assert on a pool that was never
+    actually used. Under the real gunicorn `-k gevent` deployment this
+    module ships under, gevent's own monkey-patching turns
+    threading.Thread into a hub-sharing greenlet, so that fallback doesn't
+    apply there; test_stop_does_not_block_on_an_unrelated_in_flight_detect_call
+    below covers the real dispatch path via gevent.spawn(), which shares
+    the hub the same way regardless of monkey-patching."""
+
+    def __init__(self, *, alive_after_join: bool) -> None:
+        self._alive_after_join = alive_after_join
+
+    def join(self, timeout: float | None = None) -> None:
+        pass
+
+    def is_alive(self) -> bool:
+        return self._alive_after_join
+
+
+class FakeDetectPool:
+    """gevent.threadpool.ThreadPool doesn't allow monkeypatching its kill
+    method (a read-only attribute on the underlying type), and asserting
+    on a real pool's .size races with gevent's own idle-worker reaping --
+    so this just records whether stop() called kill()."""
+
+    def __init__(self) -> None:
+        self.kill_calls = 0
+
+    def kill(self) -> None:
+        self.kill_calls += 1
+
+
 @pytest.fixture
 def make_service():
     """Builds an InferenceService wired to fakes, and always tears down its
@@ -214,17 +254,34 @@ def test_stop_does_not_block_on_an_unrelated_in_flight_detect_call(make_service)
     in_flight.join()
 
 
-def test_stop_kills_the_detect_pool_after_the_async_worker_stops(make_service):
+def test_stop_kills_the_pool_once_the_worker_stops_within_the_join_timeout(make_service):
     detector = SlowDetector(delay=0.01)
-    service, store = make_service(detector)
-    service.start()
-    service.enqueue_snapshot(store._snapshot.id)
-
-    deadline = time.monotonic() + 2.0
-    while detector.call_count == 0 and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert detector.call_count == 1
+    service, _store = make_service(detector)
+    service._worker = FakeWorkerThread(alive_after_join=False)
+    fake_pool = FakeDetectPool()
+    service._detect_pool = fake_pool
 
     service.stop()
 
-    assert service._detect_pool.size == 0
+    assert service._worker is None
+    assert fake_pool.kill_calls == 1
+
+
+def test_stop_skips_the_pool_kill_when_the_worker_is_still_busy_after_the_join_timeout(
+    make_service,
+):
+    # Regression test: if a single detect() call outlives the worker's own
+    # join(timeout=1.0) -- a slow frame, or a hung detector -- stop() must
+    # not fall through to kill() anyway, since kill() waits for the pool's
+    # thread to go idle with no timeout of its own and would end up
+    # waiting out however much longer that same in-flight call takes.
+    detector = SlowDetector(delay=0.01)
+    service, _store = make_service(detector)
+    service._worker = FakeWorkerThread(alive_after_join=True)
+    fake_pool = FakeDetectPool()
+    service._detect_pool = fake_pool
+
+    service.stop()
+
+    assert service._worker is None
+    assert fake_pool.kill_calls == 0
