@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 from datetime import datetime, timedelta, timezone
+import threading
 from unittest.mock import patch
 
 from script.detector import Detection
@@ -1360,6 +1361,69 @@ def test_metadata_store_enables_wal_mode(tmp_path):
     store = SQLiteMetadataStore(tmp_path / "wal.sqlite3")
     row = store._get_connection().execute("PRAGMA journal_mode").fetchone()
     assert row[0] == "wal"
+
+
+def test_metadata_store_detects_monkey_patched_threading_at_construction(tmp_path):
+    # SQLiteMetadataStore reads gevent.monkey.is_module_patched("threading")
+    # once at construction (the only supported production deployment --
+    # Dockerfile, docs/deployment.md -- patches it before the app, and
+    # therefore this store, is ever created; it doesn't change mid-process).
+    # This test's own process never calls monkey.patch_all(), so this
+    # should reflect that.
+    store = SQLiteMetadataStore(tmp_path / "unpatched.sqlite3")
+    assert store._single_os_thread is False
+
+
+def test_get_connection_shares_one_instance_wide_connection_when_single_os_thread(
+    tmp_path,
+):
+    # Regression test for #299: under a monkey-patched gevent worker,
+    # threading.local() becomes greenlet-local, not OS-thread-local --
+    # gevent's WSGI server spawns a new greenlet per accepted connection,
+    # so every request got its own fresh, never-reused sqlite3 connection
+    # instead of sharing the one connection the single real OS thread this
+    # worker model actually provides. Force the flag directly rather than
+    # calling gevent.monkey.patch_all() (which would leak into every other
+    # test in this process) or spawning gevent greenlets (which share
+    # threading.local() with their parent OS thread even unpatched, so
+    # they wouldn't actually distinguish the two code paths here).
+    store = SQLiteMetadataStore(tmp_path / "shared.sqlite3")
+    store._single_os_thread = True
+
+    first = store._get_connection()
+    second = store._get_connection()
+
+    assert first is second
+    assert store._shared_connection is first
+    assert getattr(store._local, "connection", None) is None
+
+
+def test_get_connection_keeps_per_thread_connections_when_not_single_os_thread(
+    tmp_path,
+):
+    # Outside a monkey-patched gevent worker (tests, a dev server, a
+    # gthread worker), genuine OS threads exist and sqlite3 connections
+    # (opened with check_same_thread=True) aren't safe to share across
+    # them -- threading.local()'s per-thread isolation must still apply.
+    store = SQLiteMetadataStore(tmp_path / "per-thread.sqlite3")
+    assert store._single_os_thread is False
+
+    connection_ids: list[int] = []
+    lock = threading.Lock()
+
+    def worker() -> None:
+        conn_id = id(store._get_connection())
+        with lock:
+            connection_ids.append(conn_id)
+
+    threads = [threading.Thread(target=worker) for _ in range(5)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(set(connection_ids)) == 5
+    assert store._shared_connection is None
 
 
 def test_desired_config_ack_rejects_stale_version_atomically(tmp_path):

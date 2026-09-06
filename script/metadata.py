@@ -9,6 +9,8 @@ from pathlib import Path
 import sqlite3
 import threading
 
+from gevent import monkey as gevent_monkey
+
 from script.detector import Detection
 from script.storage import StoredImage, StoredVideo
 
@@ -158,9 +160,8 @@ def _camera_status(
 
 
 class SQLiteMetadataStore:
-    # Each OS thread (and, under a monkey-patched gevent worker, each
-    # greenlet -- see _get_connection() below) gets its own sqlite3
-    # connection, so concurrent writers are common: an upload's
+    # Each OS thread gets its own sqlite3 connection via _local below, so
+    # concurrent writers are common: an upload's
     # record_snapshot()/apply_upload_retention() can race a retention scan
     # or another camera's upload. WAL mode still serializes writers, and
     # without busy_timeout set, SQLite's default is to raise "database is
@@ -181,6 +182,22 @@ class SQLiteMetadataStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._default_expected_interval_seconds = default_expected_interval_seconds
         self._local = threading.local()
+        self._shared_connection: sqlite3.Connection | None = None
+        # Under a monkey-patched gevent worker (the only supported
+        # production deployment -- Dockerfile, docs/deployment.md),
+        # threading.local() becomes greenlet-local, not OS-thread-local:
+        # gevent's WSGI server spawns a new greenlet per accepted
+        # connection, so every request got its own fresh, never-reused
+        # sqlite3 connection (and its own connect() + 3 PRAGMA statements)
+        # instead of sharing the one connection the single real OS thread
+        # this worker model actually provides (see #299). Detected once
+        # here since a worker's monkey-patch state is set at boot, before
+        # this store is ever constructed, and never changes afterward.
+        # Outside that case (tests, a dev server, a gthread worker),
+        # genuine OS threads exist and sqlite3 connections (opened with
+        # check_same_thread=True) aren't safe to share across them, so
+        # threading.local()'s per-thread isolation is kept.
+        self._single_os_thread = gevent_monkey.is_module_patched("threading")
 
         old_mask = os.umask(0o177)
         try:
@@ -201,15 +218,23 @@ class SQLiteMetadataStore:
             init_conn.close()
 
     def _get_connection(self) -> sqlite3.Connection:
+        if self._single_os_thread:
+            if self._shared_connection is None:
+                self._shared_connection = self._open_connection()
+            return self._shared_connection
         conn = getattr(self._local, "connection", None)
         if conn is None:
-            conn = sqlite3.connect(self.db_path, check_same_thread=True)
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode = WAL")
-            conn.execute("PRAGMA synchronous = NORMAL")
-            conn.execute("PRAGMA foreign_keys = ON")
-            conn.execute(f"PRAGMA busy_timeout = {self._BUSY_TIMEOUT_MS}")
+            conn = self._open_connection()
             self._local.connection = conn
+        return conn
+
+    def _open_connection(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path, check_same_thread=True)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute(f"PRAGMA busy_timeout = {self._BUSY_TIMEOUT_MS}")
         return conn
 
     def _migrate_schema(self, conn: sqlite3.Connection) -> None:
