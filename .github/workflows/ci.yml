@@ -11,12 +11,16 @@ on:
     # no corresponding `pull_request` event of its own.
     branches:
       - main
+    # Doc-only changes don't affect anything test/ruff/pip-audit/the Arduino
+    # sketch compile actually check. `paths-ignore` is per-event, not
+    # shared under `on:` -- it has to be repeated under `pull_request` below.
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
   pull_request:
-  # Doc-only changes don't affect anything test/ruff/pip-audit/the Arduino
-  # sketch compile actually check.
-  paths-ignore:
-    - "**.md"
-    - "docs/**"
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
 
 permissions:
   contents: read
