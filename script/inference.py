@@ -4,6 +4,8 @@ from queue import Empty, Queue
 import threading
 from typing import Protocol
 
+from gevent.threadpool import ThreadPool
+
 from script.detector import Detection, DetectionSkipped
 from script.metadata import SQLiteMetadataStore
 from script.storage import Storage
@@ -38,6 +40,17 @@ class InferenceService:
         self._queue: Queue[int] = Queue()
         self._stop_event = threading.Event()
         self._worker: threading.Thread | None = None
+        # detector.detect() (TFLiteCpuDetector.detect() -> interpreter.invoke())
+        # is a long native call that doesn't yield to gevent's event loop --
+        # run inline on this service's calling greenlet (the async worker
+        # loop below, or the request greenlet itself in "sync" mode), it
+        # freezes every other greenlet (uploads, dashboard, /healthz) for the
+        # call's whole duration (see #244, #259). Dispatching it through a
+        # single real OS thread keeps detect() calls serialized -- matching
+        # the "exactly one caller at a time" invariant detector.py already
+        # relies on -- while letting the gevent hub keep servicing other
+        # greenlets while that thread is busy.
+        self._detect_pool = ThreadPool(1)
 
     def start(self) -> None:
         if self.mode != "async":
@@ -61,6 +74,7 @@ class InferenceService:
         if self._worker is not None:
             self._worker.join(timeout=1.0)
             self._worker = None
+        self._detect_pool.kill()
 
     def enqueue_snapshot(self, snapshot_id: int) -> None:
         if self.mode == "sync":
@@ -100,7 +114,7 @@ class InferenceService:
 
         try:
             image_bytes = self.storage.read_image_by_relative_path(snapshot.relative_path)
-            detections = self.detector.detect(image_bytes)
+            detections = self._detect_pool.apply(self.detector.detect, (image_bytes,))
         except DetectionSkipped as exc:
             self._update_tracking(snapshot.camera_id, [])
             self.metadata_store.mark_snapshot_skipped(snapshot_id, reason=str(exc))

@@ -192,16 +192,24 @@ WantedBy=default.target
 ```
 
 > **`--timeout 120` is required when `ESP32CAM_DETECTOR=tflite_cpu`.** The
-> `gevent` worker shares one OS thread, and enabling TFLite detection adds
-> two CPU-bound phases that do not yield to the event loop: XNNPACK delegate
-> creation at worker boot (~30 s on a Raspberry Pi 4) and per-frame inference.
-> With gunicorn's default 30 s timeout the arbiter kills the worker mid-init,
-> which drops the camera WebSocket and respawns into the same init — an
-> endless crash loop that starves uploads (frames arrive every ~90 s instead
-> of the configured interval) and floods syslog with misparsed binary frames.
-> Raising the timeout past the init cost breaks the loop. If inference itself
-> ever backs up under sustained load, move it off the web worker (a separate
-> process) rather than raising the timeout further.
+> `gevent` worker shares one OS thread, and XNNPACK delegate creation at
+> worker boot (~30 s on a Raspberry Pi 4) is a CPU-bound phase that doesn't
+> yield to the event loop. With gunicorn's default 30 s timeout the arbiter
+> kills the worker mid-init, which drops the camera WebSocket and respawns
+> into the same init — an endless crash loop that starves uploads (frames
+> arrive every ~90 s instead of the configured interval) and floods syslog
+> with misparsed binary frames. Raising the timeout past the init cost
+> breaks the loop.
+>
+> Per-frame inference itself no longer has this problem: `InferenceService`
+> (`script/inference.py`) dispatches `detector.detect()` through a
+> single-thread `gevent.threadpool.ThreadPool`, so `interpreter.invoke()`
+> runs on a real OS thread instead of the gevent worker's event-loop thread
+> (see #244/#259) — uploads, the dashboard, and `/healthz` keep responding
+> while a frame is being processed. If the inference queue itself backs up
+> under sustained load (more cameras than the single detect-at-a-time
+> throughput can keep up with), that's a backpressure problem, not an
+> event-loop-blocking one — see #376.
 
 Start it:
 
