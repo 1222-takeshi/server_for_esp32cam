@@ -702,22 +702,25 @@ class SQLiteMetadataStore:
         )
         return candidates, self._total_retention_bytes("videos")
 
-    def sync_storage_index(
-        self,
-        images: list[StoredImage],
-        *,
-        hydrate_metadata: Callable[[str], tuple[str | None, datetime | None]] | None = None,
-    ) -> None:
-        if not images:
-            return
+    def filter_new_filenames(self, names: list[str]) -> set[str]:
+        """Return the subset of `names` not already present in the
+        snapshots table.
+
+        Only checks whether *these* on-disk filenames already exist in the
+        index, instead of materializing the entire (potentially huge)
+        snapshots table into a Python set. `filename` is UNIQUE/indexed, so
+        each chunked lookup is an indexed query, not a table scan, and the
+        memory/row count is bounded by the on-disk listing rather than the
+        historical size of the snapshots table.
+
+        Callers such as `sync_storage_index()` use this to decide which
+        images are genuinely new; `app.py`'s startup path also calls this
+        directly (with cheap filename-only listing) so it can skip
+        `stat()`-ing files that are already indexed (see #383).
+        """
+        if not names:
+            return set()
         conn = self._get_connection()
-        # Only check whether *these* on-disk filenames already exist in the
-        # index, instead of materializing the entire (potentially huge)
-        # snapshots table into a Python set. `filename` is UNIQUE/indexed,
-        # so each chunked lookup is an indexed query, not a table scan, and
-        # the memory/row count is bounded by the on-disk listing rather than
-        # the historical size of the snapshots table.
-        names = [img.name for img in images]
         existing: set[str] = set()
         for chunk in _chunked(names, _SQLITE_IN_CLAUSE_CHUNK_SIZE):
             placeholders = ",".join("?" for _ in chunk)
@@ -726,7 +729,18 @@ class SQLiteMetadataStore:
                 tuple(chunk),
             ).fetchall()
             existing.update(row[0] for row in rows)
-        new_images = [img for img in images if img.name not in existing]
+        return {name for name in names if name not in existing}
+
+    def sync_storage_index(
+        self,
+        images: list[StoredImage],
+        *,
+        hydrate_metadata: Callable[[str], tuple[str | None, datetime | None]] | None = None,
+    ) -> None:
+        if not images:
+            return
+        new_names = self.filter_new_filenames([img.name for img in images])
+        new_images = [img for img in images if img.name in new_names]
         if not new_images:
             return
         # `images` may have been listed with include_metadata=False (the

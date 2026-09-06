@@ -250,8 +250,17 @@ def create_app(test_config: dict | None = None) -> Flask:
         app.config["DB_PATH"],
         default_expected_interval_seconds=app.config["CAMERA_EXPECTED_INTERVAL_SECONDS"],
     )
+    # Cheap filename-only walk first, then only stat()/hydrate the files
+    # that are genuinely new -- avoids stat()-ing every on-disk file on
+    # every boot when most of them are already indexed from a prior run
+    # (#383).
+    image_names = storage.list_image_names()
+    new_filenames = metadata_store.filter_new_filenames([name for name, _ in image_names])
+    new_relative_paths = [
+        relative_path for name, relative_path in image_names if name in new_filenames
+    ]
     metadata_store.sync_storage_index(
-        storage.list_images(include_metadata=False),
+        storage.stat_images(new_relative_paths, include_metadata=False),
         hydrate_metadata=storage.read_image_metadata,
     )
     detector = _create_detector(app)

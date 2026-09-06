@@ -100,6 +100,12 @@ class Storage(Protocol):
 
     def list_images(self, *, include_metadata: bool = True) -> list[StoredImage]: ...
 
+    def list_image_names(self) -> list[tuple[str, str]]: ...
+
+    def stat_images(
+        self, relative_paths: list[str], *, include_metadata: bool = True
+    ) -> list[StoredImage]: ...
+
     def read_image_metadata(self, relative_path: str) -> tuple[str | None, datetime | None]: ...
 
     def read_image_by_relative_path(self, relative_path: str) -> bytes: ...
@@ -252,6 +258,45 @@ class LocalFilesystemStorage:
             if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg"}
         ]
         return sorted(images, key=lambda image: image.created_at, reverse=True)
+
+    def list_image_names(self) -> list[tuple[str, str]]:
+        """Cheap filesystem walk that returns only `(name, relative_path)`
+        pairs, without `path.stat()`-ing each file.
+
+        Used by app.py's startup index sync so it can ask
+        `SQLiteMetadataStore.filter_new_filenames()` which files are
+        genuinely new *before* paying for a `stat()` call (and, when
+        requested, a metadata sidecar read) per file -- instead of
+        `stat()`-ing every file on disk on every boot regardless of whether
+        it is already indexed (#383).
+        """
+        return [
+            (path.name, path.relative_to(self.upload_dir).as_posix())
+            for path in self.upload_dir.rglob("*")
+            if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg"}
+        ]
+
+    def stat_images(
+        self, relative_paths: list[str], *, include_metadata: bool = True
+    ) -> list[StoredImage]:
+        """Build `StoredImage` records (i.e. `stat()` + optional metadata
+        sidecar read) for only the given `relative_paths`, instead of every
+        file on disk. Paired with `list_image_names()` so callers can skip
+        this per-file cost for files already known to be indexed (#383).
+
+        Silently skips a path if the file has disappeared since it was
+        listed (e.g. deleted concurrently with startup sync).
+        """
+        images = []
+        for relative_path in relative_paths:
+            path = self.upload_dir / relative_path
+            try:
+                images.append(
+                    StoredImage(*self._stored_image_fields(path, include_metadata=include_metadata))
+                )
+            except OSError:
+                continue
+        return images
 
     def read_image_metadata(self, relative_path: str) -> tuple[str | None, datetime | None]:
         path = self._resolve_relative_path(relative_path)
