@@ -1837,6 +1837,37 @@ def test_api_docs_serves_swagger_ui(client):
     assert b"swagger-ui" in response.data
 
 
+def test_api_docs_does_not_load_assets_from_a_third_party_cdn(client):
+    # Regression test for #316: /api/docs previously loaded swagger-ui-dist
+    # from unpkg.com at an unpinned "@5" version with no SRI. It must now be
+    # fully self-hosted under /static/vendor/swagger-ui/.
+    response = client.get("/api/docs")
+    page = response.get_data(as_text=True)
+
+    assert "unpkg.com" not in page
+    assert "://" not in page
+    assert "/static/vendor/swagger-ui/swagger-ui.css" in page
+    assert "/static/vendor/swagger-ui/swagger-ui-bundle.js" in page
+    assert "/static/vendor/swagger-ui/swagger-ui-standalone-preset.js" in page
+    # The standalone preset must be referenced as its own top-level global
+    # (as swagger-ui-standalone-preset.js actually defines it), not as a
+    # (nonexistent) property of SwaggerUIBundle.
+    assert "SwaggerUIBundle.SwaggerUIStandalonePreset" not in page
+    assert "SwaggerUIStandalonePreset" in page
+
+
+def test_api_docs_vendored_assets_are_served_locally(client):
+    for filename, content_type_fragment in [
+        ("swagger-ui.css", "css"),
+        ("swagger-ui-bundle.js", "javascript"),
+        ("swagger-ui-standalone-preset.js", "javascript"),
+    ]:
+        response = client.get(f"/static/vendor/swagger-ui/{filename}")
+        assert response.status_code == 200
+        assert content_type_fragment in response.content_type
+        assert response.headers.get("Cache-Control") == "public, max-age=31536000, immutable"
+
+
 def test_index_page_links_to_external_base_css_instead_of_inline_style(client):
     response = client.get("/")
     page = response.get_data(as_text=True)

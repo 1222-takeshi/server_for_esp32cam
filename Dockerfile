@@ -33,7 +33,7 @@ COPY pyproject.toml requirements-server.lock.txt requirements-ml.lock.txt ./
 RUN mkdir -p script && touch script/__init__.py
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --require-hashes -r requirements-server.lock.txt \
-    && if printf '%s' ",${PIP_EXTRAS}," | grep -q ',ml,'; then \
+    && if printf '%s' ",${PIP_EXTRAS}," | tr -d '[:space:]' | grep -q ',ml,'; then \
          pip install --require-hashes -r requirements-ml.lock.txt; \
        fi
 # The lockfiles only pin third-party packages, not this project itself.
