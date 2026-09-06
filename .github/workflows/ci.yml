@@ -2,13 +2,15 @@ name: CI
 
 on:
   push:
+    # Feature/fix/etc. branches are validated via the `pull_request` trigger
+    # below once a PR is open; keeping them here too as well as on
+    # `pull_request` made every push to an open PR run CI twice (once per
+    # trigger, each its own concurrency group since `push` and
+    # `pull_request` land on different `github.ref` values). `main` stays
+    # here to verify post-merge state (e.g. after a squash merge) that has
+    # no corresponding `pull_request` event of its own.
     branches:
       - main
-      - "feat/**"
-      - "fix/**"
-      - "chore/**"
-      - "test/**"
-      - "perf/**"
   pull_request:
 
 permissions:
@@ -21,6 +23,7 @@ concurrency:
 jobs:
   changes:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       # Job-level `permissions:` replaces (not merges with) the
       # workflow-level block above, so both are spelled out explicitly here:
@@ -47,6 +50,7 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -83,6 +87,7 @@ jobs:
 
   dependency-audit:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -119,6 +124,11 @@ jobs:
     # has no bearing on script/docs/tests-only changes. See #350.
     if: needs.changes.outputs.esp32_example == 'true'
     runs-on: ubuntu-latest
+    # The Arduino toolchain cache key includes hashFiles of this workflow
+    # file, so any future edit to it invalidates the cache -- give this job
+    # enough headroom for a fully cold core download + compile, not just
+    # the warm-cache case.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Cache Arduino CLI data

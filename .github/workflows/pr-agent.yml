@@ -4,8 +4,14 @@ on:
   issue_comment:
 jobs:
   pr_agent_job:
-    if: ${{ github.event.sender.type != 'Bot' }}
+    # issue_comment fires for comments on plain issues too, not just PRs;
+    # skip those here since pr-agent only has anything to do on a PR.
+    # Also skip draft PRs on open/reopen -- they get a run once marked
+    # ready_for_review instead, avoiding a review pass on work still in
+    # progress.
+    if: ${{ github.event.sender.type != 'Bot' && (github.event_name != 'issue_comment' || github.event.issue.pull_request != null) && (github.event_name != 'pull_request' || github.event.pull_request.draft != true) }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       issues: write
       pull-requests: write
