@@ -92,15 +92,30 @@
     </div>
   </div>
   {% endif %}
+
+  {% if camera_total > camera_limit %}
+  <div class="card" style="margin-top:16px;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;gap:12px;">
+    <span class="text-4">Showing {{ camera_offset + 1 }}–{{ [camera_offset + camera_summaries|length, camera_total]|min }} of {{ camera_total }} cameras</span>
+    <div style="display:flex;gap:8px;">
+      {% if camera_offset > 0 %}
+      <a class="button" href="{{ url_for('server.index', limit=camera_limit, offset=[camera_offset - camera_limit, 0]|max) }}">Previous</a>
+      {% endif %}
+      {% if camera_offset + camera_limit < camera_total %}
+      <a class="button" href="{{ url_for('server.index', limit=camera_limit, offset=camera_offset + camera_limit) }}">Next</a>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
 (function () {
-  const RECONNECT_MS = 3000;
-  const STALE_AFTER_MS = 15000;
-  const OFFLINE_AFTER_MS = 60000;
+  // formatTimestamp/formatFrameSize and the reconnect timing constants are
+  // defined once in static/dashboard-shared.js (loaded from _base.html)
+  // instead of duplicated here and in camera_detail.html -- see #358.
+  const { RECONNECT_MS, STALE_AFTER_MS, OFFLINE_AFTER_MS, formatTimestamp, formatFrameSize } = window.CameraShared;
   const pill = document.getElementById('live-pill');
   let ws = null, timer = null;
 
@@ -122,22 +137,6 @@
     if (!stat) return;
     const current = Number.parseInt(stat.textContent, 10);
     stat.textContent = String(Number.isFinite(current) ? current + 1 : 1);
-  }
-
-  function formatTimestamp(value) {
-    if (!value) return null;
-    const d = new Date(value);
-    if (Number.isNaN(d.getTime())) return null;
-    const parts = new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'Asia/Tokyo',
-      year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', second: '2-digit',
-      hour12: false,
-    }).formatToParts(d).reduce((acc, part) => {
-      acc[part.type] = part.value;
-      return acc;
-    }, {});
-    return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} JST`;
   }
 
   function incrementOnlineCountIfNeeded(badge) {
@@ -176,13 +175,6 @@
     badge.dataset.status = status;
     const label = document.getElementById('cam-status-text-' + cid);
     if (label) label.textContent = status;
-  }
-
-  function formatFrameSize(bytes) {
-    const size = Number(bytes);
-    if (!Number.isFinite(size) || size < 0) return null;
-    if (size >= 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`;
-    return `${(size / 1024).toFixed(1)} KB`;
   }
 
   function updateFrameSize(cid, snap) {
@@ -240,7 +232,7 @@
     updateFrameSize(cid, snap);
 
     if (img && snap.url) {
-      img.src = snap.url + '?t=' + Date.now();
+      img.src = snap.url;
     }
     if (meta) {
       const timestamp = formatTimestamp(snap.captured_at || snap.stored_at);

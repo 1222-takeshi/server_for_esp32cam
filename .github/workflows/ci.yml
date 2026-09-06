@@ -19,6 +19,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      # Job-level `permissions:` replaces (not merges with) the
+      # workflow-level block above, so both are spelled out explicitly here:
+      # contents:read lets actions/checkout fetch this PR's merge ref, and
+      # pull-requests:read covers dorny/paths-filter@v3's GitHub API
+      # listFiles() fallback (used when it can't diff locally because
+      # actions/checkout's default fetch-depth:1 leaves no local base ref).
+      # Without pull-requests:read that fallback 403s with "Resource not
+      # accessible by integration"; without contents:read checkout itself
+      # fails with "Repository not found".
+      contents: read
+      pull-requests: read
+    outputs:
+      esp32_example: ${{ steps.filter.outputs.esp32_example }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            esp32_example:
+              - 'examples/esp32cam_snapshot_upload/**'
+              - '.github/workflows/ci.yml'
+
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -86,9 +112,24 @@ jobs:
         run: pip-audit --desc on
 
   compile-esp32-example:
+    needs: changes
+    # Skip on pushes/PRs that don't touch the example sketch or this
+    # workflow file -- arduino/compile-sketches (downloading the Arduino
+    # ESP32 core + compiling the sketch) is one of the slower jobs here and
+    # has no bearing on script/docs/tests-only changes. See #350.
+    if: needs.changes.outputs.esp32_example == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Cache Arduino CLI data
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.arduino15
+            ~/Arduino/libraries
+          key: arduino15-esp32cam-${{ hashFiles('.github/workflows/ci.yml') }}
+          restore-keys: |
+            arduino15-esp32cam-
       - name: Prepare config.h for CI
         run: cp examples/esp32cam_snapshot_upload/config.h.example examples/esp32cam_snapshot_upload/config.h
       - name: Compile ESP32-CAM example

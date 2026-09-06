@@ -32,6 +32,11 @@ ESP32CAM_ADMIN_TOKEN=<strong-random-token>
 docker compose up -d --build
 ```
 
+> If you plan to enable `ESP32CAM_DETECTOR=tflite_cpu` (see step 2 of the
+> Raspberry Pi runbook below), build with the `ml` extra instead, or the
+> image will start fine but fail at first inference — see
+> [Enabling TFLite detection in the Docker image](#enabling-tflite-detection-in-the-docker-image).
+
 ### 3. Verify
 
 ```bash
@@ -66,6 +71,12 @@ docker --version
 docker compose version
 tailscale status
 ```
+
+このサーバーはメタデータの書き込みに SQLite の `INSERT ... RETURNING` を使用するため、
+SQLite 3.35.0 以上が必要です。Docker で運用する場合はイメージ内の Python にリンクされた
+SQLite が対象になります。Docker を使わず Raspberry Pi 上の Python 仮想環境で運用する場合は、
+`python3 -c 'import sqlite3; print(sqlite3.sqlite_version)'` で確認してください。
+要件を満たさない環境では、データベースを開く前にサーバーが明示的なエラーで終了します。
 
 ### 2. Deploy the server
 
@@ -102,6 +113,24 @@ ESP32CAM_INFERENCE_MODE=async
 Place model files on the host under `./models/`; Docker Compose mounts that
 directory read-only at `/app/models`. Do not commit model binaries to Git.
 
+#### Enabling TFLite detection in the Docker image
+
+Setting `ESP32CAM_DETECTOR=tflite_cpu` alone is not enough: the `Dockerfile`
+only installs the `server` extra (Flask/gunicorn/gevent) by default, not the
+`ml` extra (`numpy`/`tflite-runtime`/`ai-edge-litert`) that `script/detector.py`
+needs. Without it, the server starts and reports healthy, and the failure
+only surfaces on the first upload that reaches inference
+(`RuntimeError: Install the ml extra to use TFLite detection`). Build the
+image with the `ml` extra included:
+
+```bash
+docker compose build --build-arg PIP_EXTRAS=server,ml
+docker compose up -d
+```
+
+(`--build-arg` only affects the following `build`; repeat it on later
+rebuilds, e.g. after `git pull`.)
+
 To keep only snapshots with successful detections:
 
 ```dotenv
@@ -111,7 +140,10 @@ ESP32CAM_KEEP_ONLY_DETECTED_SNAPSHOTS=true
 This option deletes snapshots only when inference succeeds and returns zero detections.
 Snapshots are kept when inference is disabled, skipped, or failed.
 
-Start the service:
+Start the service (if `ESP32CAM_DETECTOR=tflite_cpu` is set, use the
+`docker compose build --build-arg ... && docker compose up -d` form above
+instead of plain `--build`, or this step's `--build` will rebuild without
+the `ml` extra and undo it):
 
 ```bash
 docker compose up -d --build
@@ -128,9 +160,17 @@ run the service with a Python virtual environment under the `ubuntu` user:
 cd ~/server_for_esp32cam
 python3 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip setuptools
-.venv/bin/python -m pip install . gunicorn gevent
+.venv/bin/python -m pip install ".[server]"
 mkdir -p uploads data models ~/.config/systemd/user
 ```
+
+> If you plan to set `ESP32CAM_DETECTOR=tflite_cpu` (see step 2 above),
+> install `".[server,ml]"` instead of `".[server]"` — the bare/`server`-only
+> install starts the service successfully but raises
+> `RuntimeError: Install the ml extra to use TFLite detection` on the first
+> inference attempt, not at boot. `scripts/deploy_raspi.sh` (2c below) only
+> reinstalls into this same venv, so the `ml` extra must be present from this
+> initial `pip install` for TFLite detection to keep working across syncs.
 
 Create `~/.config/systemd/user/esp32cam-server.service`:
 
@@ -275,6 +315,7 @@ All variables are optional unless marked **required for production**.
 | `ESP32CAM_VIDEO_RETENTION_MAX_AGE_SECONDS` | `0` (disabled) | Delete videos older than this many seconds. Set `0` to disable. |
 | `ESP32CAM_VIDEO_RETENTION_MAX_BYTES` | `0` (disabled) | Delete oldest videos when total video storage exceeds this size. |
 | `ESP32CAM_VIDEO_RETENTION_SCAN_INTERVAL_UPLOADS` | `1` | Same as `ESP32CAM_STORAGE_RETENTION_SCAN_INTERVAL_UPLOADS` but for the video retention scan. |
+| `ESP32CAM_DEVICE_LOG_RETENTION_MAX_AGE_SECONDS` | `0` (disabled) | Delete `device_logs` rows (from `POST /api/log_error`) older than this many seconds. Runs on the same background `ESP32CAM_RETENTION_SCHEDULER_INTERVAL_SECONDS` cadence as image/video retention; there is no byte-based limit since log rows carry no file. Set `0` to disable. |
 | `ESP32CAM_DISK_USAGE_CHECK_INTERVAL_UPLOADS` | `1` | Only recheck disk usage against `ESP32CAM_STORAGE_RETENTION_MAX_BYTES` every N uploads instead of every upload. |
 | `ESP32CAM_DETECTOR` | `disabled` | Object detector. Options: `disabled`, `tflite_cpu`. |
 | `ESP32CAM_MODEL_PATH` | _(empty)_ | Path to TFLite model file. Required when `DETECTOR=tflite_cpu`. |
@@ -290,7 +331,9 @@ All variables are optional unless marked **required for production**.
 | `ESP32CAM_TRACKING_MAX_TRACKS_PER_CAMERA` | `50` | Maximum active tracks retained for each camera; excess detections remain untracked. |
 | `ESP32CAM_TRACKING_MAX_CAMERAS` | `500` | Maximum camera states retained in one process; least-recently-used camera state is evicted beyond this cap. |
 | `ESP32CAM_MAX_WS_CONNECTIONS` | `50` | Maximum concurrent WebSocket connections. |
+| `ESP32CAM_MAX_WS_PENDING_EVENTS` | `256` | Maximum queued dashboard snapshot events. Events are dropped when the queue is full so device upload responses are not blocked. |
 | `ESP32CAM_MAX_MJPEG_STREAMS` | `10` | Maximum concurrent MJPEG stream viewers per camera. |
+| `ESP32CAM_MJPEG_STREAM_IDLE_TIMEOUT_SECONDS` | `0` | Minimum idle timeout in seconds. `0` derives it from the camera's expected interval plus 30 seconds, with a 30-second floor. |
 | `ESP32CAM_MAX_TRACKED_CAMERAS` | `500` | Maximum distinct `camera_id`s tracked by the in-process upload metrics registry; least-recently-active entries are evicted beyond this cap. Set `0` to disable the cap. |
 | `ESP32CAM_WEBHOOK_URL` | _(empty — disabled)_ | Webhook URL to POST when a person is detected. |
 | `ESP32CAM_WEBHOOK_MIN_SCORE` | `0.5` | Minimum score to trigger the webhook. |
@@ -300,9 +343,21 @@ All variables are optional unless marked **required for production**.
 | `ESP32CAM_UPLOAD_WS_MIN_FRAME_INTERVAL_SECONDS` | `1.0` | Minimum seconds between WebSocket frames per connection. |
 | `ESP32CAM_LOG_FORMAT` | `text` | Log output format: `text` (human-readable) or `json` (structured, via python-json-logger). |
 
+When Gunicorn is configured with more than one worker while this setting remains
+`memory://`, the application emits a startup warning because rate-limit counters
+are independent per process. Use a shared backend such as Redis before scaling
+workers or application instances.
+
 Webhook delivery with retries is at-least-once: if the receiver processes an event
 but the response is lost or becomes a 5xx, the same event may be delivered again.
 The receiver should deduplicate events; see [Issue #279](https://github.com/1222-takeshi/server_for_esp32cam/issues/279).
+
+Webhook delivery does not follow HTTP redirects. A 3xx response from
+`ESP32CAM_WEBHOOK_URL` is treated as a permanent, logged delivery failure
+rather than being transparently followed (this avoids surprise
+SSRF-via-redirect to an unexpected host). If your webhook receiver relies on
+a redirect (e.g. a canonical-domain redirect or an HTTP→HTTPS upgrade),
+point `ESP32CAM_WEBHOOK_URL` at the final URL directly.
 
 ---
 
@@ -315,7 +370,8 @@ The receiver should deduplicate events; see [Issue #279](https://github.com/1222
 - [ ] `ESP32CAM_DB_PATH` points to a persistent volume
 - [ ] Storage retention limits are configured (`MAX_AGE_SECONDS` and/or `MAX_BYTES`)
 - [ ] HTTPS termination is handled upstream (nginx/Caddy/cloud load balancer)
-- [ ] `/api/docs` is not exposed publicly (Swagger UI loads scripts from CDN)
+- [ ] Confirm whether `/api/docs` should be exposed publicly. Its Swagger UI assets are self-hosted under `/static/vendor/swagger-ui/` (no third-party CDN dependency, see #316), so this is a documentation-exposure decision rather than a CDN-reachability/integrity concern.
+- [ ] If `ESP32CAM_DETECTOR=tflite_cpu` is set, confirm the running process actually has the `ml` extra installed (Docker: built with `--build-arg PIP_EXTRAS=server,ml`; non-Docker: venv created with `.[server,ml]`) — see [Enabling TFLite detection in the Docker image](#enabling-tflite-detection-in-the-docker-image) and step 2b. Otherwise the server starts healthy and fails only on first inference.
 
 ---
 

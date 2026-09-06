@@ -47,6 +47,42 @@ def gunicorn_preload_requested(
     return "--preload" in arguments[1:] or "--preload" in shlex.split(configured_args)
 
 
+def gunicorn_worker_count(
+    argv: Sequence[str] | None = None,
+    command_args: str | None = None,
+) -> int | None:
+    """Return the configured Gunicorn worker count, if this is a Gunicorn process."""
+
+    arguments = list(argv if argv is not None else sys.argv)
+    if not arguments or Path(arguments[0]).name != "gunicorn":
+        return None
+
+    configured_args = command_args
+    if configured_args is None:
+        configured_args = os.getenv("GUNICORN_CMD_ARGS", "")
+    # Explicit command-line options take precedence over GUNICORN_CMD_ARGS.
+    options = shlex.split(configured_args) + arguments[1:]
+    try:
+        worker_count = int(os.getenv("WEB_CONCURRENCY", "1"))
+    except ValueError:
+        return None
+    for index, option in enumerate(options):
+        raw_value: str | None = None
+        if option in {"--workers", "-w"} and index + 1 < len(options):
+            raw_value = options[index + 1]
+        elif option.startswith("--workers="):
+            raw_value = option.partition("=")[2]
+        elif option.startswith("-w") and option != "-w":
+            raw_value = option[2:]
+        if raw_value is None:
+            continue
+        try:
+            worker_count = int(raw_value)
+        except ValueError:
+            return None
+    return worker_count if worker_count > 0 else None
+
+
 class Config:
     BASE_DIR = Path(__file__).resolve().parent.parent
     UPLOAD_DIR = Path(os.getenv("ESP32CAM_UPLOAD_DIR", BASE_DIR / "uploads"))
@@ -93,6 +129,7 @@ class Config:
     # the default auto-start behavior.
     RETENTION_SCHEDULER_AUTO_START = True
     MAX_WS_CONNECTIONS = int(os.getenv("ESP32CAM_MAX_WS_CONNECTIONS", "50"))
+    MAX_WS_PENDING_EVENTS = int(os.getenv("ESP32CAM_MAX_WS_PENDING_EVENTS", "256"))
     DEVICE_API_KEY = os.getenv("ESP32CAM_DEVICE_API_KEY", "")
     DEVICE_API_KEYS = _load_device_api_keys()
     SHARED_KEY_DEVICE_ID = os.getenv("ESP32CAM_SHARED_KEY_DEVICE_ID", "")
@@ -116,7 +153,20 @@ class Config:
     VIDEO_RETENTION_SCAN_INTERVAL_UPLOADS = int(
         os.getenv("ESP32CAM_VIDEO_RETENTION_SCAN_INTERVAL_UPLOADS", "1")
     )
+    # Unlike snapshots/videos, device_logs has no on-disk file and no byte
+    # budget -- only an age cutoff. Default disabled (0) like video
+    # retention: this prunes existing rows for every deployment the moment
+    # it is enabled, so it opts in rather than silently starting to delete
+    # data on upgrade. See #357.
+    DEVICE_LOG_RETENTION_MAX_AGE_SECONDS = int(
+        os.getenv("ESP32CAM_DEVICE_LOG_RETENTION_MAX_AGE_SECONDS", "0")
+    )
     MAX_MJPEG_STREAMS = int(os.getenv("ESP32CAM_MAX_MJPEG_STREAMS", "10"))
+    # 0 derives the timeout from each camera's expected interval plus a grace
+    # period, so a sparse camera does not disconnect while it is healthy.
+    MJPEG_STREAM_IDLE_TIMEOUT_SECONDS = int(
+        os.getenv("ESP32CAM_MJPEG_STREAM_IDLE_TIMEOUT_SECONDS", "0")
+    )
     MAX_TRACKED_CAMERAS = int(os.getenv("ESP32CAM_MAX_TRACKED_CAMERAS", "500"))
     DISK_USAGE_CHECK_INTERVAL_UPLOADS = int(
         os.getenv("ESP32CAM_DISK_USAGE_CHECK_INTERVAL_UPLOADS", "1")

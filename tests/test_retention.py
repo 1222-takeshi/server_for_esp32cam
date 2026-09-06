@@ -14,18 +14,19 @@ intermediate uploads skip the scan.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 from script.retention import (
     RetentionScanGate,
     RetentionScheduler,
+    apply_device_log_retention,
     apply_upload_retention,
     apply_video_upload_retention,
 )
 from script.app import create_app, start_retention_scheduler
-from script.config import gunicorn_preload_requested
+from script.config import gunicorn_preload_requested, gunicorn_worker_count
 from script.storage import StorageRetentionPolicy, StoredImage, StoredVideo
 from tests.conftest import MINIMAL_JPEG
 
@@ -223,12 +224,76 @@ def test_scheduler_runs_image_and_video_retention_without_an_upload(app_factory)
     app.extensions["storage"] = storage
 
     scheduler = RetentionScheduler(app, interval_seconds=3600)
-    deleted_images, deleted_videos = scheduler.run_once()
+    deleted_images, deleted_videos, deleted_device_logs = scheduler.run_once()
 
     assert deleted_images == ["cam-a/old.jpg"]
     assert deleted_videos == ["cam-a/old.mp4"]
+    assert deleted_device_logs == 0
     metadata_store.delete_snapshots_by_relative_paths.assert_called_once_with(["cam-a/old.jpg"])
     metadata_store.delete_videos_by_relative_paths.assert_called_once_with(["cam-a/old.mp4"])
+    metadata_store.delete_device_logs_older_than.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# apply_device_log_retention() (#357): device_logs has no on-disk file and
+# no byte budget, so this is a single age-based DELETE, disabled by default.
+# ---------------------------------------------------------------------------
+
+
+def test_apply_device_log_retention_disabled_by_default_skips_metadata_query(app):
+    fake_metadata_store = MagicMock()
+    app.extensions["metadata_store"] = fake_metadata_store
+
+    with app.app_context():
+        deleted = apply_device_log_retention()
+
+    assert deleted == 0
+    fake_metadata_store.delete_device_logs_older_than.assert_not_called()
+
+
+def test_apply_device_log_retention_deletes_rows_older_than_configured_age(app_factory):
+    app = app_factory(DEVICE_LOG_RETENTION_MAX_AGE_SECONDS=60)
+    fake_metadata_store = MagicMock()
+    fake_metadata_store.delete_device_logs_older_than.return_value = 3
+    app.extensions["metadata_store"] = fake_metadata_store
+
+    with app.app_context():
+        deleted = apply_device_log_retention()
+
+    assert deleted == 3
+    fake_metadata_store.delete_device_logs_older_than.assert_called_once()
+    (cutoff,) = fake_metadata_store.delete_device_logs_older_than.call_args.args
+    age = datetime.now(tz=timezone.utc) - cutoff
+    assert timedelta(seconds=55) < age < timedelta(seconds=65)
+
+
+def test_apply_device_log_retention_zero_age_is_disabled(app_factory):
+    app = app_factory(DEVICE_LOG_RETENTION_MAX_AGE_SECONDS=0)
+    fake_metadata_store = MagicMock()
+    app.extensions["metadata_store"] = fake_metadata_store
+
+    with app.app_context():
+        deleted = apply_device_log_retention()
+
+    assert deleted == 0
+    fake_metadata_store.delete_device_logs_older_than.assert_not_called()
+
+
+def test_scheduler_runs_device_log_retention_when_enabled(app_factory):
+    app = app_factory(DEVICE_LOG_RETENTION_MAX_AGE_SECONDS=60)
+    metadata_store = MagicMock()
+    metadata_store.list_snapshot_retention_candidates.return_value = ([], 0)
+    metadata_store.list_video_retention_candidates.return_value = ([], 0)
+    metadata_store.delete_device_logs_older_than.return_value = 5
+    app.extensions["metadata_store"] = metadata_store
+
+    scheduler = RetentionScheduler(app, interval_seconds=3600)
+    deleted_images, deleted_videos, deleted_device_logs = scheduler.run_once()
+
+    assert deleted_images == []
+    assert deleted_videos == []
+    assert deleted_device_logs == 5
+    metadata_store.delete_device_logs_older_than.assert_called_once()
 
 
 def test_scheduler_logs_failure_and_continues_loop(app_factory, caplog):
@@ -299,6 +364,27 @@ def test_scheduler_can_be_deferred_until_worker_initialization(app_factory):
     assert scheduler.is_running is False
 
 
+def test_start_retention_scheduler_skips_lock_once_already_running(app_factory):
+    # Regression test: start_retention_scheduler() is called from
+    # _before_request on every request when RETENTION_SCHEDULER_AUTO_START
+    # is disabled. Once the scheduler is running, it must short-circuit on
+    # the lock-free is_running check instead of re-invoking scheduler.start()
+    # (which re-acquires _state_lock) on every subsequent request.
+    app = app_factory(TESTING=False, RETENTION_SCHEDULER_AUTO_START=False)
+    scheduler = app.extensions["retention_scheduler"]
+
+    assert start_retention_scheduler(app) is True
+    assert scheduler.is_running is True
+
+    start_calls = []
+    scheduler.start = lambda: start_calls.append(True) or True
+
+    assert start_retention_scheduler(app) is False
+    assert start_calls == [], "start() must not be re-invoked once already running"
+
+    scheduler.stop()
+
+
 def test_deferred_scheduler_starts_on_first_worker_request(app_factory):
     app = app_factory(TESTING=False, RETENTION_SCHEDULER_AUTO_START=False)
     scheduler = app.extensions["retention_scheduler"]
@@ -333,6 +419,34 @@ def test_gunicorn_preload_detection_is_explicit():
     assert gunicorn_preload_requested(["pytest", "--preload"]) is False
 
 
+def test_gunicorn_worker_count_parses_common_worker_flags():
+    assert gunicorn_worker_count(["/venv/bin/gunicorn", "--workers", "4"]) == 4
+    assert gunicorn_worker_count(["/venv/bin/gunicorn", "--workers=3"]) == 3
+    assert gunicorn_worker_count(["/venv/bin/gunicorn", "-w", "2"]) == 2
+    assert gunicorn_worker_count(["/venv/bin/gunicorn", "-w2"]) == 2
+    assert gunicorn_worker_count(
+        ["/venv/bin/gunicorn", "--workers", "4"], command_args="--workers 2"
+    ) == 4
+    assert gunicorn_worker_count(["pytest", "--workers", "4"]) is None
+
+
+def test_memory_rate_limit_storage_warns_for_multiple_workers(app_factory, caplog):
+    with patch("script.app.gunicorn_worker_count", return_value=2):
+        app_factory(RATELIMIT_STORAGE_URI="memory://")
+
+    assert any("multiple Gunicorn workers" in record.message for record in caplog.records)
+
+
+@pytest.mark.parametrize("worker_count, storage_uri", [(1, "memory://"), (2, "redis://localhost")])
+def test_memory_rate_limit_warning_is_limited_to_unsafe_configuration(
+    app_factory, caplog, worker_count, storage_uri
+):
+    with patch("script.app.gunicorn_worker_count", return_value=worker_count):
+        app_factory(RATELIMIT_STORAGE_URI=storage_uri)
+
+    assert not any("multiple Gunicorn workers" in record.message for record in caplog.records)
+
+
 def test_scheduler_logs_lifecycle_and_scan_result(app_factory, caplog):
     import logging
     import threading
@@ -356,7 +470,10 @@ def test_scheduler_logs_lifecycle_and_scan_result(app_factory, caplog):
         scheduler.stop()
 
     assert "Storage retention scheduler started (interval_seconds=3600.0)" in caplog.text
-    assert "Scheduled retention completed (images_deleted=0, videos_deleted=0)" in caplog.text
+    assert (
+        "Scheduled retention completed (images_deleted=0, videos_deleted=0, "
+        "device_logs_deleted=0)" in caplog.text
+    )
     assert "Storage retention scheduler stopped" in caplog.text
 
 
@@ -507,19 +624,75 @@ def test_run_retention_scan_reports_missing_file_candidates_as_deleted():
     assert deleted_bytes == 50
 
 
+def test_run_retention_scan_stops_after_ordered_candidates_are_not_expired():
+    from script.retention import _run_retention_scan
+
+    now = datetime.now(tz=timezone.utc)
+
+    def candidates():
+        yield "cam-a/old.jpg", 100, now - timedelta(hours=1)
+        yield "cam-a/current.jpg", 50, now
+        raise AssertionError("retention scan should stop at the first non-expired row")
+
+    deleted, deleted_bytes = _run_retention_scan(
+        policy=StorageRetentionPolicy(max_age_seconds=60),
+        candidates=candidates(),
+        total_bytes=150,
+        delete_file=lambda _relative_path: 100,
+    )
+
+    assert deleted == ["cam-a/old.jpg"]
+    assert deleted_bytes == 100
+
+
+def test_apply_retention_uses_age_filter_when_byte_limit_is_disabled(app_factory):
+    from script.retention import _apply_retention
+
+    app = app_factory()
+    iter_candidates = MagicMock(return_value=[])
+    list_candidates = MagicMock()
+
+    with app.app_context():
+        result = _apply_retention(
+            policy=StorageRetentionPolicy(max_age_seconds=60, max_bytes=0),
+            gate=None,
+            exclude_relative_paths=set(),
+            list_candidates=list_candidates,
+            delete_file=MagicMock(),
+            delete_metadata=MagicMock(return_value=0),
+            log_prefix="Storage",
+            honor_upload_gate=False,
+            iter_candidates=iter_candidates,
+            total_bytes_reader=MagicMock(return_value=0),
+        )
+
+    assert result == []
+    list_candidates.assert_not_called()
+    assert iter_candidates.call_args.kwargs["older_than"] is not None
+
+
 def test_disk_usage_check_default_interval_runs_every_upload(app_factory):
+    import script.routes as routes_module
+
     app = app_factory()
     client = app.test_client()
 
     with patch("script.routes.shutil.disk_usage") as disk_usage:
         disk_usage.return_value = type("disk_usage", (), {"total": 100, "used": 1, "free": 99})()
         _upload(client, device_id="cam-disk", captured_at="2026-01-01T00:00:00Z")
+        # `_check_disk_usage()` reuses the same short-TTL cache as `/metrics`
+        # (see `_cached_disk_usage`); clear it so the second gate-permitted
+        # call actually re-scans instead of serving a still-fresh cache
+        # entry, keeping this test focused on the upload-count gate.
+        routes_module._disk_usage_cache.clear()
         _upload(client, device_id="cam-disk", captured_at="2026-01-01T01:00:00Z")
 
     assert disk_usage.call_count == 2
 
 
 def test_disk_usage_check_interval_skips_intermediate_uploads(app_factory):
+    import script.routes as routes_module
+
     app = app_factory(DISK_USAGE_CHECK_INTERVAL_UPLOADS=2)
     client = app.test_client()
 
@@ -527,6 +700,9 @@ def test_disk_usage_check_interval_skips_intermediate_uploads(app_factory):
         disk_usage.return_value = type("disk_usage", (), {"total": 100, "used": 1, "free": 99})()
         _upload(client, device_id="cam-disk", captured_at="2026-01-01T00:00:00Z")
         _upload(client, device_id="cam-disk", captured_at="2026-01-01T01:00:00Z")
+        # Call 2 is skipped by the gate itself (never reaches the cache), so
+        # only clear the TTL cache ahead of call 3's gate-permitted scan.
+        routes_module._disk_usage_cache.clear()
         _upload(client, device_id="cam-disk", captured_at="2026-01-01T02:00:00Z")
 
     # Scans on calls 1 and 3 (interval boundary), skips call 2.

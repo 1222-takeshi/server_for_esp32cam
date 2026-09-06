@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+from io import BytesIO
 import threading
+
+from PIL import Image, ImageDraw, ImageOps
+from PIL.JpegImagePlugin import JpegImageFile
 
 from script.detector import TFLiteCpuDetector
 
@@ -19,6 +23,34 @@ class FakeInterpreter:
 
     def get_tensor(self, index: int) -> object:
         return self._tensors[index]
+
+
+class FakeArray:
+    def __init__(self, shape: tuple[int, ...], dtype: object, pixels=()):
+        self.shape = shape
+        self.dtype = dtype
+        self.pixels = pixels
+
+    def astype(self, dtype: object):
+        return FakeArray(self.shape, dtype, self.pixels)
+
+
+class FakeNumpy:
+    uint8 = object()
+    float32 = object()
+
+    @staticmethod
+    def asarray(image: Image.Image):
+        return FakeArray(
+            (image.height, image.width, 3),
+            FakeNumpy.uint8,
+            tuple(image.get_flattened_data()),
+        )
+
+    @staticmethod
+    def expand_dims(array: FakeArray, axis: int):
+        assert axis == 0
+        return FakeArray((1, *array.shape), array.dtype, array.pixels)
 
 
 def test_tflite_detector_normalizes_standard_ssd_output_shapes():
@@ -56,6 +88,165 @@ def test_tflite_detector_normalizes_standard_ssd_output_shapes():
     assert detections[0].y1 == 0.10
     assert detections[0].x2 == 0.40
     assert detections[0].y2 == 0.30
+
+
+def test_output_map_caches_role_classification_after_first_call():
+    detector = TFLiteCpuDetector.__new__(TFLiteCpuDetector)
+    detector._output_details = [
+        {"index": 1, "name": "boxes"},
+        {"index": 2, "name": "classes"},
+        {"index": 3, "name": "scores"},
+        {"index": 4, "name": "count"},
+    ]
+    detector._interpreter = FakeInterpreter(
+        {1: "boxes-tensor", 2: "classes-tensor", 3: "scores-tensor", 4: "count-tensor"}
+    )
+
+    first = detector._output_map()
+    assert first == {
+        "boxes": "boxes-tensor",
+        "classes": "classes-tensor",
+        "scores": "scores-tensor",
+        "count": "count-tensor",
+    }
+    assert detector._output_role_indices_cache == {
+        "boxes": 1,
+        "classes": 2,
+        "scores": 3,
+        "count": 4,
+    }
+
+    # Mutating output_details afterward must not change subsequent behavior --
+    # confirms the name -> role classification runs once and is cached,
+    # rather than being re-derived from _output_details on every
+    # _output_map() call (the tensors themselves are still re-fetched each
+    # call, since their contents change after every invoke()).
+    detector._output_details = []
+    detector._interpreter = FakeInterpreter(
+        {1: "boxes-tensor-2", 2: "classes-tensor-2", 3: "scores-tensor-2", 4: "count-tensor-2"}
+    )
+    second = detector._output_map()
+    assert second == {
+        "boxes": "boxes-tensor-2",
+        "classes": "classes-tensor-2",
+        "scores": "scores-tensor-2",
+        "count": "count-tensor-2",
+    }
+
+
+def test_output_map_falls_back_to_rank_when_names_are_unrecognized():
+    detector = TFLiteCpuDetector.__new__(TFLiteCpuDetector)
+    detector._output_details = [
+        {"index": 1, "name": "StatefulPartitionedCall:0"},
+        {"index": 2, "name": "StatefulPartitionedCall:1"},
+        {"index": 3, "name": "StatefulPartitionedCall:2"},
+        {"index": 4, "name": "StatefulPartitionedCall:3"},
+    ]
+    detector._interpreter = FakeInterpreter(
+        {
+            1: [[[0.1, 0.2, 0.3, 0.4]]],
+            2: [[0]],
+            3: [[0.9]],
+            4: [1],
+        }
+    )
+
+    output_map = detector._output_map()
+
+    assert output_map["boxes"] == [[[0.1, 0.2, 0.3, 0.4]]]
+    assert output_map["classes"] == [[0]]
+    assert output_map["scores"] == [[0.9]]
+    assert output_map["count"] == [1]
+
+
+def test_prepare_input_requests_jpeg_draft_before_resizing(monkeypatch):
+    detector = TFLiteCpuDetector.__new__(TFLiteCpuDetector)
+    detector._input_details = [
+        {"shape": (1, 300, 300, 3), "dtype": FakeNumpy.uint8},
+    ]
+    detector._image = Image
+    detector._image_ops = ImageOps
+    detector._np = FakeNumpy
+
+    source = Image.new("RGB", (1600, 1200), color=(12, 34, 56))
+    payload = BytesIO()
+    source.save(payload, format="JPEG")
+
+    draft_calls: list[tuple[str, tuple[int, int]]] = []
+    original_draft = JpegImageFile.draft
+
+    def spy_draft(image, mode, size):
+        draft_calls.append((mode, size))
+        return original_draft(image, mode, size)
+
+    monkeypatch.setattr(JpegImageFile, "draft", spy_draft)
+
+    prepared = detector._prepare_input(payload.getvalue())
+
+    assert draft_calls == [("RGB", (300, 300))]
+    assert prepared.shape == (1, 300, 300, 3)
+    assert prepared.dtype is FakeNumpy.uint8
+
+
+def test_prepare_input_preserves_exif_orientation_with_draft(monkeypatch):
+    detector = TFLiteCpuDetector.__new__(TFLiteCpuDetector)
+    detector._input_details = [
+        {"shape": (1, 300, 300, 3), "dtype": FakeNumpy.uint8},
+    ]
+    detector._image = Image
+    detector._image_ops = ImageOps
+    detector._np = FakeNumpy
+
+    source = Image.new("RGB", (800, 600))
+    draw = ImageDraw.Draw(source)
+    draw.rectangle((0, 0, 399, 299), fill=(220, 30, 30))
+    draw.rectangle((400, 0, 799, 299), fill=(30, 220, 30))
+    draw.rectangle((0, 300, 399, 599), fill=(30, 30, 220))
+    draw.rectangle((400, 300, 799, 599), fill=(220, 220, 30))
+    exif = Image.Exif()
+    exif[274] = 6
+    payload = BytesIO()
+    source.save(payload, format="JPEG", exif=exif, quality=100)
+
+    orientation_calls: list[int | None] = []
+    original_exif_transpose = ImageOps.exif_transpose
+
+    def spy_exif_transpose(image):
+        orientation_calls.append(image.getexif().get(274))
+        return original_exif_transpose(image)
+
+    monkeypatch.setattr(ImageOps, "exif_transpose", spy_exif_transpose)
+
+    prepared = detector._prepare_input(payload.getvalue())
+    expected = original_exif_transpose(Image.open(BytesIO(payload.getvalue())))
+    expected = tuple(expected.convert("RGB").resize((300, 300)).get_flattened_data())
+    unrotated = tuple(
+        Image.open(BytesIO(payload.getvalue()))
+        .convert("RGB")
+        .resize((300, 300))
+        .get_flattened_data()
+    )
+
+    def pixel_distance(left, right):
+        return max(abs(a - b) for a, b in zip(left, right))
+
+    assert orientation_calls == [6]
+    assert prepared.shape == (1, 300, 300, 3)
+    assert pixel_distance(prepared.pixels[0], expected[0]) <= 20
+    assert pixel_distance(prepared.pixels[0], unrotated[0]) >= 100
+
+
+def test_shape_of_uses_fast_path_for_ndarray_like_objects():
+    array = FakeArray((1, 10, 4), FakeNumpy.float32)
+
+    assert TFLiteCpuDetector._shape_of(array) == (1, 10, 4)
+
+
+def test_shape_of_falls_back_correctly_for_nested_lists_and_tuples():
+    assert TFLiteCpuDetector._shape_of([[1, 2, 3, 4], [5, 6, 7, 8]]) == (2, 4)
+    assert TFLiteCpuDetector._shape_of(((1, 2), (3, 4), (5, 6))) == (3, 2)
+    assert TFLiteCpuDetector._shape_of([]) == (0,)
+    assert TFLiteCpuDetector._shape_of(0.5) == ()
 
 
 def _fake_module(name: str, **attrs):

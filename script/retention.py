@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable
-from datetime import datetime, timezone
+from collections.abc import Callable, Iterable
+from datetime import datetime, timedelta, timezone
 import logging
 import threading
 
@@ -51,7 +51,7 @@ class RetentionScanGate:
 def _run_retention_scan(
     *,
     policy: StorageRetentionPolicy,
-    candidates: list[tuple[str, int, datetime]],
+    candidates: Iterable[tuple[str, int, datetime]],
     total_bytes: int,
     delete_file: Callable[[str], int],
 ) -> tuple[list[str], int]:
@@ -86,7 +86,10 @@ def _run_retention_scan(
             policy.max_bytes is not None and policy.max_bytes > 0 and total_bytes > policy.max_bytes
         )
         if not age_expired and not over_quota:
-            continue
+            # Candidates are ordered oldest-first. Once a row is neither
+            # age-expired nor needed for the byte quota, no later row can be
+            # age-expired and the quota is already satisfied.
+            break
         try:
             deleted_bytes += delete_file(relative_path)
         except FileNotFoundError:
@@ -112,6 +115,21 @@ def _retention_lock() -> threading.RLock:
     return lock
 
 
+def _optimized_retention_readers(
+    metadata_store: object,
+    *,
+    candidate_method: str,
+    table: str,
+) -> tuple[
+    Callable[..., Iterable[tuple[str, int, datetime]]] | None,
+    Callable[[], int] | None,
+]:
+    if getattr(type(metadata_store), candidate_method, None) is None:
+        return None, None
+    candidates = getattr(metadata_store, candidate_method)
+    return candidates, lambda: metadata_store._total_retention_bytes(table)
+
+
 def _apply_retention(
     *,
     policy: StorageRetentionPolicy | None,
@@ -122,6 +140,8 @@ def _apply_retention(
     delete_metadata: Callable[[list[str]], int],
     log_prefix: str,
     honor_upload_gate: bool,
+    iter_candidates: Callable[..., Iterable[tuple[str, int, datetime]]] | None = None,
+    total_bytes_reader: Callable[[], int] | None = None,
 ) -> list[str]:
     if policy is None or not policy.enabled:
         return []
@@ -130,9 +150,23 @@ def _apply_retention(
         return []
 
     with _retention_lock():
-        candidates, total_bytes = list_candidates(
-            exclude_relative_paths=exclude_relative_paths
-        )
+        if iter_candidates is not None and total_bytes_reader is not None:
+            age_cutoff = None
+            if policy.max_age_seconds is not None and (
+                policy.max_bytes is None or policy.max_bytes <= 0
+            ):
+                age_cutoff = datetime.now(tz=timezone.utc) - timedelta(
+                    seconds=policy.max_age_seconds
+                )
+            candidates = iter_candidates(
+                exclude_relative_paths=exclude_relative_paths,
+                older_than=age_cutoff,
+            )
+            total_bytes = total_bytes_reader()
+        else:
+            candidates, total_bytes = list_candidates(
+                exclude_relative_paths=exclude_relative_paths
+            )
         deleted, deleted_bytes = _run_retention_scan(
             policy=policy,
             candidates=candidates,
@@ -154,55 +188,110 @@ def _apply_retention(
 
 
 def apply_upload_retention(stored: StoredImage) -> list[str]:
+    metadata_store = current_app.extensions["metadata_store"]
+    iter_candidates, total_bytes_reader = _optimized_retention_readers(
+        metadata_store,
+        candidate_method="iter_snapshot_retention_candidates",
+        table="snapshots",
+    )
     return _apply_retention(
         policy=current_app.extensions.get("storage_retention_policy"),
         gate=current_app.extensions.get("storage_retention_scan_gate"),
         exclude_relative_paths={stored.relative_path},
-        list_candidates=current_app.extensions["metadata_store"].list_snapshot_retention_candidates,
+        list_candidates=metadata_store.list_snapshot_retention_candidates,
         delete_file=current_app.extensions["storage"].delete_image_by_relative_path,
-        delete_metadata=current_app.extensions["metadata_store"].delete_snapshots_by_relative_paths,
+        delete_metadata=metadata_store.delete_snapshots_by_relative_paths,
         log_prefix="Storage",
         honor_upload_gate=True,
+        iter_candidates=iter_candidates,
+        total_bytes_reader=total_bytes_reader,
     )
 
 
 def apply_video_upload_retention(stored: StoredVideo) -> list[str]:
+    metadata_store = current_app.extensions["metadata_store"]
+    iter_candidates, total_bytes_reader = _optimized_retention_readers(
+        metadata_store,
+        candidate_method="iter_video_retention_candidates",
+        table="videos",
+    )
     return _apply_retention(
         policy=current_app.extensions.get("video_retention_policy"),
         gate=current_app.extensions.get("video_retention_scan_gate"),
         exclude_relative_paths={stored.relative_path},
-        list_candidates=current_app.extensions["metadata_store"].list_video_retention_candidates,
+        list_candidates=metadata_store.list_video_retention_candidates,
         delete_file=current_app.extensions["storage"].delete_video_by_relative_path,
-        delete_metadata=current_app.extensions["metadata_store"].delete_videos_by_relative_paths,
+        delete_metadata=metadata_store.delete_videos_by_relative_paths,
         log_prefix="Video",
         honor_upload_gate=True,
+        iter_candidates=iter_candidates,
+        total_bytes_reader=total_bytes_reader,
     )
 
 
-def apply_scheduled_retention() -> tuple[list[str], list[str]]:
+def apply_device_log_retention() -> int:
+    """Delete device_logs rows older than the configured max age.
+
+    device_logs has no on-disk file and no byte budget, so unlike
+    apply_upload_retention()/apply_video_upload_retention() this only needs
+    an age cutoff and a single DELETE -- no candidate scan. Disabled by
+    default (`DEVICE_LOG_RETENTION_MAX_AGE_SECONDS` <= 0). Runs on the same
+    RetentionScheduler cadence as image/video retention rather than a
+    separate background loop (#357).
+    """
+    max_age_seconds = current_app.config.get("DEVICE_LOG_RETENTION_MAX_AGE_SECONDS", 0)
+    if not max_age_seconds or max_age_seconds <= 0:
+        return 0
+
+    metadata_store = current_app.extensions["metadata_store"]
+    cutoff = datetime.now(tz=timezone.utc) - timedelta(seconds=max_age_seconds)
+    deleted = metadata_store.delete_device_logs_older_than(cutoff)
+    if deleted:
+        _logger.info("Device log retention deleted %s rows", deleted)
+    return deleted
+
+
+def apply_scheduled_retention() -> tuple[list[str], list[str], int]:
     """Run both retention policies without depending on a new upload."""
+
+    metadata_store = current_app.extensions["metadata_store"]
+    image_iter_candidates, image_total_bytes_reader = _optimized_retention_readers(
+        metadata_store,
+        candidate_method="iter_snapshot_retention_candidates",
+        table="snapshots",
+    )
+    video_iter_candidates, video_total_bytes_reader = _optimized_retention_readers(
+        metadata_store,
+        candidate_method="iter_video_retention_candidates",
+        table="videos",
+    )
 
     image_paths = _apply_retention(
         policy=current_app.extensions.get("storage_retention_policy"),
         gate=None,
         exclude_relative_paths=set(),
-        list_candidates=current_app.extensions["metadata_store"].list_snapshot_retention_candidates,
+        list_candidates=metadata_store.list_snapshot_retention_candidates,
         delete_file=current_app.extensions["storage"].delete_image_by_relative_path,
-        delete_metadata=current_app.extensions["metadata_store"].delete_snapshots_by_relative_paths,
+        delete_metadata=metadata_store.delete_snapshots_by_relative_paths,
         log_prefix="Storage",
         honor_upload_gate=False,
+        iter_candidates=image_iter_candidates,
+        total_bytes_reader=image_total_bytes_reader,
     )
     video_paths = _apply_retention(
         policy=current_app.extensions.get("video_retention_policy"),
         gate=None,
         exclude_relative_paths=set(),
-        list_candidates=current_app.extensions["metadata_store"].list_video_retention_candidates,
+        list_candidates=metadata_store.list_video_retention_candidates,
         delete_file=current_app.extensions["storage"].delete_video_by_relative_path,
-        delete_metadata=current_app.extensions["metadata_store"].delete_videos_by_relative_paths,
+        delete_metadata=metadata_store.delete_videos_by_relative_paths,
         log_prefix="Video",
         honor_upload_gate=False,
+        iter_candidates=video_iter_candidates,
+        total_bytes_reader=video_total_bytes_reader,
     )
-    return image_paths, video_paths
+    device_logs_deleted = apply_device_log_retention()
+    return image_paths, video_paths, device_logs_deleted
 
 
 class RetentionScheduler:
@@ -259,15 +348,17 @@ class RetentionScheduler:
             return
         _logger.info("Storage retention scheduler stop requested")
 
-    def run_once(self) -> tuple[list[str], list[str]]:
+    def run_once(self) -> tuple[list[str], list[str], int]:
         with self._app.app_context():
-            image_paths, video_paths = apply_scheduled_retention()
+            image_paths, video_paths, device_logs_deleted = apply_scheduled_retention()
         _logger.info(
-            "Scheduled retention completed (images_deleted=%s, videos_deleted=%s)",
+            "Scheduled retention completed (images_deleted=%s, videos_deleted=%s, "
+            "device_logs_deleted=%s)",
             len(image_paths),
             len(video_paths),
+            device_logs_deleted,
         )
-        return image_paths, video_paths
+        return image_paths, video_paths, device_logs_deleted
 
     def _run_loop(self) -> None:
         while not self._stop_event.is_set():

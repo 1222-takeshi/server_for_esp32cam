@@ -242,6 +242,10 @@ class LocalFilesystemStorage:
             raise
 
     def list_images(self, *, include_metadata: bool = True) -> list[StoredImage]:
+        # Full filesystem rglob() walk. Only called once at app startup
+        # (see app.py's sync_storage_index() call) to import pre-existing
+        # files into the SQLite index; request-path listing/retention use
+        # the index instead. Do not call this from a request handler.
         images = [
             StoredImage(*self._stored_image_fields(path, include_metadata=include_metadata))
             for path in self.upload_dir.rglob("*")

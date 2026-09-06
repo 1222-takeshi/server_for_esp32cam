@@ -191,9 +191,10 @@
 <script>
 (function () {
   const CAMERA_ID   = {{ camera.camera_id | tojson }};
-  const RECONNECT_MS = 3000;
-  const STALE_AFTER_MS = 15000;
-  const OFFLINE_AFTER_MS = 60000;
+  // formatTimestamp/formatFrameSize and the reconnect timing constants are
+  // defined once in static/dashboard-shared.js (loaded from _base.html)
+  // instead of duplicated here and in index.html -- see #358.
+  const { RECONNECT_MS, STALE_AFTER_MS, OFFLINE_AFTER_MS, formatTimestamp, formatFrameSize } = window.CameraShared;
   const pill     = document.getElementById('live-pill-detail');
   const latImg   = document.getElementById('latest-img');
   const latTs    = document.getElementById('latest-ts');
@@ -205,29 +206,6 @@
     if (!count) return;
     const current = Number.parseInt(count.textContent, 10);
     count.textContent = String(Number.isFinite(current) ? current + 1 : 1);
-  }
-
-  function formatTimestamp(value) {
-    if (!value) return null;
-    const d = new Date(value);
-    if (Number.isNaN(d.getTime())) return null;
-    const parts = new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'Asia/Tokyo',
-      year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', second: '2-digit',
-      hour12: false,
-    }).formatToParts(d).reduce((acc, part) => {
-      acc[part.type] = part.value;
-      return acc;
-    }, {});
-    return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} JST`;
-  }
-
-  function formatFrameSize(bytes) {
-    const size = Number(bytes);
-    if (!Number.isFinite(size) || size < 0) return null;
-    if (size >= 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`;
-    return `${(size / 1024).toFixed(1)} KB`;
   }
 
   function updateFrameSize(snap) {
@@ -300,7 +278,7 @@
     updateFrameSize(snap);
 
     if (latImg && snap.url) {
-      latImg.src = snap.url + '?t=' + Date.now();
+      latImg.src = snap.url;
     }
     if (latTs && snap.captured_at) {
       const timestamp = formatTimestamp(snap.captured_at);
@@ -319,7 +297,7 @@
       a.onmouseout  = () => a.style.background = '';
       a.innerHTML = `
         <div style="width:56px;height:42px;border-radius:4px;overflow:hidden;background:#12131a;flex-shrink:0;">
-          <img src="${snap.url}?t=${Date.now()}" alt="" style="width:100%;height:100%;object-fit:cover;">
+          <img src="${snap.url}" alt="" style="width:100%;height:100%;object-fit:cover;">
         </div>
         <div style="flex:1;min-width:0;">
           <div style="font-size:11px;color:var(--text-1);font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${snap.filename}</div>
