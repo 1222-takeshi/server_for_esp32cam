@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from io import BytesIO
-import threading
 
 from PIL import Image, ImageDraw, ImageOps
 from PIL.JpegImagePlugin import JpegImageFile
@@ -58,7 +57,6 @@ def test_tflite_detector_normalizes_standard_ssd_output_shapes():
     detector.threshold = 0.5
     detector.person_label = "person"
     detector.person_class_id = 0
-    detector._lock = threading.Lock()
     detector._input_details = [{"index": 0}]
     detector._output_details = [
         {"index": 1, "name": "boxes"},
@@ -88,6 +86,43 @@ def test_tflite_detector_normalizes_standard_ssd_output_shapes():
     assert detections[0].y1 == 0.10
     assert detections[0].x2 == 0.40
     assert detections[0].y2 == 0.30
+
+
+def test_detect_does_not_require_or_create_a_lock():
+    # Regression guard for #261: detect() previously serialized
+    # set_tensor()/invoke()/_output_map() behind a threading.Lock that never
+    # saw contention (the async pipeline funnels every call through a single
+    # worker thread, and "sync" mode runs inline on one cooperatively
+    # scheduled gevent greenlet). The lock was removed as dead scaffolding;
+    # this asserts detect() works on an instance that never had a `_lock`
+    # attribute, and that it doesn't lazily create one.
+    detector = TFLiteCpuDetector.__new__(TFLiteCpuDetector)
+    detector.threshold = 0.5
+    detector.person_label = "person"
+    detector.person_class_id = 0
+    detector._input_details = [{"index": 0}]
+    detector._output_details = [
+        {"index": 1, "name": "boxes"},
+        {"index": 2, "name": "classes"},
+        {"index": 3, "name": "scores"},
+        {"index": 4, "name": "count"},
+    ]
+    detector._labels = ["person"]
+    detector._prepare_input = lambda _image_bytes: "prepared-input"
+    detector._interpreter = FakeInterpreter(
+        {
+            1: [[[0.10, 0.20, 0.30, 0.40]]],
+            2: [[0]],
+            3: [[0.95]],
+            4: [1],
+        }
+    )
+
+    assert not hasattr(detector, "_lock")
+    detections = detector.detect(b"jpeg-bytes")
+
+    assert len(detections) == 1
+    assert not hasattr(detector, "_lock")
 
 
 def test_output_map_caches_role_classification_after_first_call():
