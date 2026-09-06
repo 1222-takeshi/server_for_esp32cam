@@ -2,14 +2,21 @@ name: CI
 
 on:
   push:
+    # Feature/fix/etc. branches are validated via the `pull_request` trigger
+    # below once a PR is open; keeping them here too as well as on
+    # `pull_request` made every push to an open PR run CI twice (once per
+    # trigger, each its own concurrency group since `push` and
+    # `pull_request` land on different `github.ref` values). `main` stays
+    # here to verify post-merge state (e.g. after a squash merge) that has
+    # no corresponding `pull_request` event of its own.
     branches:
       - main
-      - "feat/**"
-      - "fix/**"
-      - "chore/**"
-      - "test/**"
-      - "perf/**"
   pull_request:
+  # Doc-only changes don't affect anything test/ruff/pip-audit/the Arduino
+  # sketch compile actually check.
+  paths-ignore:
+    - "**.md"
+    - "docs/**"
 
 permissions:
   contents: read
@@ -21,6 +28,7 @@ concurrency:
 jobs:
   changes:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       # Job-level `permissions:` replaces (not merges with) the
       # workflow-level block above, so both are spelled out explicitly here:
@@ -47,6 +55,7 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -83,6 +92,7 @@ jobs:
 
   dependency-audit:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -119,6 +129,7 @@ jobs:
     # has no bearing on script/docs/tests-only changes. See #350.
     if: needs.changes.outputs.esp32_example == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - name: Cache Arduino CLI data
