@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import time
 
 import gevent
+import pytest
 
 from script.detector import Detection, DetectionSkipped
 from script.inference import InferenceService
@@ -33,6 +34,12 @@ class FakeMetadataStore:
 
     def get_snapshot(self, snapshot_id: int, include_detections: bool = False):
         return self._snapshot if snapshot_id == self._snapshot.id else None
+
+    def reset_processing_snapshots(self) -> None:
+        pass
+
+    def list_pending_snapshot_ids(self, limit: int | None = None) -> list[int]:
+        return []
 
     def mark_snapshot_processing(self, snapshot_id: int) -> None:
         self.processing_calls.append(snapshot_id)
@@ -75,25 +82,41 @@ class RaisingDetector:
         raise self.exc
 
 
-def _make_service(detector, metadata_store=None, storage=None) -> tuple[InferenceService, FakeMetadataStore]:
-    snapshot = _snapshot()
-    store = metadata_store or FakeMetadataStore(snapshot)
-    service = InferenceService(
-        metadata_store=store,
-        storage=storage or FakeStorage(),
-        detector=detector,
-    )
-    return service, store
+@pytest.fixture
+def make_service():
+    """Builds an InferenceService wired to fakes, and always tears down its
+    detect pool afterward -- process_snapshot() spins up a real ThreadPool
+    worker thread regardless of whether the service's own start()/stop()
+    lifecycle (which most of these tests bypass to call process_snapshot()
+    directly, the same way "sync" mode does) ever runs."""
+
+    services: list[InferenceService] = []
+
+    def _factory(detector, metadata_store=None, storage=None):
+        snapshot = _snapshot()
+        store = metadata_store or FakeMetadataStore(snapshot)
+        service = InferenceService(
+            metadata_store=store,
+            storage=storage or FakeStorage(),
+            detector=detector,
+        )
+        services.append(service)
+        return service, store
+
+    yield _factory
+
+    for service in services:
+        service._detect_pool.kill()
 
 
-def test_process_snapshot_dispatches_detect_off_the_calling_greenlet():
+def test_process_snapshot_dispatches_detect_off_the_calling_greenlet(make_service):
     # Regression test for #244/#259: detect() previously ran inline on
     # whichever greenlet called process_snapshot() (the async worker
     # greenlet, or the request greenlet in "sync" mode), so a slow,
     # non-yielding call (like TFLite's invoke()) froze every other
     # greenlet -- uploads, dashboard, /healthz -- for its whole duration.
     detector = SlowDetector(delay=0.3)
-    service, store = _make_service(detector)
+    service, store = make_service(detector)
     snapshot = store._snapshot
 
     other_ticks: list[float] = []
@@ -114,9 +137,9 @@ def test_process_snapshot_dispatches_detect_off_the_calling_greenlet():
     assert any(start < t < start + detector.delay for t in other_ticks), other_ticks
 
 
-def test_process_snapshot_still_records_successful_detections():
+def test_process_snapshot_still_records_successful_detections(make_service):
     detector = SlowDetector(delay=0.01)
-    service, store = _make_service(detector)
+    service, store = make_service(detector)
     snapshot = store._snapshot
 
     service.process_snapshot(snapshot.id)
@@ -129,9 +152,9 @@ def test_process_snapshot_still_records_successful_detections():
     assert [d.label for d in detections] == ["person"]
 
 
-def test_process_snapshot_propagates_detection_skipped_through_the_pool():
+def test_process_snapshot_propagates_detection_skipped_through_the_pool(make_service):
     detector = RaisingDetector(DetectionSkipped("disabled"))
-    service, store = _make_service(detector)
+    service, store = make_service(detector)
     snapshot = store._snapshot
 
     service.process_snapshot(snapshot.id)
@@ -140,9 +163,9 @@ def test_process_snapshot_propagates_detection_skipped_through_the_pool():
     assert store.result_calls == []
 
 
-def test_process_snapshot_records_error_when_detect_raises_through_the_pool():
+def test_process_snapshot_records_error_when_detect_raises_through_the_pool(make_service):
     detector = RaisingDetector(RuntimeError("boom"))
-    service, store = _make_service(detector)
+    service, store = make_service(detector)
     snapshot = store._snapshot
 
     service.process_snapshot(snapshot.id)
@@ -154,18 +177,54 @@ def test_process_snapshot_records_error_when_detect_raises_through_the_pool():
     assert error == "boom"
 
 
-def test_stop_kills_the_detect_pool_without_hanging():
+def test_stop_without_a_running_worker_does_not_touch_the_detect_pool(make_service):
+    # Regression test: script/app.py's teardown_appcontext calls
+    # inference.stop() after *every* request whenever INFERENCE_MODE !=
+    # "async" (the mode conftest.py runs the whole suite under) --
+    # start() never runs for that mode, so self._worker stays None. Before
+    # this fix, stop() killed the shared _detect_pool unconditionally,
+    # which -- since the pool is shared across every concurrent request --
+    # meant one request's teardown could block on a completely unrelated
+    # request's in-flight detect() call, with no timeout.
     detector = SlowDetector(delay=0.01)
-    service, store = _make_service(detector)
-    # Prime the pool so it actually has a live worker thread to kill.
+    service, store = make_service(detector)
     service.process_snapshot(store._snapshot.id)
     assert service._detect_pool.size == 1
 
     service.stop()
 
-    # kill() terminates the idle worker thread immediately rather than
-    # leaving it running past the service's own shutdown; ThreadPool
-    # lazily respawns workers on demand, so this isn't a permanent
-    # poison -- just confirms stop() actually tore the thread down instead
-    # of leaking it.
+    assert service._detect_pool.size == 1
+
+
+def test_stop_does_not_block_on_an_unrelated_in_flight_detect_call(make_service):
+    # Directly reproduces the hang this fix addresses: a slow detect()
+    # dispatched from one greenlet must not make a concurrent stop() call
+    # wait for it.
+    detector = SlowDetector(delay=1.0)
+    service, store = make_service(detector)
+
+    in_flight = gevent.spawn(service.process_snapshot, store._snapshot.id)
+    gevent.sleep(0.1)  # let the pool pick up the in-flight call
+
+    start = time.monotonic()
+    service.stop()
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 0.5, elapsed
+    in_flight.join()
+
+
+def test_stop_kills_the_detect_pool_after_the_async_worker_stops(make_service):
+    detector = SlowDetector(delay=0.01)
+    service, store = make_service(detector)
+    service.start()
+    service.enqueue_snapshot(store._snapshot.id)
+
+    deadline = time.monotonic() + 2.0
+    while detector.call_count == 0 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert detector.call_count == 1
+
+    service.stop()
+
     assert service._detect_pool.size == 0

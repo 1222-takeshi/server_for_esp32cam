@@ -74,7 +74,17 @@ class InferenceService:
         if self._worker is not None:
             self._worker.join(timeout=1.0)
             self._worker = None
-        self._detect_pool.kill()
+            # Only reachable when this service actually had a worker to
+            # stop (async mode). In "sync" mode, script/app.py's
+            # teardown_appcontext calls stop() after *every* request --
+            # ThreadPool.kill() blocks the calling greenlet until any
+            # in-flight detect() call finishes, with no timeout, so
+            # calling it unconditionally here let one request's teardown
+            # stall on a completely unrelated concurrent request's
+            # inference. Gating it on _worker (which sync mode never
+            # sets) keeps that path a no-op, as it was before detect()
+            # moved onto this pool.
+            self._detect_pool.kill()
 
     def enqueue_snapshot(self, snapshot_id: int) -> None:
         if self.mode == "sync":
