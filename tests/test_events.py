@@ -36,6 +36,7 @@ def test_publish_snapshot_created_delivers_serialized_event_to_subscriber():
                 "filename": "image_20260508T010203000000_abcd.jpg",
                 "relative_path": "esp32cam-front-door/images/image_20260508T010203000000_abcd.jpg",
                 "url": "/files/image_20260508T010203000000_abcd.jpg",
+                "thumbnail_url": "/files/image_20260508T010203000000_abcd.jpg/thumbnail",
                 "size": 10240,
                 "size_bytes": 10240,
                 "captured_at": "2026-05-08T01:02:03+00:00",

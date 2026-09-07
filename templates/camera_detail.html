@@ -106,7 +106,7 @@
            style="display:flex;gap:10px;align-items:center;padding:8px;border-radius:var(--radius-sm);text-decoration:none;transition:background .15s;"
            onmouseover="this.style.background='var(--bg-hover)'" onmouseout="this.style.background=''">
           <div style="width:56px;height:42px;border-radius:4px;overflow:hidden;background:#12131a;flex-shrink:0;">
-            <img src="{{ url_for('server.get_file', filename=snap.filename) }}" alt="" style="width:100%;height:100%;object-fit:cover;">
+            <img src="{{ url_for('server.get_file_thumbnail', filename=snap.filename) }}" alt="" style="width:100%;height:100%;object-fit:cover;">
           </div>
           <div style="flex:1;min-width:0;">
             <div style="font-size:11px;color:var(--text-1);font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
@@ -297,7 +297,7 @@
       a.onmouseout  = () => a.style.background = '';
       a.innerHTML = `
         <div style="width:56px;height:42px;border-radius:4px;overflow:hidden;background:#12131a;flex-shrink:0;">
-          <img src="${snap.url}" alt="" style="width:100%;height:100%;object-fit:cover;">
+          <img src="${snap.thumbnail_url || snap.url}" alt="" style="width:100%;height:100%;object-fit:cover;">
         </div>
         <div style="flex:1;min-width:0;">
           <div style="font-size:11px;color:var(--text-1);font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${snap.filename}</div>
