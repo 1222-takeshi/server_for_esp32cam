@@ -183,21 +183,6 @@ class SQLiteMetadataStore:
         self._default_expected_interval_seconds = default_expected_interval_seconds
         self._local = threading.local()
         self._shared_connection: sqlite3.Connection | None = None
-        # Under a monkey-patched gevent worker (the only supported
-        # production deployment -- Dockerfile, docs/deployment.md),
-        # threading.local() becomes greenlet-local, not OS-thread-local:
-        # gevent's WSGI server spawns a new greenlet per accepted
-        # connection, so every request got its own fresh, never-reused
-        # sqlite3 connection (and its own connect() + 3 PRAGMA statements)
-        # instead of sharing the one connection the single real OS thread
-        # this worker model actually provides (see #299). Detected once
-        # here since a worker's monkey-patch state is set at boot, before
-        # this store is ever constructed, and never changes afterward.
-        # Outside that case (tests, a dev server, a gthread worker),
-        # genuine OS threads exist and sqlite3 connections (opened with
-        # check_same_thread=True) aren't safe to share across them, so
-        # threading.local()'s per-thread isolation is kept.
-        self._single_os_thread = gevent_monkey.is_module_patched("threading")
 
         old_mask = os.umask(0o177)
         try:
@@ -218,7 +203,28 @@ class SQLiteMetadataStore:
             init_conn.close()
 
     def _get_connection(self) -> sqlite3.Connection:
-        if self._single_os_thread:
+        # Under a monkey-patched gevent worker (the only supported
+        # production deployment -- Dockerfile, docs/deployment.md),
+        # threading.local() becomes greenlet-local, not OS-thread-local:
+        # gevent's WSGI server spawns a new greenlet per accepted
+        # connection, so every request got its own fresh, never-reused
+        # sqlite3 connection (and its own connect() + 3 PRAGMA statements)
+        # instead of sharing the one connection the single real OS thread
+        # this worker model actually provides (see #299). Outside that case
+        # (tests, a dev server, a gthread worker), genuine OS threads exist
+        # and sqlite3 connections (opened with check_same_thread=True)
+        # aren't safe to share across them, so threading.local()'s
+        # per-thread isolation is kept.
+        #
+        # Checked fresh on every call (is_module_patched() is just a dict
+        # lookup) rather than cached once at construction: under `gunicorn
+        # --preload` (script/server.py, gunicorn_preload_requested()),
+        # __init__ runs in the master process before gunicorn forks
+        # workers, and gevent.monkey.patch_all() only happens inside each
+        # worker's own post-fork init_process() -- caching the pre-fork
+        # (unpatched) result here would have made every worker fall back
+        # to the per-greenlet behavior this fix exists to remove.
+        if gevent_monkey.is_module_patched("threading"):
             if self._shared_connection is None:
                 self._shared_connection = self._open_connection()
             return self._shared_connection
