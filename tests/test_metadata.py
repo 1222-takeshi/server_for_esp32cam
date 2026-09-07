@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 from datetime import datetime, timedelta, timezone
+import threading
 from unittest.mock import patch
 
 from script.detector import Detection
@@ -1360,6 +1361,84 @@ def test_metadata_store_enables_wal_mode(tmp_path):
     store = SQLiteMetadataStore(tmp_path / "wal.sqlite3")
     row = store._get_connection().execute("PRAGMA journal_mode").fetchone()
     assert row[0] == "wal"
+
+
+def test_get_connection_shares_one_instance_wide_connection_when_gevent_patched(
+    tmp_path,
+):
+    # Regression test for #299: under a monkey-patched gevent worker,
+    # threading.local() becomes greenlet-local, not OS-thread-local --
+    # gevent's WSGI server spawns a new greenlet per accepted connection,
+    # so every request got its own fresh, never-reused sqlite3 connection
+    # instead of sharing the one connection the single real OS thread this
+    # worker model actually provides. Mock is_module_patched() rather than
+    # calling the real gevent.monkey.patch_all() (which would leak into
+    # every other test in this process) or spawning gevent greenlets
+    # (which share threading.local() with their parent OS thread even
+    # unpatched, so they wouldn't actually distinguish the two code paths
+    # here).
+    store = SQLiteMetadataStore(tmp_path / "shared.sqlite3")
+
+    with patch("script.metadata.gevent_monkey.is_module_patched", return_value=True):
+        first = store._get_connection()
+        second = store._get_connection()
+
+    assert first is second
+    assert store._shared_connection is first
+    assert getattr(store._local, "connection", None) is None
+
+
+def test_get_connection_keeps_per_thread_connections_when_not_gevent_patched(
+    tmp_path,
+):
+    # Outside a monkey-patched gevent worker (tests, a dev server, a
+    # gthread worker), genuine OS threads exist and sqlite3 connections
+    # (opened with check_same_thread=True) aren't safe to share across
+    # them -- threading.local()'s per-thread isolation must still apply.
+    # This is the default in this test process (nothing here calls
+    # gevent.monkey.patch_all()), so no mocking needed.
+    store = SQLiteMetadataStore(tmp_path / "per-thread.sqlite3")
+
+    connection_ids: list[int] = []
+    lock = threading.Lock()
+
+    def worker() -> None:
+        conn_id = id(store._get_connection())
+        with lock:
+            connection_ids.append(conn_id)
+
+    threads = [threading.Thread(target=worker) for _ in range(5)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(set(connection_ids)) == 5
+    assert store._shared_connection is None
+
+
+def test_get_connection_switches_to_shared_connection_once_patched_after_construction(
+    tmp_path,
+):
+    # Regression test for the `gunicorn --preload` case (script/server.py,
+    # gunicorn_preload_requested()): the app -- and this store -- can be
+    # constructed in gunicorn's master process before it forks workers,
+    # while still unpatched; gevent.monkey.patch_all() only runs inside
+    # each worker's own post-fork init_process(), strictly after that.
+    # is_module_patched() must therefore be checked fresh on every call
+    # rather than cached once at construction/first use, or every worker
+    # would be stuck on the pre-fork (unpatched) answer for its entire
+    # lifetime -- silently regressing back to a fresh connection per
+    # greenlet for every request it ever serves.
+    store = SQLiteMetadataStore(tmp_path / "preload.sqlite3")
+
+    pre_fork_conn = store._get_connection()  # unpatched: master, pre-fork
+
+    with patch("script.metadata.gevent_monkey.is_module_patched", return_value=True):
+        post_fork_conn = store._get_connection()  # patched: worker, post-fork
+
+    assert post_fork_conn is not pre_fork_conn
+    assert store._shared_connection is post_fork_conn
 
 
 def test_desired_config_ack_rejects_stale_version_atomically(tmp_path):
