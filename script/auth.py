@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import functools
 import hmac
-
 import logging
 
 from flask import Flask, current_app, jsonify, request

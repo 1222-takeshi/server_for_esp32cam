@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
-import threading
 from typing import Any
 
 from script.metadata import SnapshotRecord
@@ -85,7 +85,7 @@ class SnapshotEventPublisher:
                 continue
             try:
                 subscription.subscriber(event)
-            except Exception:
+            except Exception:  # noqa: BLE001 - isolate a broken subscriber, drop it below
                 failed.append(subscription)
 
         if failed:

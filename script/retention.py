@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
-from datetime import datetime, timedelta, timezone
 import logging
 import threading
+from collections.abc import Callable, Iterable
+from datetime import datetime, timedelta, timezone
 
 from flask import current_app
 
 from script.storage import StorageRetentionPolicy, StoredImage, StoredVideo
-
 
 _logger = logging.getLogger(__name__)
 _logger.setLevel(logging.INFO)

@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-import csv
 import base64
 import binascii
-from functools import lru_cache
-from io import BytesIO, StringIO
-from datetime import datetime, timedelta, timezone
+import csv
 import json
-from pathlib import Path
-from queue import Empty, Queue
 import shutil
 import threading
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
+from functools import lru_cache
+from io import BytesIO, StringIO
+from pathlib import Path
+from queue import Empty, Full, Queue
 
 from flask import (
     Blueprint,
@@ -211,7 +211,7 @@ def _validate_jpeg_image(data: bytes) -> str | None:
                 return f"Image dimensions exceed maximum ({img.width}x{img.height}, max {max_dim}px)"
     except (UnidentifiedImageError, SyntaxError, ValueError, OSError):
         return "Invalid or corrupted JPEG payload"
-    except Exception:
+    except Exception:  # noqa: BLE001 - untrusted upload data, don't crash on an exotic decoder error
         current_app.logger.warning("Unexpected error during JPEG validation")
         return "Invalid or corrupted JPEG payload"
     return None
@@ -541,7 +541,7 @@ def _cached_storage_probe(upload_dir: Path) -> bool:
         probe.read_bytes()
         probe.unlink()
         ok = True
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - health check: any failure means "not ok"
         current_app.logger.error("healthz/ready: storage check failed: %s", exc)
         ok = False
 
@@ -557,7 +557,7 @@ def healthz_ready():
     try:
         _metadata_store().ping()
         checks["db"] = "ok"
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - health check: any failure means "not ok"
         current_app.logger.error("healthz/ready: db check failed: %s", exc)
         checks["db"] = "error"
         degraded = True
@@ -574,7 +574,7 @@ def healthz_ready():
         checks["disk_free_mb"] = usage.free // (1024 * 1024)
         if usage.free / usage.total < 0.05:
             degraded = True
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - health check: any failure means "not ok"
         checks["disk_free_mb"] = -1
         current_app.logger.warning("healthz/ready: disk_usage failed: %s", exc)
         degraded = True
@@ -681,7 +681,7 @@ def upload_file():
             ),
             200,
         )
-    except Exception as exc:  # pragma: no cover
+    except Exception as exc:  # noqa: BLE001 - pragma: no cover - route error boundary
         current_app.logger.error("File upload failed: %s", exc)
         return jsonify({"message": "File upload failed"}), 500
 
@@ -719,7 +719,7 @@ def list_files():
             before=before,
             next_before=_encode_snapshot_cursor(files[-1]) if len(files) == limit else None,
         )
-    except Exception as exc:  # pragma: no cover
+    except Exception as exc:  # noqa: BLE001 - pragma: no cover - route error boundary
         current_app.logger.error("Error listing files: %s", exc)
         return jsonify({"message": "Error listing files"}), 500
 
@@ -742,7 +742,7 @@ def get_file(filename: str):
         return response
     except FileNotFoundError:
         return jsonify({"message": "File not found"}), 404
-    except Exception as exc:  # pragma: no cover
+    except Exception as exc:  # noqa: BLE001 - pragma: no cover - route error boundary
         current_app.logger.error("Error retrieving file: %s", exc)
         return jsonify({"message": "Error retrieving file"}), 500
 
@@ -781,7 +781,10 @@ def mjpeg_stream(camera_id: str):
             pass
         try:
             frame_queue.put_nowait(data)
-        except Exception:
+        except Full:
+            # A concurrent producer refilled the (maxsize=1) queue between
+            # the drop-stale get_nowait() above and this put -- fine to
+            # drop this frame, the next event will retry.
             pass
 
     unsubscribe = None
@@ -961,11 +964,11 @@ def api_upload_video(camera_id: str):
             status = 413
         current_app.logger.error("Video upload validation failed: %s", message)
         return jsonify({"message": message}), status
-    except Exception as exc:  # pragma: no cover
+    except Exception as exc:  # noqa: BLE001 - pragma: no cover - route error boundary
         if stored is not None:
             try:
                 _storage().delete_video(stored)
-            except Exception as cleanup_exc:
+            except Exception as cleanup_exc:  # noqa: BLE001 - best-effort cleanup, already erroring
                 current_app.logger.error("Video cleanup failed after upload error: %s", cleanup_exc)
         current_app.logger.error("Video upload failed: %s", exc)
         return jsonify({"message": "Video upload failed"}), 500
@@ -1059,7 +1062,7 @@ def api_delete_camera(camera_id: str):
         try:
             _storage().delete_camera_files(camera_id)
             storage_deleted = True
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - DB record already deleted; report partial success
             current_app.logger.error("Storage deletion failed for camera %s: %s", camera_id, exc)
 
     return jsonify({"message": "Camera deleted", "camera_id": camera_id, "storage_deleted": storage_deleted}), 200

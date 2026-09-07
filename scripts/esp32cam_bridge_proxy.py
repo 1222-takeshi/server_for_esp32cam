@@ -74,7 +74,7 @@ async def _pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> N
     finally:
         try:
             writer.close()
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 - best-effort close of an already-erroring stream
             pass
 
 

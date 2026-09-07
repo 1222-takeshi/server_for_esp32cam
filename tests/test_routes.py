@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import gzip
-from io import BytesIO
 import uuid
+from datetime import datetime, timezone
+from io import BytesIO
 from unittest.mock import patch
 
 from flask import request
@@ -64,10 +64,9 @@ def test_healthz_ready_returns_ready(client):
 
 
 def test_healthz_ready_db_failure(app):
-    with app.test_client() as c:
-        with patch("script.routes._metadata_store") as mock_store:
-            mock_store.return_value.ping.side_effect = Exception("db error")
-            response = c.get("/healthz/ready")
+    with app.test_client() as c, patch("script.routes._metadata_store") as mock_store:
+        mock_store.return_value.ping.side_effect = Exception("db error")
+        response = c.get("/healthz/ready")
 
     assert response.status_code == 503
     body = response.get_json()
@@ -76,9 +75,11 @@ def test_healthz_ready_db_failure(app):
 
 
 def test_healthz_ready_storage_failure(app):
-    with app.test_client() as c:
-        with patch("script.routes.Path.write_bytes", side_effect=OSError("disk full")):
-            response = c.get("/healthz/ready")
+    with (
+        app.test_client() as c,
+        patch("script.routes.Path.write_bytes", side_effect=OSError("disk full")),
+    ):
+        response = c.get("/healthz/ready")
 
     assert response.status_code == 503
     body = response.get_json()
@@ -102,10 +103,12 @@ def test_healthz_ready_disk_usage_is_cached_within_ttl(app):
     # /metrics does, instead of calling shutil.disk_usage() directly on every
     # request.
     usage = type("usage", (), {"free": 9_000, "total": 10_000, "used": 1_000})()
-    with app.test_client() as c:
-        with patch("script.routes.shutil.disk_usage", return_value=usage) as mock_disk_usage:
-            first = c.get("/healthz/ready")
-            second = c.get("/healthz/ready")
+    with (
+        app.test_client() as c,
+        patch("script.routes.shutil.disk_usage", return_value=usage) as mock_disk_usage,
+    ):
+        first = c.get("/healthz/ready")
+        second = c.get("/healthz/ready")
 
     assert first.status_code == 200
     assert second.status_code == 200
@@ -117,10 +120,12 @@ def test_healthz_ready_storage_probe_is_cached_within_ttl(app):
     # Regression test for #343: the write/read/delete probe should not run
     # on every single call -- a second request within the TTL window must
     # reuse the cached result instead of touching disk again.
-    with app.test_client() as c:
-        with patch("script.routes.uuid.uuid4", wraps=uuid.uuid4) as mock_uuid4:
-            first = c.get("/healthz/ready")
-            second = c.get("/healthz/ready")
+    with (
+        app.test_client() as c,
+        patch("script.routes.uuid.uuid4", wraps=uuid.uuid4) as mock_uuid4,
+    ):
+        first = c.get("/healthz/ready")
+        second = c.get("/healthz/ready")
 
     assert first.status_code == 200
     assert second.status_code == 200
@@ -133,12 +138,14 @@ def test_healthz_ready_storage_probe_refreshes_after_ttl(app):
     # Each /healthz/ready call now takes two time.monotonic() readings --
     # one for the storage probe cache, one for the disk usage cache -- so
     # the mocked clock needs a matching value per reading, in call order.
-    with app.test_client() as c:
-        with patch("script.routes.time.monotonic", side_effect=[0.0, 0.0, 1.0, 1.0, 10.0, 10.0]):
-            with patch("script.routes.uuid.uuid4", wraps=uuid.uuid4) as mock_uuid4:
-                c.get("/healthz/ready")
-                c.get("/healthz/ready")
-                c.get("/healthz/ready")
+    with (
+        app.test_client() as c,
+        patch("script.routes.time.monotonic", side_effect=[0.0, 0.0, 1.0, 1.0, 10.0, 10.0]),
+        patch("script.routes.uuid.uuid4", wraps=uuid.uuid4) as mock_uuid4,
+    ):
+        c.get("/healthz/ready")
+        c.get("/healthz/ready")
+        c.get("/healthz/ready")
 
     # First call probes (cache miss), second reuses the cache (still fresh
     # at t=1), third probes again once the TTL has elapsed (t=10).
@@ -146,10 +153,12 @@ def test_healthz_ready_storage_probe_refreshes_after_ttl(app):
 
 
 def test_healthz_ready_storage_failure_is_cached_within_ttl(app):
-    with app.test_client() as c:
-        with patch("script.routes.Path.write_bytes", side_effect=OSError("disk full")) as mock_write:
-            first = c.get("/healthz/ready")
-            second = c.get("/healthz/ready")
+    with (
+        app.test_client() as c,
+        patch("script.routes.Path.write_bytes", side_effect=OSError("disk full")) as mock_write,
+    ):
+        first = c.get("/healthz/ready")
+        second = c.get("/healthz/ready")
 
     assert first.status_code == 503
     assert second.status_code == 503
@@ -226,6 +235,7 @@ def test_upload_rejects_invalid_jpeg_payload(client):
 
 def test_upload_rejects_oversized_jpeg(client):
     from io import BytesIO
+
     from PIL import Image
 
     buf = BytesIO()

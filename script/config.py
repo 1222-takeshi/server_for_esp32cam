@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import shlex
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 
 
 def _env_bool(name: str, default: str = "false") -> bool:
@@ -21,7 +21,9 @@ def _load_device_api_keys() -> dict[str, str]:
     except json.JSONDecodeError as exc:
         raise ValueError("ESP32CAM_DEVICE_API_KEYS must be a JSON object") from exc
     if not isinstance(parsed, dict):
-        raise ValueError("ESP32CAM_DEVICE_API_KEYS must be a JSON object")
+        # ValueError, not TypeError: this validates externally-supplied env
+        # var content (malformed config), not an internal argument type.
+        raise ValueError("ESP32CAM_DEVICE_API_KEYS must be a JSON object")  # noqa: TRY004
     normalized: dict[str, str] = {}
     for device_id, api_key in parsed.items():
         key = str(device_id).strip()

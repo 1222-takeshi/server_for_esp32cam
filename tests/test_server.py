@@ -3,7 +3,6 @@ from __future__ import annotations
 from script.app import create_app
 from tests.conftest import MINIMAL_JPEG
 
-
 UPLOAD_HEADERS = {
     "Content-Type": "image/jpeg",
     "X-Device-Id": "esp32cam-smoke-test",

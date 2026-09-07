@@ -1,23 +1,21 @@
 from __future__ import annotations
 
 import atexit
-from datetime import datetime
 import gzip
 import threading
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from flask import Flask, jsonify
+from flask import Flask, g, jsonify, request
 from werkzeug.exceptions import RequestEntityTooLarge
 
-from flask import g, request
-
+from script.auth import validate_auth_config
 from script.config import Config, gunicorn_worker_count
 from script.detector import DisabledDetector, TFLiteCpuDetector
 from script.events import SnapshotEventPublisher
 from script.inference import InferenceService
 from script.logging_config import configure_logging
 from script.metadata import SQLiteMetadataStore
-from script.auth import validate_auth_config
 from script.prometheus_metrics import AppMetrics
 from script.retention import RetentionScanGate, RetentionScheduler
 from script.routes import limiter, server
@@ -26,7 +24,6 @@ from script.tracking import ObjectTracker
 from script.upload_metrics import UploadMetricsRegistry
 from script.webhook import DISABLED_NOTIFIER, WebhookNotifier
 from script.websocket_routes import register_websocket_routes
-
 
 JST = ZoneInfo("Asia/Tokyo")
 
@@ -149,7 +146,9 @@ def _create_detector(app: Flask):
             person_label=app.config["PERSON_LABEL"],
             person_class_id=app.config["PERSON_CLASS_ID"],
         )
-    except Exception as exc:  # pragma: no cover - depends on optional deps and model file
+    # Intentional catch-all: a missing/broken optional ML dependency or model
+    # file should degrade to a disabled detector, not crash startup.
+    except Exception as exc:  # pragma: no cover  # noqa: BLE001
         return DisabledDetector(str(exc), skip=False)
 
 
@@ -233,13 +232,16 @@ def create_app(test_config: dict | None = None) -> Flask:
             "/upload and device endpoints accept requests without authentication. "
             "Set a strong key in production."
         )
-    elif app.config.get("DEVICE_API_KEY", "") and not app.config.get("DEVICE_API_KEYS", {}):
-        if not app.config.get("SHARED_KEY_DEVICE_ID", ""):
-            app.logger.warning(
-                "ESP32CAM_DEVICE_API_KEY is configured without "
-                "ESP32CAM_SHARED_KEY_DEVICE_ID — identity-bearing device endpoints "
-                "will reject requests. Configure per-device keys for multiple cameras."
-            )
+    elif (
+        app.config.get("DEVICE_API_KEY", "")
+        and not app.config.get("DEVICE_API_KEYS", {})
+        and not app.config.get("SHARED_KEY_DEVICE_ID", "")
+    ):
+        app.logger.warning(
+            "ESP32CAM_DEVICE_API_KEY is configured without "
+            "ESP32CAM_SHARED_KEY_DEVICE_ID — identity-bearing device endpoints "
+            "will reject requests. Configure per-device keys for multiple cameras."
+        )
 
     storage_backend = app.config.get("STORAGE_BACKEND", "local")
     if storage_backend != "local":

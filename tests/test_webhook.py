@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import http.client as http_client
+import json
 import logging
 import math
 import threading
@@ -360,7 +360,6 @@ def test_notifier_submits_delivery_without_blocking_caller():
     def blocked_request(*_args, **_kwargs):
         started.set()
         release.wait(timeout=5.0)
-        return None
 
     try:
         connection = MagicMock()
@@ -418,9 +417,11 @@ def test_close_shuts_down_executor_and_drops_further_notifications(caplog):
     closable_notifier.close()
 
     import logging
-    with caplog.at_level(logging.WARNING, logger="script.webhook"):
-        with patch("script.webhook.http_client.HTTPConnection") as mock_open:
-            result = closable_notifier.notify(_snapshot(), [_detection(0.9)])
+    with (
+        caplog.at_level(logging.WARNING, logger="script.webhook"),
+        patch("script.webhook.http_client.HTTPConnection") as mock_open,
+    ):
+        result = closable_notifier.notify(_snapshot(), [_detection(0.9)])
 
     assert result is None
     mock_open.assert_not_called()

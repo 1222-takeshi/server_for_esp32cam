@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from queue import Empty, Queue
 import threading
+from queue import Empty, Queue
 from typing import Protocol
 
 from gevent.threadpool import ThreadPool
@@ -139,7 +139,7 @@ class InferenceService:
             self._update_tracking(snapshot.camera_id, [])
             self.metadata_store.mark_snapshot_skipped(snapshot_id, reason=str(exc))
             return
-        except Exception as exc:  # pragma: no cover - exercised via route behavior
+        except Exception as exc:  # noqa: BLE001 - pragma: no cover - exercised via route behavior
             self._update_tracking(snapshot.camera_id, [])
             self.metadata_store.mark_snapshot_result(snapshot_id, detections=[], error=str(exc))
             return
@@ -163,6 +163,6 @@ class InferenceService:
             self.storage.delete_image_by_relative_path(relative_path)
         except FileNotFoundError:
             pass
-        except Exception:
+        except Exception:  # noqa: BLE001 - leave the index row if the file delete failed
             return
         self.metadata_store.delete_snapshots_by_relative_paths([relative_path])

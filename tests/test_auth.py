@@ -3,8 +3,8 @@ from __future__ import annotations
 import pytest
 
 from script import config as config_module
-from script.auth import check_device_api_key, check_device_api_key_for_device
 from script.app import create_app
+from script.auth import check_device_api_key, check_device_api_key_for_device
 from tests.conftest import MINIMAL_JPEG
 
 
