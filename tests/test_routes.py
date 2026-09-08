@@ -467,7 +467,8 @@ def test_api_cameras_returns_pagination_envelope(client):
     assert len(body["cameras"]) == 1
 
 
-def test_api_cameras_without_pagination_preserves_all_cameras(client):
+def test_api_cameras_without_pagination_caps_at_pagination_limit_max(client):
+    """Below the cap, omitting limit/offset still returns every camera (#371)."""
     client.post(
         "/upload",
         data=MINIMAL_JPEG,
@@ -487,8 +488,35 @@ def test_api_cameras_without_pagination_preserves_all_cameras(client):
     body = response.get_json()
 
     assert response.status_code == 200
-    assert body["limit"] is None
+    assert body["total"] == 2
+    assert body["limit"] == 200
     assert body["offset"] == 0
+    assert body["truncated"] is False
+    assert len(body["cameras"]) == 2
+
+
+def test_api_cameras_without_pagination_is_truncated_past_the_cap(client, monkeypatch):
+    """Above the cap, the no-limit path is bounded instead of unbounded (#371)."""
+    monkeypatch.setattr("script.routes._PAGINATION_LIMIT_MAX", 2)
+    for i in range(3):
+        client.post(
+            "/upload",
+            data=MINIMAL_JPEG,
+            headers={
+                "Content-Type": "image/jpeg",
+                "X-Device-Id": f"esp32cam-yard-{i}",
+                "X-Captured-At": "2026-03-11T12:35:56Z",
+            },
+        )
+
+    response = client.get("/api/cameras")
+    body = response.get_json()
+
+    assert response.status_code == 200
+    assert body["total"] == 3
+    assert body["limit"] == 2
+    assert body["offset"] == 0
+    assert body["truncated"] is True
     assert len(body["cameras"]) == 2
 
 

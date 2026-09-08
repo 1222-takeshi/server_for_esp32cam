@@ -164,7 +164,13 @@ paths:
   /api/cameras:
     get:
       summary: List all cameras
-      description: Returns known cameras with their latest health status. For backward compatibility, a request without `limit` or `offset` returns all cameras; include either query parameter to request a page.
+      description: |
+        Returns known cameras with their latest health status. A request
+        without `limit` or `offset` returns up to `_PAGINATION_LIMIT_MAX`
+        (200) cameras starting at offset 0, instead of every camera
+        unconditionally; check `truncated` (or `total` vs. the returned
+        `cameras` length) and pass explicit `limit`/`offset` to page through
+        the rest.
       tags: [cameras]
       parameters:
         - in: query
@@ -1161,11 +1167,13 @@ components:
           description: Total number of known cameras.
         limit:
           type: integer
-          nullable: true
-          description: Number of cameras requested for this page.
+          description: Page size actually applied (defaults to `_PAGINATION_LIMIT_MAX` when omitted).
         offset:
           type: integer
           description: Zero-based offset of this page.
+        truncated:
+          type: boolean
+          description: True when more cameras exist beyond this page (`offset + len(cameras) < total`).
         cameras:
           type: array
           items:
