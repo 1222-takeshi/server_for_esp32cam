@@ -185,6 +185,92 @@ def test_storage_ignores_non_utf8_metadata_sidecar(tmp_path):
     assert files[0].captured_at is None
 
 
+def test_storage_list_image_names_returns_name_and_relative_path_pairs(tmp_path):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+    first = storage.save_image(
+        b"\xff\xd8jpeg-a",
+        "image/jpeg",
+        device_id="cam-a",
+        captured_at=datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc),
+    )
+    second = storage.save_image(
+        b"\xff\xd8jpeg-b",
+        "image/jpeg",
+        device_id="cam-b",
+        captured_at=datetime(2026, 3, 11, 12, 1, tzinfo=timezone.utc),
+    )
+    (tmp_path / "uploads" / "notes.txt").write_text("ignore me")
+
+    pairs = storage.list_image_names()
+
+    assert set(pairs) == {
+        (first.name, first.relative_path),
+        (second.name, second.relative_path),
+    }
+
+
+def test_storage_list_image_names_does_not_build_stored_image_fields(tmp_path):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+    storage.save_image(
+        b"\xff\xd8jpeg",
+        "image/jpeg",
+        device_id="cam-a",
+        captured_at=datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc),
+    )
+
+    def fail(*_args, **_kwargs):
+        raise AssertionError(
+            "list_image_names() must not call _stored_image_fields() "
+            "(i.e. must not path.stat() every file)"
+        )
+
+    storage._stored_image_fields = fail
+
+    names = storage.list_image_names()
+
+    assert len(names) == 1
+
+
+def test_storage_stat_images_only_stats_requested_paths(tmp_path):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+    wanted = storage.save_image(
+        b"\xff\xd8jpeg-a",
+        "image/jpeg",
+        device_id="cam-a",
+        captured_at=datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc),
+    )
+    storage.save_image(
+        b"\xff\xd8jpeg-b",
+        "image/jpeg",
+        device_id="cam-b",
+        captured_at=datetime(2026, 3, 11, 12, 1, tzinfo=timezone.utc),
+    )
+
+    stat_calls: list[str] = []
+    original = storage._stored_image_fields
+
+    def tracking(path, **kwargs):
+        stat_calls.append(path.name)
+        return original(path, **kwargs)
+
+    storage._stored_image_fields = tracking
+
+    images = storage.stat_images([wanted.relative_path], include_metadata=False)
+
+    assert stat_calls == [wanted.name]
+    assert len(images) == 1
+    assert images[0].name == wanted.name
+    assert images[0].size == len(b"\xff\xd8jpeg-a")
+
+
+def test_storage_stat_images_skips_missing_files(tmp_path):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+
+    images = storage.stat_images(["gone/images/missing.jpg"])
+
+    assert images == []
+
+
 def test_storage_reads_image_by_relative_path(tmp_path):
     storage = LocalFilesystemStorage(tmp_path / "uploads")
     stored = storage.save_image(

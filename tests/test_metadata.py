@@ -341,6 +341,33 @@ def test_sync_storage_index_hydrates_metadata_only_for_new_images(tmp_path):
     assert camera.last_seen_at == new_time
 
 
+def test_filter_new_filenames_returns_only_unknown_names(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+
+    store.sync_storage_index(
+        [
+            _stored_image(
+                name="known.jpg",
+                relative_path="cam-a/images/known.jpg",
+                camera_id="cam-a",
+                captured_at=stored_at,
+                stored_at=stored_at,
+            )
+        ]
+    )
+
+    result = store.filter_new_filenames(["known.jpg", "unknown.jpg"])
+
+    assert result == {"unknown.jpg"}
+
+
+def test_filter_new_filenames_empty_input_returns_empty_set(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+
+    assert store.filter_new_filenames([]) == set()
+
+
 def test_metadata_store_deletes_snapshots_by_relative_path(tmp_path):
     store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
     stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
