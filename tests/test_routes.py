@@ -7,6 +7,7 @@ from io import BytesIO
 from unittest.mock import patch
 
 from flask import request
+from PIL import Image
 
 from script.app import create_app
 from tests.conftest import MINIMAL_JPEG
@@ -716,6 +717,85 @@ def test_get_file_returns_404_for_missing_file(client):
 
     assert response.status_code == 404
     assert response.get_json()["message"] == "File not found"
+
+
+def test_get_file_thumbnail_returns_downscaled_jpeg_smaller_than_original(client):
+    # MINIMAL_JPEG is a real (Pillow-encoded) JPEG rather than just the
+    # right magic bytes, so the thumbnail route's Image.open()/resize/save
+    # round-trip below has real image data to decode -- not just a route
+    # smoke test.
+    upload = client.post(
+        "/upload",
+        data=MINIMAL_JPEG,
+        headers=UPLOAD_HEADERS,
+    ).get_json()
+
+    response = client.get(f"/files/{upload['filename']}/thumbnail")
+
+    assert response.status_code == 200
+    assert response.mimetype == "image/jpeg"
+    assert response.data != MINIMAL_JPEG
+    with Image.open(BytesIO(response.data)) as thumb:
+        thumb.verify()
+
+
+def test_get_file_thumbnail_fits_within_max_dimension_box(app, client):
+    # The 4x4 MINIMAL_JPEG is already far smaller than the thumbnail box, so
+    # exercise the actual resize path with a larger source image instead.
+    large_jpeg_buf = BytesIO()
+    Image.new("RGB", (1600, 1200), color=(10, 20, 30)).save(large_jpeg_buf, format="JPEG")
+    large_jpeg = large_jpeg_buf.getvalue()
+
+    upload = client.post(
+        "/upload",
+        data=large_jpeg,
+        headers=UPLOAD_HEADERS,
+    ).get_json()
+
+    response = client.get(f"/files/{upload['filename']}/thumbnail")
+
+    assert response.status_code == 200
+    assert len(response.data) < len(large_jpeg)
+    with Image.open(BytesIO(response.data)) as thumb:
+        assert thumb.width <= 480
+        assert thumb.height <= 480
+        # Aspect ratio (4:3) is preserved, not stretched to a fixed box.
+        assert thumb.width == 480
+        assert thumb.height == 360
+
+
+def test_get_file_thumbnail_rejects_metadata_sidecar_requests(client):
+    upload = client.post(
+        "/upload",
+        data=MINIMAL_JPEG,
+        headers=UPLOAD_HEADERS,
+    ).get_json()
+
+    response = client.get(f"/files/{upload['filename']}.json/thumbnail")
+
+    assert response.status_code == 404
+    assert response.get_json()["message"] == "File not found"
+
+
+def test_get_file_thumbnail_returns_404_for_missing_file(client):
+    response = client.get("/files/missing.jpg/thumbnail")
+
+    assert response.status_code == 404
+    assert response.get_json()["message"] == "File not found"
+
+
+def test_get_file_thumbnail_sets_long_lived_immutable_cache_control(client):
+    upload = client.post(
+        "/upload",
+        data=MINIMAL_JPEG,
+        headers=UPLOAD_HEADERS,
+    ).get_json()
+
+    response = client.get(f"/files/{upload['filename']}/thumbnail")
+
+    assert response.status_code == 200
+    assert "immutable" in response.headers["Cache-Control"]
+    assert "max-age=31536000" in response.headers["Cache-Control"]
 
 
 def test_upload_returns_500_when_storage_write_fails(app, client, monkeypatch):

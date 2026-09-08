@@ -51,7 +51,7 @@
             <td style="padding:8px 12px;">
               <a href="{{ url_for('server.get_file', filename=file.filename) }}" target="_blank">
                 <div style="width:56px;height:42px;border-radius:4px;overflow:hidden;background:#12131a;">
-                  <img src="{{ url_for('server.get_file', filename=file.filename) }}" alt=""
+                  <img src="{{ url_for('server.get_file_thumbnail', filename=file.filename) }}" alt=""
                        loading="lazy" style="width:100%;height:100%;object-fit:cover;">
                 </div>
               </a>

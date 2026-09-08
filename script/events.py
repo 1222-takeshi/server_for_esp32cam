@@ -33,6 +33,7 @@ def snapshot_created_event(snapshot: SnapshotRecord) -> SnapshotEvent:
                 "filename": snapshot.filename,
                 "relative_path": snapshot.relative_path,
                 "url": f"/files/{snapshot.filename}",
+                "thumbnail_url": f"/files/{snapshot.filename}/thumbnail",
                 "size": snapshot.size,
                 "size_bytes": snapshot.size,
                 "captured_at": snapshot.captured_at.isoformat()

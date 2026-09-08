@@ -37,7 +37,7 @@
       <div class="cam-card-img">
         {% if summary.latest_snapshot %}
         <img id="cam-img-{{ summary.camera.camera_id | replace(' ','_') | replace('-','_') }}"
-             src="{{ url_for('server.get_file', filename=summary.latest_snapshot.filename) }}"
+             src="{{ url_for('server.get_file_thumbnail', filename=summary.latest_snapshot.filename) }}"
              alt="{{ summary.camera.display_name }}"
              loading="lazy">
         {% else %}
@@ -231,8 +231,8 @@
     updateCameraTiming(cid, snap);
     updateFrameSize(cid, snap);
 
-    if (img && snap.url) {
-      img.src = snap.url;
+    if (img && (snap.thumbnail_url || snap.url)) {
+      img.src = snap.thumbnail_url || snap.url;
     }
     if (meta) {
       const timestamp = formatTimestamp(snap.captured_at || snap.stored_at);

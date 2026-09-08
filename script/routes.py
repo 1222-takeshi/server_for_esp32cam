@@ -28,7 +28,7 @@ from flask import (
 )
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from script.auth import (
@@ -77,6 +77,17 @@ _PAGINATION_LIMIT_DEFAULT = 50
 _PAGINATION_OFFSET_MAX = 10_000_000
 _FILES_PAGE_MAX = _PAGINATION_OFFSET_MAX // _PAGINATION_LIMIT_DEFAULT
 _EXPORT_ROW_LIMIT = 10_000
+
+# /files/<filename> serves the full-resolution original -- fine for direct
+# downloads, but files.html/index.html/camera_detail.html only ever display
+# it inside a small (56x42 to ~300x225) cropped preview. ESP32-CAM frames go
+# up to UXGA (1600x1200) and can run several hundred KB each, so painting a
+# 50-row page or a multi-camera grid from that route means transferring tens
+# of originals just to downscale them in CSS (see #338). This bounding box
+# keeps enough detail for those preview sizes (including >1x pixel density)
+# while cutting transferred bytes by roughly an order of magnitude.
+_THUMBNAIL_MAX_DIMENSION = 480
+_THUMBNAIL_JPEG_QUALITY = 82
 
 
 def _parse_pagination() -> tuple[int, int] | tuple[None, None]:
@@ -744,6 +755,47 @@ def get_file(filename: str):
         return jsonify({"message": "File not found"}), 404
     except Exception as exc:  # noqa: BLE001 - pragma: no cover - route error boundary
         current_app.logger.error("Error retrieving file: %s", exc)
+        return jsonify({"message": "Error retrieving file"}), 500
+
+
+@server.route("/files/<filename>/thumbnail")
+def get_file_thumbnail(filename: str):
+    try:
+        snapshot = _metadata_store().get_snapshot_by_filename(filename)
+        if snapshot is None:
+            return jsonify({"message": "File not found"}), 404
+        path = _storage().read_image_path_by_relative_path(snapshot.relative_path)
+
+        with Image.open(path) as image:
+            # draft() asks libjpeg to decode at a downscaled DCT size instead
+            # of full resolution when the JPEG encoding allows it -- much
+            # cheaper than a full decode for a target this small, and still
+            # plenty of detail for a thumbnail (same trick used by
+            # detector.py's TFLiteCpuDetector._prepare_input).
+            image.draft("RGB", (_THUMBNAIL_MAX_DIMENSION, _THUMBNAIL_MAX_DIMENSION))
+            image = ImageOps.exif_transpose(image).convert("RGB")
+            image.thumbnail((_THUMBNAIL_MAX_DIMENSION, _THUMBNAIL_MAX_DIMENSION))
+            buffer = BytesIO()
+            image.save(buffer, format="JPEG", quality=_THUMBNAIL_JPEG_QUALITY)
+        buffer.seek(0)
+
+        response = send_file(
+            buffer,
+            mimetype="image/jpeg",
+            download_name=filename,
+            max_age=31536000,
+        )
+        # Content is a deterministic function of the (immutable, uniquely
+        # named) original -- same long-lived immutable caching as get_file()
+        # above, so a client only ever fetches a given thumbnail once.
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+    except FileNotFoundError:
+        return jsonify({"message": "File not found"}), 404
+    except UnidentifiedImageError:
+        return jsonify({"message": "File not found"}), 404
+    except Exception as exc:  # pragma: no cover
+        current_app.logger.error("Error generating thumbnail: %s", exc)
         return jsonify({"message": "Error retrieving file"}), 500
 
 
