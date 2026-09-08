@@ -18,6 +18,10 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
+import pytest
+
+from script.app import create_app, start_retention_scheduler
+from script.config import gunicorn_preload_requested, gunicorn_worker_count
 from script.retention import (
     RetentionScanGate,
     RetentionScheduler,
@@ -25,12 +29,8 @@ from script.retention import (
     apply_upload_retention,
     apply_video_upload_retention,
 )
-from script.app import create_app, start_retention_scheduler
-from script.config import gunicorn_preload_requested, gunicorn_worker_count
 from script.storage import StorageRetentionPolicy, StoredImage, StoredVideo
 from tests.conftest import MINIMAL_JPEG
-
-import pytest
 
 
 @pytest.fixture()

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
-from queue import Empty, Full, Queue
 import threading
 from collections.abc import Callable
+from queue import Empty, Full, Queue
 from typing import Protocol
 
 from script.events import SnapshotEvent, SnapshotEventPublisher
@@ -110,7 +110,7 @@ class WebSocketHub:
                 continue
             try:
                 ws.send(json_str)
-            except Exception:
+            except Exception:  # noqa: BLE001 - isolate a broken connection, drop it below
                 failed.append((ws, ws_camera_id, receive_events))
 
         if failed:

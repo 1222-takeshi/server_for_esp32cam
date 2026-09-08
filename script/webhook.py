@@ -1,15 +1,15 @@
 from __future__ import annotations
 
+import http.client as http_client
 import json
 import logging
 import math
-import time
-from concurrent.futures import Future, ThreadPoolExecutor
-import http.client as http_client
 import ssl
 import threading
+import time
 import urllib.error
 import urllib.request
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import timezone
 from urllib.parse import urlparse
 
@@ -43,7 +43,10 @@ class WebhookNotifier:
         if parsed.hostname is None:
             raise ValueError("ESP32CAM_WEBHOOK_URL must include a valid host")
         try:
-            parsed.port
+            # .port is a property that lazily parses/validates the port
+            # component and raises ValueError on an invalid one -- accessed
+            # here purely to trigger that validation.
+            _ = parsed.port
         except ValueError as exc:
             raise ValueError("ESP32CAM_WEBHOOK_URL must include a valid port") from exc
         if not isinstance(max_attempts, int) or not 1 <= max_attempts <= MAX_WEBHOOK_ATTEMPTS:
@@ -153,7 +156,7 @@ class WebhookNotifier:
                 except (urllib.error.URLError, http_client.HTTPException, OSError) as exc:
                     failure_kind = type(exc).__name__
                     retryable = True
-                except Exception as exc:  # pragma: no cover - defensive boundary
+                except Exception as exc:  # noqa: BLE001 - pragma: no cover - defensive boundary
                     failure_kind = type(exc).__name__
                     retryable = False
 

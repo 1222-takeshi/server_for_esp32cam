@@ -69,8 +69,7 @@ class TFLiteCpuDetector:
     ) -> None:
         try:
             import numpy as np
-            from PIL import Image
-            from PIL import ImageOps
+            from PIL import Image, ImageOps
         except ImportError as exc:  # pragma: no cover - depends on optional deps
             raise RuntimeError("Install the ml extra to use TFLite detection") from exc
 

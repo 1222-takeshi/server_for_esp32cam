@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-
 ADMIN_TOKEN = "admin-token-for-tests"
 DEVICE_KEYS = {"living-room-cam": "living-key", "garage-cam": "garage-key"}
 

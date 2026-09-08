@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import atexit
-from datetime import datetime, timezone
 import json
 import time
+from datetime import datetime, timezone
 
 from flask import Flask, current_app, request
 from flask_sock import Sock
@@ -11,7 +11,7 @@ from flask_sock import Sock
 from script.auth import check_device_api_key, check_device_api_key_for_device
 from script.events import SnapshotEventPublisher
 from script.retention import apply_upload_retention
-from script.routes import _validate_jpeg_image, _serialize_snapshot, _validate_device_id
+from script.routes import _serialize_snapshot, _validate_device_id, _validate_jpeg_image
 from script.websocket_hub import ConnectionLimitExceeded, WebSocketHub, WebSocketLike
 
 

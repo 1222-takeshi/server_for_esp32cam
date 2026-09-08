@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIRMWARE_ROOT = REPO_ROOT / "firmware" / "esp32cam-http-upload"
 PLATFORMIO_INI = FIRMWARE_ROOT / "platformio.ini"

@@ -1,6 +1,6 @@
+import os
 import socket
 import sys
-import os
 from pathlib import Path
 
 from script.config import gunicorn_preload_requested

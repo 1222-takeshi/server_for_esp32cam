@@ -1,19 +1,18 @@
 from __future__ import annotations
 
+import json
+import os
+import sqlite3
+import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
-import json
-import os
 from pathlib import Path
-import sqlite3
-import threading
 
 from gevent import monkey as gevent_monkey
 
 from script.detector import Detection
 from script.storage import StoredImage, StoredVideo
-
 
 _MIN_RETURNING_SQLITE_VERSION = (3, 35, 0)
 

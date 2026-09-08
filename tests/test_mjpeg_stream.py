@@ -40,9 +40,8 @@ def test_mjpeg_stream_includes_initial_frame(app):
     with app.test_client() as c:
         c.post("/upload", data=MINIMAL_JPEG, headers=UPLOAD_HEADERS)
 
-    with app.test_client() as c:
-        with patch("script.routes.Queue", return_value=_mock_queue()):
-            response = c.get("/stream/cameras/esp32cam-front-door")
+    with app.test_client() as c, patch("script.routes.Queue", return_value=_mock_queue()):
+        response = c.get("/stream/cameras/esp32cam-front-door")
 
     assert response.status_code == 200
     assert b"--frame" in response.data
@@ -60,9 +59,8 @@ def test_mjpeg_stream_yields_new_frame_on_event(client):
 
 def test_mjpeg_stream_waits_longer_than_camera_interval(app):
     queue = _mock_queue()
-    with app.test_client() as c:
-        with patch("script.routes.Queue", return_value=queue):
-            response = c.get("/stream/cameras/cam1")
+    with app.test_client() as c, patch("script.routes.Queue", return_value=queue):
+        response = c.get("/stream/cameras/cam1")
 
     assert response.status_code == 200
     queue.get.assert_called_once_with(timeout=330.0)
@@ -72,9 +70,8 @@ def test_mjpeg_stream_idle_timeout_config_is_a_minimum(app):
     app.config["MJPEG_STREAM_IDLE_TIMEOUT_SECONDS"] = 600
     queue = _mock_queue()
     try:
-        with app.test_client() as c:
-            with patch("script.routes.Queue", return_value=queue):
-                response = c.get("/stream/cameras/cam1")
+        with app.test_client() as c, patch("script.routes.Queue", return_value=queue):
+            response = c.get("/stream/cameras/cam1")
 
         assert response.status_code == 200
         queue.get.assert_called_once_with(timeout=600.0)
@@ -99,14 +96,18 @@ def test_mjpeg_stream_releases_slot_when_setup_fails(app):
     # slot, otherwise repeated failures permanently exhaust MAX_MJPEG_STREAMS.
     app.config["MAX_MJPEG_STREAMS"] = 1
     try:
-        with app.test_client() as c:
-            with patch("script.routes._metadata_store", side_effect=RuntimeError("boom")):
-                with pytest.raises(RuntimeError):
-                    c.get("/stream/cameras/cam1")
+        with (
+            app.test_client() as c,
+            patch("script.routes._metadata_store", side_effect=RuntimeError("boom")),
+            pytest.raises(RuntimeError),
+        ):
+            c.get("/stream/cameras/cam1")
 
-        with app.test_client() as c:
-            with patch("script.routes.Queue", return_value=_mock_queue()):
-                response = c.get("/stream/cameras/cam1")
+        with (
+            app.test_client() as c,
+            patch("script.routes.Queue", return_value=_mock_queue()),
+        ):
+            response = c.get("/stream/cameras/cam1")
         assert response.status_code == 200
     finally:
         del app.config["MAX_MJPEG_STREAMS"]

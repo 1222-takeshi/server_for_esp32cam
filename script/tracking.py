@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from collections import OrderedDict
-from dataclasses import dataclass, replace
 import math
 import threading
+from collections import OrderedDict
+from dataclasses import dataclass, replace
 
 from script.detector import Detection
-
 
 BBox = tuple[float, float, float, float]
 

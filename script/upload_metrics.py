@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import threading
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
-import threading
 
 
 @dataclass
