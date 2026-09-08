@@ -894,30 +894,38 @@ def camera_detail(camera_id: str):
 def api_cameras():
     store = _metadata_store()
     if "limit" not in request.args and "offset" not in request.args:
+        # No explicit paging requested. Historically this fetched every
+        # camera's CameraSummary (a per-camera latest-snapshot window query
+        # plus a latest-detection join, see list_camera_summaries()) with no
+        # bound at all -- unauthenticated and O(camera count) regardless of
+        # fleet size (see #371). Cap it at _PAGINATION_LIMIT_MAX instead of
+        # requiring existing small-fleet callers (including this project's
+        # own dashboard JS) to start passing limit/offset: `truncated` tells
+        # a caller with more cameras than fit in one capped page that it
+        # needs to paginate explicitly to see the rest.
+        total = store.count_cameras()
+        summaries = store.list_camera_summaries(limit=_PAGINATION_LIMIT_MAX, offset=0)
         return jsonify(
             {
-                "total": store.count_cameras(),
-                "limit": None,
+                "total": total,
+                "limit": _PAGINATION_LIMIT_MAX,
                 "offset": 0,
-                "cameras": [
-                    _serialize_camera_summary(item)
-                    for item in store.list_camera_summaries()
-                ],
+                "truncated": total > len(summaries),
+                "cameras": [_serialize_camera_summary(item) for item in summaries],
             }
         )
     limit, offset = _parse_pagination()
     if limit is None:
         return jsonify({"message": "Invalid pagination parameters"}), 400
     total = store.count_cameras()
+    summaries = store.list_camera_summaries(limit=limit, offset=offset)
     return jsonify(
         {
             "total": total,
             "limit": limit,
             "offset": offset,
-            "cameras": [
-                _serialize_camera_summary(item)
-                for item in store.list_camera_summaries(limit=limit, offset=offset)
-            ],
+            "truncated": offset + len(summaries) < total,
+            "cameras": [_serialize_camera_summary(item) for item in summaries],
         }
     )
 
