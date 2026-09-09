@@ -15,7 +15,7 @@ from script.validation import is_valid_camera_id
 _HASH_CHUNK_SIZE = 1024 * 1024
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class StoredImage:
     name: str
     relative_path: str
@@ -25,7 +25,7 @@ class StoredImage:
     captured_at: datetime | None = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class StoredVideo:
     name: str
     relative_path: str
@@ -38,7 +38,7 @@ class StoredVideo:
     sha256: str
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class StorageRetentionPolicy:
     max_age_seconds: int | None = None
     max_bytes: int | None = None
