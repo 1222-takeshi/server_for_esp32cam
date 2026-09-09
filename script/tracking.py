@@ -10,7 +10,7 @@ from script.detector import Detection
 BBox = tuple[float, float, float, float]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class _Track:
     track_id: int
     label: str
