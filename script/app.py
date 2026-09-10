@@ -7,6 +7,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from flask import Flask, g, jsonify, request
+from gevent.threadpool import ThreadPool
 from werkzeug.exceptions import RequestEntityTooLarge
 
 from script.auth import validate_auth_config
@@ -339,11 +340,21 @@ def create_app(test_config: dict | None = None) -> Flask:
         max_tracked_cameras=app.config.get("MAX_TRACKED_CAMERAS", 500)
     )
     app_metrics = AppMetrics()
+    # Thumbnail generation (Pillow decode/resize/encode) is a blocking
+    # native call, same class of issue as detector.py's TFLiteCpuDetector
+    # -- run it on a small worker pool so it can't stall the gevent hub and
+    # freeze every other greenlet (uploads, dashboard, /healthz) for its
+    # duration. A handful of workers is enough to keep concurrent thumbnail
+    # requests off the request-handling greenlets without oversubscribing
+    # the CPU-bound JPEG codec.
+    thumbnail_pool = ThreadPool(4)
+    atexit.register(thumbnail_pool.kill)
 
     app.extensions["storage"] = storage
     app.extensions["metadata_store"] = metadata_store
     app.extensions["detector"] = detector
     app.extensions["inference_service"] = inference_service
+    app.extensions["thumbnail_pool"] = thumbnail_pool
     app.extensions["object_tracker"] = object_tracker
     app.extensions["snapshot_event_publisher"] = snapshot_event_publisher
     app.extensions["storage_retention_policy"] = storage_retention_policy
