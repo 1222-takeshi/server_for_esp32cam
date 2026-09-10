@@ -17,7 +17,7 @@ from script.storage import StoredImage, StoredVideo
 _MIN_RETURNING_SQLITE_VERSION = (3, 35, 0)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class DetectionRecord:
     label: str
     score: float
@@ -28,7 +28,7 @@ class DetectionRecord:
     track_id: int | None = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SnapshotRecord:
     id: int
     filename: str
@@ -42,7 +42,7 @@ class SnapshotRecord:
     detections: tuple[DetectionRecord, ...] = ()
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class VideoRecord:
     id: int
     filename: str
@@ -58,7 +58,7 @@ class VideoRecord:
     processing_error: str | None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class CameraRecord:
     camera_id: str
     display_name: str
@@ -68,7 +68,7 @@ class CameraRecord:
     is_active: bool
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class CameraSummary:
     camera: CameraRecord
     latest_snapshot: SnapshotRecord | None
@@ -97,7 +97,7 @@ def _chunked(items: list[object], size: int) -> list[list[object]]:
     return [items[offset : offset + size] for offset in range(0, len(items), size)]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class DeviceLogRecord:
     id: int
     camera_id: str
@@ -106,7 +106,7 @@ class DeviceLogRecord:
     logged_at: datetime
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class DesiredConfigRecord:
     camera_id: str
     version: int

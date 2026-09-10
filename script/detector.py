@@ -5,7 +5,7 @@ from io import BytesIO
 from pathlib import Path
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Detection:
     label: str
     score: float
