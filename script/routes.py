@@ -190,6 +190,10 @@ def _thumbnail_pool():
     return current_app.extensions["thumbnail_pool"]
 
 
+def _thumbnail_cache():
+    return current_app.extensions["thumbnail_cache"]
+
+
 def _snapshot_event_publisher():
     return current_app.extensions["snapshot_event_publisher"]
 
@@ -787,12 +791,30 @@ def get_file_thumbnail(filename: str):
         if snapshot is None:
             return jsonify({"message": "File not found"}), 404
         path = _storage().read_image_path_by_relative_path(snapshot.relative_path)
+        file_stat = path.stat()
 
-        # Pillow's decode/resize/encode is a blocking native call -- run it
-        # on the thumbnail worker pool so it can't stall the gevent hub and
-        # freeze every other greenlet (uploads, dashboard, /healthz) for its
-        # duration, mirroring the pool already used for detector inference.
-        jpeg_bytes = _thumbnail_pool().apply(_build_thumbnail_jpeg, (path,))
+        # Re-decoding/resizing/re-encoding the same source image on every
+        # request is wasted CPU once one client has already fetched it --
+        # cache the generated JPEG bytes in-process, keyed by the source
+        # file's current (mtime, size) so a replaced/re-uploaded file at the
+        # same path is never served a stale thumbnail (see #394).
+        cache = _thumbnail_cache()
+        jpeg_bytes = cache.get(
+            snapshot.relative_path, mtime_ns=file_stat.st_mtime_ns, size=file_stat.st_size
+        )
+        if jpeg_bytes is None:
+            # Pillow's decode/resize/encode is a blocking native call -- run
+            # it on the thumbnail worker pool so it can't stall the gevent
+            # hub and freeze every other greenlet (uploads, dashboard,
+            # /healthz) for its duration, mirroring the pool already used
+            # for detector inference.
+            jpeg_bytes = _thumbnail_pool().apply(_build_thumbnail_jpeg, (path,))
+            cache.put(
+                snapshot.relative_path,
+                mtime_ns=file_stat.st_mtime_ns,
+                size=file_stat.st_size,
+                jpeg_bytes=jpeg_bytes,
+            )
         buffer = BytesIO(jpeg_bytes)
 
         response = send_file(

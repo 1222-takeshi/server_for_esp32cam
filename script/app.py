@@ -21,6 +21,7 @@ from script.prometheus_metrics import AppMetrics
 from script.retention import RetentionScanGate, RetentionScheduler
 from script.routes import limiter, server
 from script.storage import LocalFilesystemStorage, StorageRetentionPolicy
+from script.thumbnail_cache import ThumbnailCache
 from script.tracking import ObjectTracker
 from script.upload_metrics import UploadMetricsRegistry
 from script.webhook import DISABLED_NOTIFIER, WebhookNotifier
@@ -349,12 +350,20 @@ def create_app(test_config: dict | None = None) -> Flask:
     # the CPU-bound JPEG codec.
     thumbnail_pool = ThreadPool(4)
     atexit.register(thumbnail_pool.kill)
+    # In-process cache of generated thumbnail bytes, keyed by source image
+    # path + (mtime, size) so a changed/replaced file is never served stale
+    # (see script/thumbnail_cache.py, #394). Bounded to avoid unbounded
+    # memory growth on deployments with many distinct images.
+    thumbnail_cache = ThumbnailCache(
+        max_entries=app.config.get("THUMBNAIL_CACHE_MAX_ENTRIES", 256)
+    )
 
     app.extensions["storage"] = storage
     app.extensions["metadata_store"] = metadata_store
     app.extensions["detector"] = detector
     app.extensions["inference_service"] = inference_service
     app.extensions["thumbnail_pool"] = thumbnail_pool
+    app.extensions["thumbnail_cache"] = thumbnail_cache
     app.extensions["object_tracker"] = object_tracker
     app.extensions["snapshot_event_publisher"] = snapshot_event_publisher
     app.extensions["storage_retention_policy"] = storage_retention_policy

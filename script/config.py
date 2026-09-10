@@ -110,6 +110,13 @@ class Config:
     CAMERA_EXPECTED_INTERVAL_SECONDS = int(
         os.getenv("ESP32CAM_CAMERA_EXPECTED_INTERVAL_SECONDS", "300")
     )
+    # Bounds the in-process LRU cache of generated thumbnail JPEGs (see
+    # script/thumbnail_cache.py, #394) -- avoids re-decoding/resizing/
+    # re-encoding the same source image on every request while capping
+    # memory use on long-lived deployments with many distinct images.
+    THUMBNAIL_CACHE_MAX_ENTRIES = int(
+        os.getenv("ESP32CAM_THUMBNAIL_CACHE_MAX_ENTRIES", "256")
+    )
     PORT = int(os.getenv("PORT", "8080"))
     MAX_CONTENT_LENGTH = int(os.getenv("ESP32CAM_MAX_CONTENT_LENGTH", str(1 * 1024 * 1024)))
     SNAPSHOT_MAX_CONTENT_LENGTH = MAX_CONTENT_LENGTH

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import os
 import uuid
 from datetime import datetime, timezone
 from io import BytesIO
@@ -9,6 +10,7 @@ from unittest.mock import patch
 from flask import request
 from PIL import Image
 
+from script import routes
 from script.app import create_app
 from tests.conftest import MINIMAL_JPEG
 
@@ -796,6 +798,68 @@ def test_get_file_thumbnail_sets_long_lived_immutable_cache_control(client):
     assert response.status_code == 200
     assert "immutable" in response.headers["Cache-Control"]
     assert "max-age=31536000" in response.headers["Cache-Control"]
+
+
+def test_get_file_thumbnail_uses_cache_on_second_request(app, client, monkeypatch):
+    calls = []
+    original_build = routes._build_thumbnail_jpeg
+
+    def counting_build(path):
+        calls.append(path)
+        return original_build(path)
+
+    monkeypatch.setattr(routes, "_build_thumbnail_jpeg", counting_build)
+
+    upload = client.post("/upload", data=MINIMAL_JPEG, headers=UPLOAD_HEADERS).get_json()
+
+    first_response = client.get(f"/files/{upload['filename']}/thumbnail")
+    second_response = client.get(f"/files/{upload['filename']}/thumbnail")
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert second_response.data == first_response.data
+    # Only the first request should have actually decoded/resized/encoded --
+    # the second is served from the in-process thumbnail cache.
+    assert len(calls) == 1
+    assert len(app.extensions["thumbnail_cache"]) == 1
+
+
+def test_get_file_thumbnail_regenerates_after_source_file_changes(app, client, monkeypatch):
+    calls = []
+    original_build = routes._build_thumbnail_jpeg
+
+    def counting_build(path):
+        calls.append(path)
+        return original_build(path)
+
+    monkeypatch.setattr(routes, "_build_thumbnail_jpeg", counting_build)
+
+    upload = client.post("/upload", data=MINIMAL_JPEG, headers=UPLOAD_HEADERS).get_json()
+    client.get(f"/files/{upload['filename']}/thumbnail")
+    assert len(calls) == 1
+
+    # Simulate the file at this relative_path being replaced in place with
+    # different content and a later mtime -- the cached signature
+    # (mtime_ns, size) recorded for the old content must no longer match.
+    storage = app.extensions["storage"]
+    metadata_store = app.extensions["metadata_store"]
+    snapshot = metadata_store.get_snapshot_by_filename(upload["filename"])
+    path = storage.read_image_path_by_relative_path(snapshot.relative_path)
+
+    larger_jpeg_buf = BytesIO()
+    Image.new("RGB", (800, 600), color=(1, 2, 3)).save(larger_jpeg_buf, format="JPEG")
+    path.write_bytes(larger_jpeg_buf.getvalue())
+    # Force a distinct mtime regardless of filesystem timestamp resolution,
+    # so this test can't flake on a coarse-grained clock.
+    stat_after_write = path.stat()
+    os.utime(path, ns=(stat_after_write.st_atime_ns, stat_after_write.st_mtime_ns + 1))
+
+    second_response = client.get(f"/files/{upload['filename']}/thumbnail")
+
+    assert second_response.status_code == 200
+    # The stale cache entry must not have been served -- a second real
+    # build happened instead.
+    assert len(calls) == 2
 
 
 def test_upload_returns_500_when_storage_write_fails(app, client, monkeypatch):
