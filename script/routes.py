@@ -186,6 +186,10 @@ def _inference_service():
     return current_app.extensions["inference_service"]
 
 
+def _thumbnail_pool():
+    return current_app.extensions["thumbnail_pool"]
+
+
 def _snapshot_event_publisher():
     return current_app.extensions["snapshot_event_publisher"]
 
@@ -758,6 +762,24 @@ def get_file(filename: str):
         return jsonify({"message": "Error retrieving file"}), 500
 
 
+def _build_thumbnail_jpeg(path) -> bytes:
+    """Decode/resize/encode a thumbnail. Runs off the request greenlet (see
+    _thumbnail_pool) since Pillow's native calls don't yield to gevent."""
+    with Image.open(path) as image:
+        # draft() asks libjpeg to decode at a downscaled DCT size instead
+        # of full resolution when the JPEG encoding allows it -- much
+        # cheaper than a full decode for a target this small, and still
+        # plenty of detail for a thumbnail (same trick used by
+        # detector.py's TFLiteCpuDetector._prepare_input).
+        image.draft("RGB", (_THUMBNAIL_MAX_DIMENSION, _THUMBNAIL_MAX_DIMENSION))
+        image = ImageOps.exif_transpose(image).convert("RGB")
+        image.thumbnail((_THUMBNAIL_MAX_DIMENSION, _THUMBNAIL_MAX_DIMENSION))
+        buffer = BytesIO()
+        image.save(buffer, format="JPEG", quality=_THUMBNAIL_JPEG_QUALITY)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
 @server.route("/files/<filename>/thumbnail")
 def get_file_thumbnail(filename: str):
     try:
@@ -766,18 +788,12 @@ def get_file_thumbnail(filename: str):
             return jsonify({"message": "File not found"}), 404
         path = _storage().read_image_path_by_relative_path(snapshot.relative_path)
 
-        with Image.open(path) as image:
-            # draft() asks libjpeg to decode at a downscaled DCT size instead
-            # of full resolution when the JPEG encoding allows it -- much
-            # cheaper than a full decode for a target this small, and still
-            # plenty of detail for a thumbnail (same trick used by
-            # detector.py's TFLiteCpuDetector._prepare_input).
-            image.draft("RGB", (_THUMBNAIL_MAX_DIMENSION, _THUMBNAIL_MAX_DIMENSION))
-            image = ImageOps.exif_transpose(image).convert("RGB")
-            image.thumbnail((_THUMBNAIL_MAX_DIMENSION, _THUMBNAIL_MAX_DIMENSION))
-            buffer = BytesIO()
-            image.save(buffer, format="JPEG", quality=_THUMBNAIL_JPEG_QUALITY)
-        buffer.seek(0)
+        # Pillow's decode/resize/encode is a blocking native call -- run it
+        # on the thumbnail worker pool so it can't stall the gevent hub and
+        # freeze every other greenlet (uploads, dashboard, /healthz) for its
+        # duration, mirroring the pool already used for detector inference.
+        jpeg_bytes = _thumbnail_pool().apply(_build_thumbnail_jpeg, (path,))
+        buffer = BytesIO(jpeg_bytes)
 
         response = send_file(
             buffer,
