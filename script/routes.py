@@ -810,7 +810,7 @@ def get_file_thumbnail(filename: str):
         return jsonify({"message": "File not found"}), 404
     except UnidentifiedImageError:
         return jsonify({"message": "File not found"}), 404
-    except Exception as exc:  # pragma: no cover
+    except Exception as exc:  # noqa: BLE001 - pragma: no cover - route error boundary
         current_app.logger.error("Error generating thumbnail: %s", exc)
         return jsonify({"message": "Error retrieving file"}), 500
 
