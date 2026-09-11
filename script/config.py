@@ -12,6 +12,17 @@ def _env_bool(name: str, default: str = "false") -> bool:
     return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_int_or_none(name: str) -> int | None:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
 def _load_device_api_keys() -> dict[str, str]:
     raw = os.getenv("ESP32CAM_DEVICE_API_KEYS", "").strip()
     if not raw:
@@ -96,6 +107,7 @@ class Config:
     DETECTION_THRESHOLD = float(os.getenv("ESP32CAM_DETECTION_THRESHOLD", "0.5"))
     PERSON_LABEL = os.getenv("ESP32CAM_PERSON_LABEL", "person")
     PERSON_CLASS_ID = int(os.getenv("ESP32CAM_PERSON_CLASS_ID", "0"))
+    DETECTOR_NUM_THREADS = _env_int_or_none("ESP32CAM_DETECTOR_NUM_THREADS")
     INFERENCE_MODE = os.getenv("ESP32CAM_INFERENCE_MODE", "async")
     KEEP_ONLY_DETECTED_SNAPSHOTS = _env_bool("ESP32CAM_KEEP_ONLY_DETECTED_SNAPSHOTS")
     TRACKING_ENABLED = _env_bool("ESP32CAM_TRACKING_ENABLED")

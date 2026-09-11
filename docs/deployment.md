@@ -331,6 +331,7 @@ All variables are optional unless marked **required for production**.
 | `ESP32CAM_DETECTION_THRESHOLD` | `0.5` | Minimum confidence score to record a detection. |
 | `ESP32CAM_PERSON_LABEL` | `person` | Label string that identifies a person. |
 | `ESP32CAM_PERSON_CLASS_ID` | `0` | Class index for the person class in the model. |
+| `ESP32CAM_DETECTOR_NUM_THREADS` | _(CPU count)_ | Number of threads the TFLite interpreter uses per inference call. Defaults to the machine's CPU count (falling back to 4) so multi-core CPUs (e.g. Raspberry Pi 4) aren't left mostly idle. |
 | `ESP32CAM_CAMERA_EXPECTED_INTERVAL_SECONDS` | `300` | Seconds between expected uploads; used to compute camera health. |
 | `ESP32CAM_KEEP_ONLY_DETECTED_SNAPSHOTS` | `false` | If true, delete snapshots with successful inference and zero detections. |
 | `ESP32CAM_TRACKING_ENABLED` | `false` | Enable bounded, per-camera IoU tracking. State is process-local and resets safely after restart. |

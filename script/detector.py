@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -66,6 +67,7 @@ class TFLiteCpuDetector:
         labels_path: str | Path | None = None,
         person_label: str = "person",
         person_class_id: int = 0,
+        num_threads: int | None = None,
     ) -> None:
         try:
             import numpy as np
@@ -81,7 +83,17 @@ class TFLiteCpuDetector:
         self.threshold = threshold
         self.person_label = person_label
         self.person_class_id = person_class_id
-        self._interpreter = Interpreter(model_path=str(model_path))
+        # Every supported Interpreter (tflite_runtime, ai_edge_litert,
+        # tensorflow.lite) defaults num_threads to a conservative,
+        # effectively single-threaded value when it's omitted. Deployments
+        # target multi-core CPUs (e.g. Raspberry Pi 4), so default to using
+        # every available core instead of leaving them idle.
+        resolved_num_threads = (
+            num_threads if num_threads and num_threads > 0 else (os.cpu_count() or 4)
+        )
+        self._interpreter = Interpreter(
+            model_path=str(model_path), num_threads=resolved_num_threads
+        )
         self._interpreter.allocate_tensors()
         self._input_details = self._interpreter.get_input_details()
         self._output_details = self._interpreter.get_output_details()

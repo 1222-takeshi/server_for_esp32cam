@@ -145,6 +145,47 @@ def test_storage_cleans_up_partial_write_when_metadata_write_fails(tmp_path, mon
     assert list((tmp_path / "uploads").rglob("*")) == []
 
 
+def test_storage_writes_image_metadata_without_leftover_temp_files(tmp_path):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+
+    storage.save_image(
+        b"\xff\xd8jpeg",
+        "image/jpeg",
+        device_id="esp32cam-front-door",
+        captured_at=datetime(2026, 3, 11, 12, 34, 56, tzinfo=timezone.utc),
+    )
+
+    assert list(storage.upload_dir.rglob("*.tmp")) == []
+
+
+def test_storage_image_metadata_write_is_atomic_and_preserves_original_on_failure(
+    tmp_path, monkeypatch
+):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+    stored = storage.save_image(
+        b"\xff\xd8jpeg",
+        "image/jpeg",
+        device_id="esp32cam-front-door",
+        captured_at=datetime(2026, 3, 11, 12, 34, 56, tzinfo=timezone.utc),
+    )
+    image_path = storage.upload_dir / stored.relative_path
+    metadata_path = image_path.with_suffix(".jpg.json")
+    original_payload = metadata_path.read_text(encoding="utf-8")
+
+    def fail_replace(*_args, **_kwargs):
+        raise OSError("simulated crash between temp-write and replace")
+
+    monkeypatch.setattr("script.storage.os.replace", fail_replace)
+
+    with pytest.raises(OSError):
+        storage._write_metadata(image_path, "esp32cam-back-door", None)
+
+    # The original sidecar must survive an interrupted replace, and no
+    # partial temp file should be left behind.
+    assert metadata_path.read_text(encoding="utf-8") == original_payload
+    assert list(storage.upload_dir.rglob("*.tmp")) == []
+
+
 def test_storage_lists_legacy_images_without_metadata(tmp_path):
     upload_dir = tmp_path / "uploads"
     storage = LocalFilesystemStorage(upload_dir)

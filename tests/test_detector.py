@@ -333,3 +333,61 @@ def test_interpreter_loader_prefers_tflite_runtime(monkeypatch):
     )
 
     assert _load_interpreter_class() is RuntimeInterpreter
+
+
+def _install_recording_interpreter(monkeypatch, captured: dict[str, object]) -> None:
+    class RecordingInterpreter:
+        def __init__(self, *, model_path, num_threads=None):
+            captured["model_path"] = model_path
+            captured["num_threads"] = num_threads
+
+        def allocate_tensors(self):
+            pass
+
+        def get_input_details(self):
+            return []
+
+        def get_output_details(self):
+            return []
+
+    monkeypatch.setitem(__import__("sys").modules, "tflite_runtime", _fake_module("tflite_runtime"))
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "tflite_runtime.interpreter",
+        _fake_module("tflite_runtime.interpreter", Interpreter=RecordingInterpreter),
+    )
+
+
+def test_tflite_detector_passes_explicit_num_threads_to_interpreter(monkeypatch, tmp_path):
+    captured: dict[str, object] = {}
+    _install_recording_interpreter(monkeypatch, captured)
+    model_path = tmp_path / "model.tflite"
+    model_path.write_bytes(b"")
+
+    TFLiteCpuDetector(model_path=model_path, num_threads=2)
+
+    assert captured["num_threads"] == 2
+
+
+def test_tflite_detector_defaults_num_threads_to_cpu_count_when_unset(monkeypatch, tmp_path):
+    captured: dict[str, object] = {}
+    _install_recording_interpreter(monkeypatch, captured)
+    monkeypatch.setattr("script.detector.os.cpu_count", lambda: 4)
+    model_path = tmp_path / "model.tflite"
+    model_path.write_bytes(b"")
+
+    TFLiteCpuDetector(model_path=model_path)
+
+    assert captured["num_threads"] == 4
+
+
+def test_tflite_detector_falls_back_to_four_threads_when_cpu_count_unknown(monkeypatch, tmp_path):
+    captured: dict[str, object] = {}
+    _install_recording_interpreter(monkeypatch, captured)
+    monkeypatch.setattr("script.detector.os.cpu_count", lambda: None)
+    model_path = tmp_path / "model.tflite"
+    model_path.write_bytes(b"")
+
+    TFLiteCpuDetector(model_path=model_path)
+
+    assert captured["num_threads"] == 4
