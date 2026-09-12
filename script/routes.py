@@ -194,6 +194,10 @@ def _thumbnail_cache():
     return current_app.extensions["thumbnail_cache"]
 
 
+def _storage_delete_pool():
+    return current_app.extensions["storage_delete_pool"]
+
+
 def _snapshot_event_publisher():
     return current_app.extensions["snapshot_event_publisher"]
 
@@ -1158,7 +1162,12 @@ def api_delete_camera(camera_id: str):
     storage_deleted = False
     if delete_files:
         try:
-            _storage().delete_camera_files(camera_id)
+            # shutil.rmtree() over a camera's whole upload directory is a
+            # blocking native filesystem call that doesn't yield to gevent --
+            # run it on a small worker pool (mirroring _thumbnail_pool above)
+            # so it can't stall every other greenlet for the duration of a
+            # large deletion.
+            _storage_delete_pool().apply(_storage().delete_camera_files, (camera_id,))
             storage_deleted = True
         except Exception as exc:  # noqa: BLE001 - DB record already deleted; report partial success
             current_app.logger.error("Storage deletion failed for camera %s: %s", camera_id, exc)

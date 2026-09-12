@@ -33,6 +33,10 @@ class FakeArray:
     def astype(self, dtype: object):
         return FakeArray(self.shape, dtype, self.pixels)
 
+    def __itruediv__(self, divisor: float):
+        self.pixels = tuple(tuple(channel / divisor for channel in pixel) for pixel in self.pixels)
+        return self
+
 
 class FakeNumpy:
     uint8 = object()
@@ -269,6 +273,35 @@ def test_prepare_input_preserves_exif_orientation_with_draft(monkeypatch):
     assert prepared.shape == (1, 300, 300, 3)
     assert pixel_distance(prepared.pixels[0], expected[0]) <= 20
     assert pixel_distance(prepared.pixels[0], unrotated[0]) >= 100
+
+
+def test_prepare_input_normalizes_float32_input_in_place():
+    """A float32 model input should be scaled into [0.0, 1.0] via an
+    in-place `/=` (see script/detector.py's `_prepare_input`), not left as
+    raw 0-255 values. `FakeArray.__itruediv__` mirrors real numpy's
+    in-place division well enough to exercise that exact code path without
+    depending on the `ml` extra's numpy in this (base `dev` extra) test
+    environment."""
+    detector = TFLiteCpuDetector.__new__(TFLiteCpuDetector)
+    detector._input_details = [
+        {"shape": (1, 2, 2, 3), "dtype": FakeNumpy.float32},
+    ]
+    detector._image = Image
+    detector._image_ops = ImageOps
+    detector._np = FakeNumpy
+
+    source = Image.new("RGB", (2, 2), color=(255, 0, 51))
+    payload = BytesIO()
+    source.save(payload, format="JPEG", quality=100)
+
+    prepared = detector._prepare_input(payload.getvalue())
+
+    assert prepared.dtype is FakeNumpy.float32
+    assert prepared.shape == (1, 2, 2, 3)
+    assert prepared.pixels
+    for pixel in prepared.pixels:
+        for channel in pixel:
+            assert 0.0 <= channel <= 1.0
 
 
 def test_shape_of_uses_fast_path_for_ndarray_like_objects():

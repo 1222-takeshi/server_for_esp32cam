@@ -357,6 +357,15 @@ def create_app(test_config: dict | None = None) -> Flask:
     thumbnail_cache = ThumbnailCache(
         max_entries=app.config.get("THUMBNAIL_CACHE_MAX_ENTRIES", 256)
     )
+    # DELETE /api/cameras/<id>?delete_files=true's shutil.rmtree() of a
+    # camera's whole upload directory is the same class of issue as the
+    # thumbnail pool above -- a blocking native filesystem call that doesn't
+    # yield to gevent, so a camera with years of accumulated snapshots/clips
+    # can stall every other greenlet (uploads, dashboard, /healthz) for the
+    # whole deletion. A single worker is enough: this is a rare, admin-only
+    # action, not a concurrent hot path like thumbnails.
+    storage_delete_pool = ThreadPool(1)
+    atexit.register(storage_delete_pool.kill)
 
     app.extensions["storage"] = storage
     app.extensions["metadata_store"] = metadata_store
@@ -364,6 +373,7 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.extensions["inference_service"] = inference_service
     app.extensions["thumbnail_pool"] = thumbnail_pool
     app.extensions["thumbnail_cache"] = thumbnail_cache
+    app.extensions["storage_delete_pool"] = storage_delete_pool
     app.extensions["object_tracker"] = object_tracker
     app.extensions["snapshot_event_publisher"] = snapshot_event_publisher
     app.extensions["storage_retention_policy"] = storage_retention_policy
