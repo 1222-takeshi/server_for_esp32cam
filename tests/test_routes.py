@@ -1484,6 +1484,32 @@ def test_delete_camera_with_delete_files_removes_storage(client, app):
     assert not camera_dir.exists()
 
 
+def test_delete_camera_reports_partial_success_when_storage_deletion_fails(
+    client, app, monkeypatch
+):
+    """delete_camera_files() now runs on storage_delete_pool (see
+    _storage_delete_pool()) instead of directly on the request greenlet, so
+    this also confirms gevent's ThreadPool.apply() still propagates a
+    failure back to the caller synchronously, same as a direct call."""
+    client.post(
+        "/api/status_update",
+        json={"device_id": "cam-delete-fail"},
+        content_type="application/json",
+    )
+
+    def fail_delete(_camera_id: str) -> None:
+        raise OSError("simulated filesystem failure")
+
+    monkeypatch.setattr(app.extensions["storage"], "delete_camera_files", fail_delete)
+
+    response = client.delete("/api/cameras/cam-delete-fail?delete_files=true")
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["message"] == "Camera deleted"
+    assert body["storage_deleted"] is False
+
+
 def test_delete_camera_removes_associated_device_logs(client):
     client.post(
         "/api/log_error",

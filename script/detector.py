@@ -104,7 +104,14 @@ class TFLiteCpuDetector:
 
         dtype = input_detail["dtype"]
         if dtype == self._np.float32:
-            array = array.astype(self._np.float32) / 255.0
+            # `.astype(float32)` already allocates a fresh array, so dividing
+            # it out-of-place (`/ 255.0`) allocated and populated a *second*
+            # full-size float32 array on every single inference call, for
+            # the lifetime of the process. `/=` reuses the array `.astype()`
+            # just allocated instead, halving the allocations/copies for
+            # this step -- same result, no behavior change.
+            array = array.astype(self._np.float32)
+            array /= 255.0
         else:
             array = array.astype(dtype)
 
