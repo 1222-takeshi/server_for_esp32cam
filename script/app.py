@@ -147,6 +147,7 @@ def _create_detector(app: Flask):
             labels_path=labels_path or None,
             person_label=app.config["PERSON_LABEL"],
             person_class_id=app.config["PERSON_CLASS_ID"],
+            num_threads=app.config.get("DETECTOR_NUM_THREADS"),
         )
     # Intentional catch-all: a missing/broken optional ML dependency or model
     # file should degrade to a disabled detector, not crash startup.
