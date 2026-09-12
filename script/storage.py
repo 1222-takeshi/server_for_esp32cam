@@ -172,7 +172,17 @@ class LocalFilesystemStorage:
         if captured_at is not None:
             payload["captured_at"] = captured_at.isoformat()
 
-        self._metadata_path(image_path).write_text(json.dumps(payload), encoding="utf-8")
+        # Write via a temp file + atomic replace (mirroring
+        # `_write_video_metadata`) so a crash mid-write can never leave a
+        # truncated/corrupt sidecar: `_read_metadata` treats a corrupt file
+        # as if it never existed, silently losing device_id/captured_at.
+        metadata_path = self._metadata_path(image_path)
+        temp_path = metadata_path.with_name(f".{metadata_path.name}.{uuid4().hex}.tmp")
+        try:
+            temp_path.write_text(json.dumps(payload), encoding="utf-8")
+            os.replace(temp_path, metadata_path)
+        finally:
+            temp_path.unlink(missing_ok=True)
 
     def _read_metadata(self, image_path: Path) -> tuple[str | None, datetime | None]:
         metadata_path = self._metadata_path(image_path)
