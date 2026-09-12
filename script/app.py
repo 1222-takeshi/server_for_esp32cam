@@ -21,6 +21,7 @@ from script.prometheus_metrics import AppMetrics
 from script.retention import RetentionScanGate, RetentionScheduler
 from script.routes import limiter, server
 from script.storage import LocalFilesystemStorage, StorageRetentionPolicy
+from script.thumbnail_cache import ThumbnailCache
 from script.tracking import ObjectTracker
 from script.upload_metrics import UploadMetricsRegistry
 from script.webhook import DISABLED_NOTIFIER, WebhookNotifier
@@ -349,6 +350,13 @@ def create_app(test_config: dict | None = None) -> Flask:
     # the CPU-bound JPEG codec.
     thumbnail_pool = ThreadPool(4)
     atexit.register(thumbnail_pool.kill)
+    # In-process cache of generated thumbnail bytes, keyed by source image
+    # path + (mtime, size) so a changed/replaced file is never served stale
+    # (see script/thumbnail_cache.py, #394). Bounded to avoid unbounded
+    # memory growth on deployments with many distinct images.
+    thumbnail_cache = ThumbnailCache(
+        max_entries=app.config.get("THUMBNAIL_CACHE_MAX_ENTRIES", 256)
+    )
     # DELETE /api/cameras/<id>?delete_files=true's shutil.rmtree() of a
     # camera's whole upload directory is the same class of issue as the
     # thumbnail pool above -- a blocking native filesystem call that doesn't
@@ -364,6 +372,7 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.extensions["detector"] = detector
     app.extensions["inference_service"] = inference_service
     app.extensions["thumbnail_pool"] = thumbnail_pool
+    app.extensions["thumbnail_cache"] = thumbnail_cache
     app.extensions["storage_delete_pool"] = storage_delete_pool
     app.extensions["object_tracker"] = object_tracker
     app.extensions["snapshot_event_publisher"] = snapshot_event_publisher
