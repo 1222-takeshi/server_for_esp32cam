@@ -202,22 +202,21 @@ def _snapshot_event_publisher():
     return current_app.extensions["snapshot_event_publisher"]
 
 
-def _validate_device_id(device_id: str) -> str | None:
+def _validate_identifier(value: str, label: str) -> str | None:
     """Returns an error message string if invalid, None if valid."""
-    if not device_id:
-        return "device_id is required"
-    if not is_valid_camera_id(device_id):
-        return "device_id contains invalid characters or exceeds maximum length"
+    if not value:
+        return f"{label} is required"
+    if not is_valid_camera_id(value):
+        return f"{label} contains invalid characters or exceeds maximum length"
     return None
+
+
+def _validate_device_id(device_id: str) -> str | None:
+    return _validate_identifier(device_id, "device_id")
 
 
 def _validate_camera_id(camera_id: str) -> str | None:
-    """Returns an error message string if invalid, None if valid."""
-    if not camera_id:
-        return "camera_id is required"
-    if not is_valid_camera_id(camera_id):
-        return "camera_id contains invalid characters or exceeds maximum length"
-    return None
+    return _validate_identifier(camera_id, "camera_id")
 
 
 def _get_json_object() -> dict[str, object] | None:
