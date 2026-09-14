@@ -63,7 +63,12 @@ class InferenceService:
         # snapshot left pending/processing from a prior run, not just the
         # oldest 100 (anything beyond that cap was previously orphaned
         # forever, since nothing re-scans for pending work after boot).
-        for snapshot_id in self.metadata_store.list_pending_snapshot_ids(limit=None):
+        # iter_pending_snapshot_ids() keyset-paginates the underlying SELECT
+        # in bounded batches instead of one unbounded fetchall(), so this
+        # sweep's memory footprint stays bounded even if the backlog has
+        # grown very large (e.g. the server was down for a long time, or a
+        # bug left items stuck in "processing") (#407).
+        for snapshot_id in self.metadata_store.iter_pending_snapshot_ids():
             self._queue.put(snapshot_id)
 
         self._worker = threading.Thread(target=self._worker_loop, daemon=True, name="esp32cam-inference")

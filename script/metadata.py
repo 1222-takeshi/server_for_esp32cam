@@ -90,6 +90,12 @@ _SQLITE_IN_CLAUSE_CHUNK_SIZE = 500
 # distinct from the IN-clause chunk size above (this bounds one SELECT's
 # result set, not the number of bound parameters).
 _RETENTION_LOOKUP_BATCH_SIZE = 500
+# Page size for the keyset-paginated pending-snapshot scan used by the
+# InferenceService startup recovery sweep (#407) -- same rationale as
+# _RETENTION_LOOKUP_BATCH_SIZE above: bounds one SELECT's result set so an
+# unusually large pending/processing backlog after a restart can't build an
+# unbounded single fetchall() result.
+_PENDING_SNAPSHOT_BATCH_SIZE = 500
 
 
 def _chunked(items: list[object], size: int) -> list[list[object]]:
@@ -1402,6 +1408,48 @@ class SQLiteMetadataStore:
             params = (limit,)
         rows = conn.execute(query, params).fetchall()
         return [int(row["id"]) for row in rows]
+
+    def iter_pending_snapshot_ids(
+        self, *, batch_size: int = _PENDING_SNAPSHOT_BATCH_SIZE
+    ) -> Iterator[int]:
+        """Yield every pending snapshot id, oldest-first, keyset-paginated in
+        batches of at most `batch_size` (mirrors `_iter_retention_candidates`).
+
+        Unlike `list_pending_snapshot_ids(limit=None)`, this never holds more
+        than one batch's worth of rows in memory at a time, so
+        `InferenceService.start()`'s startup recovery sweep has a bounded
+        memory footprint regardless of how large the pending/processing
+        backlog has grown (#407).
+        """
+        if batch_size < 1:
+            raise ValueError("batch_size must be at least 1")
+
+        conn = self._get_connection()
+        cursor_stored_at: str | None = None
+        cursor_id = 0
+
+        while True:
+            conditions = ["inference_status = 'pending'"]
+            params: list[object] = []
+            if cursor_stored_at is not None:
+                conditions.append("(stored_at > ? OR (stored_at = ? AND id > ?))")
+                params.extend([cursor_stored_at, cursor_stored_at, cursor_id])
+
+            query = "SELECT id, stored_at FROM snapshots WHERE " + " AND ".join(conditions)
+            query += " ORDER BY stored_at ASC, id ASC LIMIT ?"
+            params.append(batch_size)
+            rows = conn.execute(query, tuple(params)).fetchall()
+            if not rows:
+                return
+
+            for row in rows:
+                yield int(row["id"])
+
+            last_row = rows[-1]
+            cursor_stored_at = last_row["stored_at"]
+            cursor_id = last_row["id"]
+            if len(rows) < batch_size:
+                return
 
     def reset_processing_snapshots(self) -> None:
         conn = self._get_connection()
