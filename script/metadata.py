@@ -291,6 +291,30 @@ class SQLiteMetadataStore:
         with conn:
             conn.execute("DROP INDEX IF EXISTS idx_detections_snapshot_score")
 
+        # camera_ids_with_recent_errors() -- run on every "/" dashboard load
+        # (script/routes.py's index()) -- filters/orders by (level,
+        # logged_at) and selects only camera_id. The original 2-column
+        # idx_device_logs_level_logged_at index can answer the WHERE/ORDER BY
+        # from the index itself, but SQLite still had to fetch each matching
+        # row from the table just to read camera_id (a non-covering "SEARCH
+        # ... USING INDEX"). Extending the index with a trailing camera_id
+        # column makes it covering ("SEARCH ... USING COVERING INDEX"), so
+        # the whole query is answered from the index B-tree with no per-row
+        # table lookups. Existing databases keep the old 2-column index
+        # (CREATE INDEX IF NOT EXISTS is a no-op once an index with that name
+        # exists, regardless of its columns), so it must be rebuilt here.
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='index' "
+            "AND name='idx_device_logs_level_logged_at'"
+        ).fetchone()
+        if row is not None and row["sql"] is not None and "camera_id" not in row["sql"]:
+            with conn:
+                conn.execute("DROP INDEX idx_device_logs_level_logged_at")
+                conn.execute(
+                    "CREATE INDEX idx_device_logs_level_logged_at "
+                    "ON device_logs(level, logged_at DESC, camera_id)"
+                )
+
     def _initialize_schema(self, conn: sqlite3.Connection) -> None:
         conn.executescript(
             """
@@ -375,7 +399,7 @@ class SQLiteMetadataStore:
                     ON device_logs(camera_id, logged_at DESC);
 
                 CREATE INDEX IF NOT EXISTS idx_device_logs_level_logged_at
-                    ON device_logs(level, logged_at DESC);
+                    ON device_logs(level, logged_at DESC, camera_id);
 
                 CREATE INDEX IF NOT EXISTS idx_snapshots_inference_pending
                     ON snapshots(stored_at ASC)

@@ -1448,6 +1448,95 @@ def test_migrate_schema_drops_unused_detection_score_index_from_existing_db(tmp_
     assert snapshot.detections[0].label == "person"
 
 
+def test_camera_ids_with_recent_errors_filters_by_level_and_window(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "recent-errors.sqlite3")
+    now = datetime.now(tz=timezone.utc)
+
+    store.record_device_log("cam-error", level="error", message="boom", logged_at=now)
+    store.record_device_log("cam-critical", level="critical", message="fire", logged_at=now)
+    store.record_device_log("cam-info", level="info", message="fine", logged_at=now)
+    store.record_device_log(
+        "cam-stale-error",
+        level="error",
+        message="old boom",
+        logged_at=now - timedelta(hours=2),
+    )
+
+    result = store.camera_ids_with_recent_errors(since=now - timedelta(hours=1))
+
+    assert result == {"cam-error", "cam-critical"}
+
+
+def test_initialize_schema_creates_covering_index_for_recent_error_lookup(tmp_path):
+    """idx_device_logs_level_logged_at must include camera_id as a trailing
+    column so camera_ids_with_recent_errors() -- run on every "/" dashboard
+    load -- is answered entirely from the index (a "COVERING INDEX" query
+    plan) instead of doing an extra table lookup per matching row."""
+    store = SQLiteMetadataStore(tmp_path / "fresh.sqlite3")
+    conn = store._get_connection()
+
+    index_row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='index' "
+        "AND name='idx_device_logs_level_logged_at'"
+    ).fetchone()
+    assert index_row is not None
+    assert "camera_id" in index_row["sql"]
+
+    plan = conn.execute(
+        "EXPLAIN QUERY PLAN "
+        "SELECT DISTINCT camera_id FROM device_logs "
+        "WHERE level IN ('error', 'critical') AND logged_at >= ?",
+        (datetime.now(tz=timezone.utc).isoformat(),),
+    ).fetchall()
+    assert any("COVERING INDEX idx_device_logs_level_logged_at" in row["detail"] for row in plan)
+
+
+def test_migrate_schema_rebuilds_device_logs_level_index_to_be_covering(tmp_path):
+    import sqlite3
+
+    db_path = tmp_path / "legacy-device-logs-index.sqlite3"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE cameras (
+            camera_id TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL,
+            expected_interval_seconds INTEGER NOT NULL,
+            first_seen_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TABLE device_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            camera_id TEXT NOT NULL,
+            level TEXT NOT NULL,
+            message TEXT NOT NULL,
+            logged_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_device_logs_level_logged_at ON device_logs(level, logged_at DESC);
+        INSERT INTO cameras VALUES ('cam-a', 'Cam A', 300, '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00', 1);
+        INSERT INTO device_logs (camera_id, level, message, logged_at)
+            VALUES ('cam-a', 'error', 'boom', '2026-01-01T00:00:00+00:00');
+        """
+    )
+    conn.close()
+
+    store = SQLiteMetadataStore(db_path)
+    db_conn = store._get_connection()
+
+    index_row = db_conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='index' "
+        "AND name='idx_device_logs_level_logged_at'"
+    ).fetchone()
+    assert index_row is not None
+    assert "camera_id" in index_row["sql"]
+
+    result = store.camera_ids_with_recent_errors(
+        since=datetime.fromisoformat("2025-12-31T00:00:00+00:00")
+    )
+    assert result == {"cam-a"}
+
+
 def test_metadata_store_enables_wal_mode(tmp_path):
     store = SQLiteMetadataStore(tmp_path / "wal.sqlite3")
     row = store._get_connection().execute("PRAGMA journal_mode").fetchone()
