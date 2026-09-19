@@ -141,6 +141,12 @@ Julesがタスクを遂行する上で遵守すべき基本方針は以下の通
 - **適用条件**: Content-Lengthを信用できないupload endpointで、body読込前のメモリ上限をルートごとに分ける場合。Content-Lengthなしのstreaming入力にこの制限を適用するには、WSGIサーバーが `wsgi.input_terminated` を設定する構成であることも確認する。
 - **例**: `request.max_content_length = app.config["SNAPSHOT_MAX_CONTENT_LENGTH"] + 1` と `len(data) > app.config["SNAPSHOT_MAX_CONTENT_LENGTH"]` の組み合わせ。
 
+### Blocking native calls must stay off the gevent request greenlet (追記日: 2026-09-16)
+- **概要**: この Flask アプリは gevent worker (`gunicorn -k gevent`) 上で動作するため、route ハンドラは greenlet 上で実行され、gevent-patched な I/O 以外では他の greenlet に処理を譲らない。Pillow の decode/resize/encode、TFLite/numpy の `invoke()`、大きなディレクトリツリーへの `shutil.rmtree()` のような CPU-bound なネイティブ呼び出しを route 内で直接行うと、その呼び出しの間 worker 上の他の全 greenlet（upload、dashboard polling、`/healthz` など）が停止する。
+- **詳細**: この問題は画像処理だけでも TFLite 推論（#244/#259）とサムネイル生成（#391/#397）の2回発生しており、いずれも `gevent.threadpool.ThreadPool` （`script/routes.py` の `_thumbnail_pool()` / `script/inference.py` の `InferenceService._detect_pool`）へオフロードすることで解決した。#398 の audit で `script/routes.py` / `script/detector.py` を確認した結果、同等の重さのブロッキング呼び出しは他に見つかっていない（`_validate_jpeg_image()` の `Image.open()` は JPEG ヘッダーのみを解析して寸法を読む軽量処理で、full decode/resize/encode とは異なり許容範囲と判断）。
+- **適用条件**: 新しい route やヘルパーで CPU-bound なネイティブ処理（画像処理に限らない）を追加する場合、最初から専用の小さな `ThreadPool` 経由でオフロードする設計をデフォルトにする。追加後に気づいて perf fix を追う形は避ける。
+- **例**: `script/routes.py` の `server = Blueprint(...)` 直後のコメント、`_thumbnail_pool().apply(_build_thumbnail_jpeg, (path,))`、`InferenceService._detect_pool.apply(self.detector.detect, (image_bytes,))`。
+
 ### Per-camera object tracking (追記日: 2026-08-09)
 - **概要**: Detection後段の軽量IoU trackingは、`ESP32CAM_TRACKING_ENABLED=true` のときだけ有効化し、カメラ単位のプロセス内状態として保持する。
 - **詳細**: `track_id` は Detection/SQLite/API/Webhook に nullable で追加。既存SQLiteには起動時に `ALTER TABLE detections ADD COLUMN track_id INTEGER` を行う。既定値はIoU `0.3`、欠落2フレーム、cameraあたり50 track、500 camera state。track stateは再起動時に安全にリセットされる。

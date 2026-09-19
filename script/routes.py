@@ -69,6 +69,23 @@ def _upload_rate_limit_key() -> str:
 server = Blueprint("server", __name__)
 limiter = Limiter(key_func=_upload_rate_limit_key, default_limits=[])
 
+# House rule (#398): this app runs under gevent (see script/app.py's
+# gunicorn `-k gevent` worker), so a route body executes on a greenlet that
+# only yields at gevent-patched I/O points. Any route/helper that does
+# CPU-bound native work -- Pillow decode/resize/encode, a TFLite/numpy
+# `invoke()`, `shutil.rmtree()` over a large tree, etc. -- blocks that
+# native call's whole duration without yielding, freezing *every* other
+# greenlet on the worker (uploads, dashboard polling, `/healthz`) for as
+# long as it runs. This has already bitten this codebase twice for image
+# processing alone: TFLite inference (#244/#259) and thumbnail generation
+# (#391/#397), both fixed by moving the blocking call onto a small
+# `gevent.threadpool.ThreadPool` (see `_thumbnail_pool()` below and
+# `InferenceService._detect_pool` in script/inference.py) instead of
+# running it inline on the request greenlet. New routes/helpers with this
+# shape should default to the same ThreadPool-offload pattern from the
+# start rather than needing a follow-up perf fix once it's noticed in
+# production.
+
 _mjpeg_stream_count = 0
 _mjpeg_stream_lock = threading.Lock()
 
