@@ -5,6 +5,7 @@ import io
 import json
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -368,6 +369,51 @@ def test_delete_camera_files_rejects_path_traversal(tmp_path):
 
     with pytest.raises(ValueError):
         storage.delete_camera_files("../secret")
+
+
+def test_delete_image_by_relative_path_skips_rmdir_when_siblings_remain(tmp_path, monkeypatch):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+    captured_at = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    first = storage.save_image(
+        b"\xff\xd8jpeg-1", "image/jpeg", device_id="cam-multi", captured_at=captured_at
+    )
+    storage.save_image(
+        b"\xff\xd8jpeg-2", "image/jpeg", device_id="cam-multi", captured_at=captured_at
+    )
+
+    rmdir_calls: list[Path] = []
+    original_rmdir = Path.rmdir
+
+    def _tracking_rmdir(self):
+        rmdir_calls.append(self)
+        return original_rmdir(self)
+
+    monkeypatch.setattr(Path, "rmdir", _tracking_rmdir)
+
+    storage.delete_image_by_relative_path(first.relative_path)
+
+    # The camera's images directory still holds the second image, so the
+    # empty-parent climb must not attempt rmdir() on it at all (#412).
+    assert rmdir_calls == []
+    image_dir = tmp_path / "uploads" / "cam-multi" / "images"
+    assert image_dir.exists()
+    assert len(list(image_dir.glob("*.jpg"))) == 1
+
+
+def test_delete_image_by_relative_path_removes_empty_camera_directory(tmp_path):
+    storage = LocalFilesystemStorage(tmp_path / "uploads")
+    captured_at = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    only_image = storage.save_image(
+        b"\xff\xd8jpeg-1", "image/jpeg", device_id="cam-solo", captured_at=captured_at
+    )
+    camera_dir = tmp_path / "uploads" / "cam-solo"
+    assert camera_dir.exists()
+
+    storage.delete_image_by_relative_path(only_image.relative_path)
+
+    # No siblings left, so the now-empty images/ dir and its parent camera
+    # dir are still cleaned up.
+    assert not camera_dir.exists()
 
 
 def test_save_video_persists_mp4_in_camera_video_directory_with_sidecar(tmp_path):

@@ -151,6 +151,15 @@ class LocalFilesystemStorage:
     def _cleanup_empty_parents(self, path: Path) -> None:
         current = path.parent
         while current != self.upload_dir.parent and current != self.upload_dir:
+            # A retention sweep deletes many files from the same active
+            # camera directory in a row; on those calls `current` almost
+            # always still holds other files, so `rmdir()` would just fail
+            # with ENOTEMPTY. A cheap early-exit scan (stopping at the
+            # first entry found) avoids paying for that mutating syscall
+            # attempt on every single-file delete (#412).
+            with os.scandir(current) as entries:
+                if next(entries, None) is not None:
+                    break
             try:
                 current.rmdir()
             except OSError:
