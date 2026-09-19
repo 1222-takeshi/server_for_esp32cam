@@ -210,6 +210,21 @@ WantedBy=default.target
 > under sustained load (more cameras than the single detect-at-a-time
 > throughput can keep up with), that's a backpressure problem, not an
 > event-loop-blocking one — see #376.
+>
+> **Multiple workers repeat the startup storage sync once per worker unless
+> you pass `--preload`.** `create_app()` (`script/app.py`) walks the upload
+> directory once at boot to import any pre-existing files into the SQLite
+> index. Since #383, this only `stat()`s/reads the JSON sidecar for files
+> that are genuinely new (a cheap filename-only walk decides that first),
+> so it is not the O(all-time image count) cost it once was, but the
+> directory walk itself still runs on every worker process — the systemd
+> unit above uses `-w 1`, so it only ever runs once regardless. If you scale
+> past one worker (`-w N`), pass gunicorn's `--preload` flag so the app is
+> imported once in the master process before forking workers, instead of
+> once per worker; `script/server.py` already defers starting the
+> retention scheduler to each worker when it detects `--preload`
+> (`gunicorn_preload_requested()` in `script/config.py`), so this is safe
+> to combine with a multi-worker deployment (#345).
 
 Start it:
 

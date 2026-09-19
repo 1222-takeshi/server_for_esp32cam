@@ -258,7 +258,10 @@ def create_app(test_config: dict | None = None) -> Flask:
     # Cheap filename-only walk first, then only stat()/hydrate the files
     # that are genuinely new -- avoids stat()-ing every on-disk file on
     # every boot when most of them are already indexed from a prior run
-    # (#383).
+    # (#383). The filename-only walk itself still runs once per worker
+    # process; deployments scaling past one gunicorn worker should pass
+    # `--preload` so it runs once in the master process instead (#345,
+    # see docs/deployment.md).
     image_names = storage.list_image_names()
     new_filenames = metadata_store.filter_new_filenames([name for name, _ in image_names])
     new_relative_paths = [
