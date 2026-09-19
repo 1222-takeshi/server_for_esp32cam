@@ -41,6 +41,9 @@ class FakeMetadataStore:
     def list_pending_snapshot_ids(self, limit: int | None = None) -> list[int]:
         return []
 
+    def iter_pending_snapshot_ids(self, *, batch_size: int = 500):
+        return iter(())
+
     def mark_snapshot_processing(self, snapshot_id: int) -> None:
         self.processing_calls.append(snapshot_id)
 

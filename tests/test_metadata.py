@@ -765,6 +765,67 @@ def test_list_pending_snapshot_ids_respects_explicit_limit(tmp_path):
     assert len(pending) == 2
 
 
+def test_iter_pending_snapshot_ids_pages_across_batches(tmp_path):
+    # Regression for #407: the startup recovery sweep must not need a single
+    # unbounded fetchall() to see every pending snapshot -- a small
+    # batch_size forces multiple SELECTs, and every pending id must still
+    # come back exactly once, oldest-first, with none skipped or repeated.
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    ids = []
+    for i in range(11):
+        snapshot = store.record_snapshot(
+            _stored_image(
+                name=f"img-{i}.jpg",
+                relative_path=f"cam-a/images/img-{i}.jpg",
+                camera_id="cam-a",
+                captured_at=stored_at + timedelta(seconds=i),
+                stored_at=stored_at + timedelta(seconds=i),
+            )
+        )
+        ids.append(snapshot.id)
+
+    pending = list(store.iter_pending_snapshot_ids(batch_size=3))
+
+    assert pending == ids
+    assert len(pending) == len(set(pending))
+
+
+def test_iter_pending_snapshot_ids_excludes_non_pending(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+    stored_at = datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc)
+    pending_snapshot = store.record_snapshot(
+        _stored_image(
+            name="pending.jpg",
+            relative_path="cam-a/images/pending.jpg",
+            camera_id="cam-a",
+            captured_at=stored_at,
+            stored_at=stored_at,
+        )
+    )
+    done_snapshot = store.record_snapshot(
+        _stored_image(
+            name="done.jpg",
+            relative_path="cam-a/images/done.jpg",
+            camera_id="cam-a",
+            captured_at=stored_at + timedelta(seconds=1),
+            stored_at=stored_at + timedelta(seconds=1),
+        )
+    )
+    store.mark_snapshot_result(done_snapshot.id, detections=[])
+
+    pending = list(store.iter_pending_snapshot_ids(batch_size=2))
+
+    assert pending == [pending_snapshot.id]
+
+
+def test_iter_pending_snapshot_ids_rejects_non_positive_batch_size(tmp_path):
+    store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
+
+    with pytest.raises(ValueError):
+        list(store.iter_pending_snapshot_ids(batch_size=0))
+
+
 def test_record_device_log_stores_log(tmp_path):
     store = SQLiteMetadataStore(tmp_path / "state.sqlite3")
     store.record_heartbeat("cam-a")
