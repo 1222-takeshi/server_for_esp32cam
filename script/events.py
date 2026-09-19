@@ -71,6 +71,9 @@ class SnapshotEventPublisher:
     def publish_snapshot_created(
         self, snapshot: SnapshotRecord, *, image_bytes: bytes | None = None
     ) -> None:
+        with self._lock:
+            if not self._subscriptions:
+                return
         event = snapshot_created_event(snapshot)
         event.raw_image = image_bytes
         self.publish(event)

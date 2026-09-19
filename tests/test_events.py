@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import script.events as events_module
 from script.events import SnapshotEventPublisher
 from script.metadata import SnapshotRecord
 
@@ -86,6 +87,43 @@ def test_unsubscribe_stops_future_events():
     publisher.publish_snapshot_created(_snapshot())
 
     assert received == []
+
+
+def test_publish_snapshot_created_skips_event_construction_with_no_subscribers(monkeypatch):
+    publisher = SnapshotEventPublisher()
+    calls = 0
+    original = events_module.snapshot_created_event
+
+    def counting_snapshot_created_event(snapshot):
+        nonlocal calls
+        calls += 1
+        return original(snapshot)
+
+    monkeypatch.setattr(events_module, "snapshot_created_event", counting_snapshot_created_event)
+
+    publisher.publish_snapshot_created(_snapshot())
+
+    assert calls == 0
+
+
+def test_publish_snapshot_created_still_builds_event_once_subscribed(monkeypatch):
+    publisher = SnapshotEventPublisher()
+    received: list[dict[str, object]] = []
+    calls = 0
+    original = events_module.snapshot_created_event
+
+    def counting_snapshot_created_event(snapshot):
+        nonlocal calls
+        calls += 1
+        return original(snapshot)
+
+    monkeypatch.setattr(events_module, "snapshot_created_event", counting_snapshot_created_event)
+    publisher.subscribe(received.append)
+
+    publisher.publish_snapshot_created(_snapshot())
+
+    assert calls == 1
+    assert len(received) == 1
 
 
 def test_publish_removes_failing_subscriber_and_continues_delivery():
