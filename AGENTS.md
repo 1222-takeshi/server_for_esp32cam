@@ -152,3 +152,9 @@ Julesがタスクを遂行する上で遵守すべき基本方針は以下の通
 - **詳細**: `track_id` は Detection/SQLite/API/Webhook に nullable で追加。既存SQLiteには起動時に `ALTER TABLE detections ADD COLUMN track_id INTEGER` を行う。既定値はIoU `0.3`、欠落2フレーム、cameraあたり50 track、500 camera state。track stateは再起動時に安全にリセットされる。
 - **適用条件**: 連続snapshotで同一物体を識別したい場合。Raspberry Piではtracking上限を増やしすぎず、camera数・track数・欠落許容を監視する。
 - **例**: `ESP32CAM_TRACKING_ENABLED=true`、`ESP32CAM_TRACKING_IOU_THRESHOLD=0.3`、`ESP32CAM_TRACKING_MAX_MISSED_FRAMES=2`。
+
+### Multi-worker deployments should pass gunicorn `--preload` (追記日: 2026-09-19)
+- **概要**: `create_app()`（`script/app.py`）は起動時に upload ディレクトリを1回walkして SQLite index を同期する。`#383` により、既にindex済みのファイルは `stat()` もJSON sidecar読み込みもスキップされる（filename-only walk → `filter_new_filenames()` で新規ファイルだけ `stat_images()`/`hydrate_metadata` する)ため、全画像を毎回読み直すコストは既に解消済み。ただしfilename-only walk自体はworker processごとに実行される。
+- **詳細**: 同梱の systemd unit / Dockerfile はいずれも `-w 1`（single worker）なので、このコストは1回しか発生しない。`-w N` (N>1) で複数workerにスケールする場合は、gunicornの `--preload` を付けてmaster process側で一度だけappをimportする設計にする。`script/server.py` は `gunicorn_preload_requested()`（`script/config.py`）で `--preload` を検知し、retention schedulerの起動をworker側に遅延させる既存の仕組みがあるため、`--preload` と組み合わせても安全。
+- **適用条件**: `-w` を1より大きくする、またはGunicornを複数worker構成でデプロイする場合。
+- **例**: `docs/deployment.md` の `--preload` に関する注記、`gunicorn -k gevent -w 4 --preload -b 0.0.0.0:${PORT} script.server:app`。
