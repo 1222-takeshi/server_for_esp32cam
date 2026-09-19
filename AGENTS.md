@@ -152,3 +152,9 @@ Julesがタスクを遂行する上で遵守すべき基本方針は以下の通
 - **詳細**: `track_id` は Detection/SQLite/API/Webhook に nullable で追加。既存SQLiteには起動時に `ALTER TABLE detections ADD COLUMN track_id INTEGER` を行う。既定値はIoU `0.3`、欠落2フレーム、cameraあたり50 track、500 camera state。track stateは再起動時に安全にリセットされる。
 - **適用条件**: 連続snapshotで同一物体を識別したい場合。Raspberry Piではtracking上限を増やしすぎず、camera数・track数・欠落許容を監視する。
 - **例**: `ESP32CAM_TRACKING_ENABLED=true`、`ESP32CAM_TRACKING_IOU_THRESHOLD=0.3`、`ESP32CAM_TRACKING_MAX_MISSED_FRAMES=2`。
+
+### Self-hosted CI fallback (追記日: 2026-08-13)
+- **概要**: GitHub-hosted CIが支払い制限で起動できない場合に限り、repository-scoped self-hosted runnerへ同一コミットの検証を切り替える。
+- **詳細**: `.github/workflows/ci-fallback.yml` は `workflow_run` で起動し、失敗ジョブの未実行・runner_id 0・支払い制限annotationを全対象ジョブで確認する。fork、未承認actor、不完全なGitHub API応答、billing以外の失敗はfail-closedでfallbackしない。gate runnerとcandidate runnerを分離し、candidate jobは `contents: read` のみ、checkoutは `persist-credentials: false` とする。
+- **適用条件**: GitHub Actionsのbilling停止に備えてfallbackを有効化する場合。通常のGitHub-hosted CIを優先し、事前に `docs/self-hosted-ci-fallback.md` のRunner登録とBranch protection設定を完了する。
+- **例**: `scripts/github-runner.sh build`、`scripts/github-runner.sh install all`、`scripts/github-runner.sh status all`。
