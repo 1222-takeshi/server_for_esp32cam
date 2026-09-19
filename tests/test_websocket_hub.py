@@ -65,6 +65,16 @@ def test_websocket_hub_sends_snapshot_events_as_json_to_connected_socket():
     assert "private-frame" not in ws.messages[0]
 
 
+def test_websocket_hub_broadcast_is_noop_with_no_connections():
+    publisher = SnapshotEventPublisher()
+    hub = WebSocketHub(publisher)
+
+    publisher.publish_snapshot_created(_snapshot(), image_bytes=b"private-frame")
+
+    assert hub._pending_events.qsize() == 0
+    assert hub._worker is None
+
+
 def test_websocket_hub_filters_events_by_camera_id():
     publisher = SnapshotEventPublisher()
     hub = WebSocketHub(publisher)

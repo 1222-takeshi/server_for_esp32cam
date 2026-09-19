@@ -56,6 +56,10 @@ class WebSocketHub:
 
     def _broadcast(self, event: SnapshotEvent) -> None:
         """Queue an event for delivery without blocking the device upload path."""
+        with self._lock:
+            if not self._connections:
+                return
+
         json_str = json.dumps(event, separators=(",", ":"))
         camera_id = event.get("camera_id")
 
