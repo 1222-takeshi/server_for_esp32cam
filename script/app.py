@@ -6,7 +6,7 @@ import threading
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from flask import Flask, g, jsonify, request
+from flask import Flask, current_app, g, jsonify, request
 from gevent.threadpool import ThreadPool
 from werkzeug.exceptions import RequestEntityTooLarge
 
@@ -58,6 +58,33 @@ _MIN_COMPRESS_BYTES = 500
 # the number of distinct files under static/, not by request volume.
 _compressed_static_cache: dict[str, tuple[str, bytes]] = {}
 _compressed_static_cache_lock = threading.Lock()
+
+# gzip.compress() is a native zlib call that -- like Pillow's decode/
+# resize/encode (#391/#397) and TFLite's invoke() (#244/#259) -- does not
+# yield to gevent, so running it inline on the request greenlet blocks
+# every other greenlet (uploads, dashboard polling, /healthz) on this
+# worker for its whole duration (see #420). Below this size, compression
+# is fast enough (sub-millisecond for typical dashboard HTML/JSON
+# responses) that dispatching it through a ThreadPool would only add
+# thread-handoff overhead for no real benefit -- only payloads at or above
+# this threshold (an uncached vendored static asset, or an admin
+# CSV/JSON export of up to _EXPORT_ROW_LIMIT rows) are routed through
+# `compression_pool` (see create_app()) instead.
+_COMPRESS_OFFLOAD_THRESHOLD_BYTES = 64 * 1024
+
+
+def _gzip_compress(data: bytes) -> bytes:
+    return gzip.compress(data, compresslevel=6)
+
+
+def _compress_bytes(data: bytes) -> bytes:
+    """gzip-compress `data`, offloading large payloads off the request
+    greenlet (see `_COMPRESS_OFFLOAD_THRESHOLD_BYTES` above)."""
+    if len(data) >= _COMPRESS_OFFLOAD_THRESHOLD_BYTES:
+        pool = current_app.extensions.get("compression_pool")
+        if pool is not None:
+            return pool.apply(_gzip_compress, (data,))
+    return _gzip_compress(data)
 
 
 def _maybe_compress_response(response):
@@ -113,7 +140,7 @@ def _maybe_compress_response(response):
     if len(data) < _MIN_COMPRESS_BYTES:
         return response
 
-    compressed = gzip.compress(data, compresslevel=6)
+    compressed = _compress_bytes(data)
     if is_static and etag:
         with _compressed_static_cache_lock:
             _compressed_static_cache[request.path] = (etag, compressed)
@@ -370,6 +397,13 @@ def create_app(test_config: dict | None = None) -> Flask:
     # action, not a concurrent hot path like thumbnails.
     storage_delete_pool = ThreadPool(1)
     atexit.register(storage_delete_pool.kill)
+    # Offloads gzip.compress() for large compressible responses (see
+    # `_compress_bytes()`/`_COMPRESS_OFFLOAD_THRESHOLD_BYTES` above, #420) --
+    # same class of issue and same one-worker-is-enough rationale as
+    # storage_delete_pool above: this only fires for an uncached vendored
+    # static asset or an admin export, not a per-request hot path.
+    compression_pool = ThreadPool(1)
+    atexit.register(compression_pool.kill)
 
     app.extensions["storage"] = storage
     app.extensions["metadata_store"] = metadata_store
@@ -378,6 +412,7 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.extensions["thumbnail_pool"] = thumbnail_pool
     app.extensions["thumbnail_cache"] = thumbnail_cache
     app.extensions["storage_delete_pool"] = storage_delete_pool
+    app.extensions["compression_pool"] = compression_pool
     app.extensions["object_tracker"] = object_tracker
     app.extensions["snapshot_event_publisher"] = snapshot_event_publisher
     app.extensions["storage_retention_policy"] = storage_retention_policy

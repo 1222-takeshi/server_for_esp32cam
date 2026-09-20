@@ -2355,3 +2355,88 @@ def test_static_range_request_is_not_gzip_compressed(client):
     assert "Content-Encoding" not in response.headers
     assert response.headers.get("Content-Range", "").startswith("bytes 0-99/")
     assert len(response.data) == 100
+
+
+class _FakeCompressionPool:
+    """Records apply() calls while still running the callable synchronously
+    (so behavior stays correct), matching FakeDetectPool's rationale in
+    tests/test_inference.py: gevent's real ThreadPool doesn't allow
+    monkeypatching its methods (they're read-only attributes on the
+    underlying type), so a fake substitute is used instead of patching one
+    in place."""
+
+    def __init__(self) -> None:
+        self.apply_calls: list[tuple[object, tuple]] = []
+
+    def apply(self, func, args=()):
+        self.apply_calls.append((func, args))
+        return func(*args)
+
+
+def test_large_response_gzip_compression_is_offloaded_to_compression_pool(client, app):
+    # Regression test for #420: gzip.compress() is a blocking native call
+    # that doesn't yield to gevent, so compressing a large response (here,
+    # the ~1.5MB vendored swagger-ui-bundle.js) inline on the request
+    # greenlet would stall every other greenlet (uploads, dashboard,
+    # /healthz) for the whole call. Above _COMPRESS_OFFLOAD_THRESHOLD_BYTES,
+    # _compress_bytes() must dispatch through app.extensions["compression_pool"]
+    # instead of calling gzip.compress() directly.
+    from script import app as app_module
+
+    app_module._compressed_static_cache.pop(
+        "/static/vendor/swagger-ui/swagger-ui-bundle.js", None
+    )
+    fake_pool = _FakeCompressionPool()
+    original_pool = app.extensions["compression_pool"]
+    app.extensions["compression_pool"] = fake_pool
+    try:
+        response = client.get(
+            "/static/vendor/swagger-ui/swagger-ui-bundle.js",
+            headers={"Accept-Encoding": "gzip"},
+        )
+    finally:
+        app.extensions["compression_pool"] = original_pool
+
+    assert response.status_code == 200
+    assert response.headers.get("Content-Encoding") == "gzip"
+    assert len(fake_pool.apply_calls) == 1
+    assert fake_pool.apply_calls[0][0] is app_module._gzip_compress
+    decompressed = gzip.decompress(response.data)
+    assert b"SwaggerUIBundle" in decompressed
+
+
+def test_small_response_gzip_compression_is_not_offloaded_to_compression_pool(client, app):
+    # The openapi.yaml spec (~45KB) is well under
+    # _COMPRESS_OFFLOAD_THRESHOLD_BYTES (64KB) -- compressing it inline is
+    # fast enough that dispatching through the ThreadPool would only add
+    # thread-handoff overhead for no real benefit.
+    fake_pool = _FakeCompressionPool()
+    original_pool = app.extensions["compression_pool"]
+    app.extensions["compression_pool"] = fake_pool
+    try:
+        response = client.get("/api/openapi.yaml", headers={"Accept-Encoding": "gzip"})
+    finally:
+        app.extensions["compression_pool"] = original_pool
+
+    assert response.status_code == 200
+    assert response.headers.get("Content-Encoding") == "gzip"
+    assert len(fake_pool.apply_calls) == 0
+
+
+def test_compress_bytes_offload_threshold_boundary(app):
+    from script.app import _COMPRESS_OFFLOAD_THRESHOLD_BYTES, _compress_bytes
+
+    fake_pool = _FakeCompressionPool()
+    original_pool = app.extensions["compression_pool"]
+    app.extensions["compression_pool"] = fake_pool
+    try:
+        with app.app_context():
+            below = _compress_bytes(b"x" * (_COMPRESS_OFFLOAD_THRESHOLD_BYTES - 1))
+            assert len(fake_pool.apply_calls) == 0
+            assert gzip.decompress(below) == b"x" * (_COMPRESS_OFFLOAD_THRESHOLD_BYTES - 1)
+
+            at_threshold = _compress_bytes(b"y" * _COMPRESS_OFFLOAD_THRESHOLD_BYTES)
+            assert len(fake_pool.apply_calls) == 1
+            assert gzip.decompress(at_threshold) == b"y" * _COMPRESS_OFFLOAD_THRESHOLD_BYTES
+    finally:
+        app.extensions["compression_pool"] = original_pool
