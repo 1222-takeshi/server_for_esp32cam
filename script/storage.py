@@ -195,7 +195,11 @@ class LocalFilesystemStorage:
 
     def _read_metadata(self, image_path: Path) -> tuple[str | None, datetime | None]:
         metadata_path = self._metadata_path(image_path)
-        if not metadata_path.exists() or not metadata_path.is_file():
+        # is_file() already returns False (instead of raising) when the path
+        # doesn't exist, so it alone answers "exists and is a regular file"
+        # with a single stat() syscall -- the preceding exists() check was a
+        # second, redundant stat() on every call (see #422).
+        if not metadata_path.is_file():
             return None, None
 
         try:
@@ -220,7 +224,9 @@ class LocalFilesystemStorage:
         path = (self.upload_dir / normalized).resolve()
         if self.upload_dir != path and self.upload_dir not in path.parents:
             raise FileNotFoundError(relative_path)
-        if not path.exists() or not path.is_file():
+        # See _read_metadata() above: is_file() alone (one stat()) already
+        # covers "exists and is a regular file" (#422).
+        if not path.is_file():
             raise FileNotFoundError(relative_path)
         if path.suffix.lower() not in {".jpg", ".jpeg"}:
             raise FileNotFoundError(relative_path)
@@ -447,7 +453,9 @@ class LocalFilesystemStorage:
         path = (self.upload_dir / normalized).resolve()
         if self.upload_dir != path and self.upload_dir not in path.parents:
             raise FileNotFoundError(relative_path)
-        if not path.exists() or not path.is_file():
+        # See _read_metadata() above: is_file() alone (one stat()) already
+        # covers "exists and is a regular file" (#422).
+        if not path.is_file():
             raise FileNotFoundError(relative_path)
         if path.suffix.lower() != ".mp4":
             raise FileNotFoundError(relative_path)
@@ -501,7 +509,9 @@ class LocalFilesystemStorage:
         camera_dir = self._camera_image_dir(camera_id).parent.resolve()
         if camera_dir == self.upload_dir or self.upload_dir not in camera_dir.parents:
             raise ValueError(f"camera_id resolves outside upload_dir: {camera_id!r}")
-        if camera_dir.exists() and camera_dir.is_dir():
+        # is_dir() alone (one stat()) already covers "exists and is a
+        # directory" (#422).
+        if camera_dir.is_dir():
             shutil.rmtree(camera_dir)
 
     def _delete_image(self, image: StoredImage) -> int:
