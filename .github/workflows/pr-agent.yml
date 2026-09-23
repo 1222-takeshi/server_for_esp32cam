@@ -20,7 +20,17 @@ jobs:
     steps:
       - name: PR Agent action step
         id: pragent
-        uses: qodo-ai/pr-agent@main
+        # qodo-ai/pr-agent v0.46.0. Was previously `@main`, a floating branch
+        # ref: every run silently pulled whatever the latest commit on
+        # qodo-ai/pr-agent's default branch happened to be at trigger time,
+        # so a breaking change or a compromised push to that upstream branch
+        # would affect this repo's PRs immediately, with no diff in this
+        # repo's own history to review or roll back. Pinning to a released
+        # tag's commit SHA (as the other third-party actions in this repo
+        # already do -- see dorny/paths-filter@v3 and
+        # arduino/compile-sketches's pinned SHA below) makes upgrades an
+        # explicit, reviewable change instead of an invisible one.
+        uses: qodo-ai/pr-agent@1d01f24f455bb879c1d9c557ad7de3d72dcc7975
         env:
           CONFIG.MODEL: "gemini/gemini-2.5-flash-preview-05-20"
           GOOGLE_AI_STUDIO.GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
