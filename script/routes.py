@@ -1564,7 +1564,12 @@ def api_log_error():
         return jsonify({"message": f"level must be one of {sorted(ALLOWED_LOG_LEVELS)}"}), 400
 
     log = _metadata_store().record_device_log(device_id, level=level, message=message)
-    current_app.logger.info("Device log from %s [%s]: %.200s", device_id, level, message)
+    # message is device-controlled and, unlike device_id/level above, isn't
+    # restricted to a safe character set -- sanitize it the same way other
+    # untrusted values are before logging (see _sanitize_log_value) so a
+    # crafted message can't inject CRLF-separated fake log lines into the
+    # server's own application log.
+    current_app.logger.info("Device log from %s [%s]: %s", device_id, level, _sanitize_log_value(message))
     return jsonify(_serialize_device_log(log)), 201
 
 
