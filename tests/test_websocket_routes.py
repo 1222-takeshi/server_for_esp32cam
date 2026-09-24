@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from threading import Thread
 
 import pytest
@@ -36,10 +36,8 @@ def _receive_json_message(
             websocket.send(send)
         return json.loads(websocket.receive())
     finally:
-        try:
+        with suppress(ConnectionClosed, OSError):
             websocket.close()
-        except (ConnectionClosed, OSError):
-            pass
 
 
 def _rule_paths(app) -> set[str]:

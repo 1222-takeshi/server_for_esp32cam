@@ -48,5 +48,12 @@ pythonpath = ["."]
 line-length = 100
 target-version = "py310"
 
+[tool.ruff.lint]
+# Defaults (E4, E7, E9, F) plus perflint (PERF), bugbear (B), comprehension
+# anti-patterns (C4) and simplify (SIM) -- these catch the class of Python-level
+# performance/correctness anti-pattern this repo has historically found and
+# fixed by hand across many individual review PRs. See #426.
+select = ["E4", "E7", "E9", "F", "PERF", "B", "C4", "SIM"]
+
 [tool.setuptools.packages.find]
 include = ["script*"]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import contextlib
 import csv
 import json
 import shutil
@@ -885,17 +886,13 @@ def mjpeg_stream(camera_id: str):
                 data = storage.read_image_by_relative_path(relative_path)
             except FileNotFoundError:
                 return
-        try:
+        with contextlib.suppress(Empty):
             frame_queue.get_nowait()
-        except Empty:
-            pass
-        try:
+        # A concurrent producer may refill the (maxsize=1) queue between the
+        # drop-stale get_nowait() above and this put -- fine to drop this
+        # frame, the next event will retry.
+        with contextlib.suppress(Full):
             frame_queue.put_nowait(data)
-        except Full:
-            # A concurrent producer refilled the (maxsize=1) queue between
-            # the drop-stale get_nowait() above and this put -- fine to
-            # drop this frame, the next event will retry.
-            pass
 
     unsubscribe = None
     try:
@@ -920,10 +917,8 @@ def mjpeg_stream(camera_id: str):
         )
         initial_frame: bytes | None = None
         if latest:
-            try:
+            with contextlib.suppress(FileNotFoundError):
                 initial_frame = storage.read_image_by_relative_path(latest[0].relative_path)
-            except FileNotFoundError:
-                pass
     except Exception:
         # Setup failed before the streaming Response (and its generator's
         # `finally` block) exists to release the slot — release it here so a

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
 from collections.abc import Callable, Iterable
@@ -89,17 +90,15 @@ def _run_retention_scan(
             # age-expired nor needed for the byte quota, no later row can be
             # age-expired and the quota is already satisfied.
             break
-        try:
+        # The index says this candidate should be evicted, but the file may
+        # already be gone from disk (e.g. removed out-of-band, or left
+        # behind by a prior partial failure). Nothing to delete in that
+        # case, but the SQLite row is now stale and must still be purged
+        # below -- otherwise this same missing-file candidate gets silently
+        # re-evaluated (and silently skipped) on every future scan forever,
+        # permanently drifting the index from disk reality.
+        with contextlib.suppress(FileNotFoundError):
             deleted_bytes += delete_file(relative_path)
-        except FileNotFoundError:
-            # The index says this candidate should be evicted, but the file
-            # is already gone from disk (e.g. removed out-of-band, or left
-            # behind by a prior partial failure). Nothing to delete, but the
-            # SQLite row is now stale and must still be purged below --
-            # otherwise this same missing-file candidate gets silently
-            # re-evaluated (and silently skipped) on every future scan
-            # forever, permanently drifting the index from disk reality.
-            pass
         deleted.append(relative_path)
         total_bytes -= size
 

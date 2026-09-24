@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import os
 import re
 import sys
@@ -72,10 +73,9 @@ async def _pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> N
     except (ConnectionResetError, BrokenPipeError, asyncio.CancelledError):
         pass
     finally:
-        try:
+        # best-effort close of an already-erroring stream
+        with contextlib.suppress(Exception):  # noqa: BLE001, S110
             writer.close()
-        except Exception:  # noqa: BLE001, S110 - best-effort close of an already-erroring stream
-            pass
 
 
 async def _forward_first_request(
