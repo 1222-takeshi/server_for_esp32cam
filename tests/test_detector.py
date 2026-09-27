@@ -267,7 +267,7 @@ def test_prepare_input_preserves_exif_orientation_with_draft(monkeypatch):
     )
 
     def pixel_distance(left, right):
-        return max(abs(a - b) for a, b in zip(left, right))
+        return max(abs(a - b) for a, b in zip(left, right, strict=True))
 
     assert orientation_calls == [6]
     assert prepared.shape == (1, 300, 300, 3)

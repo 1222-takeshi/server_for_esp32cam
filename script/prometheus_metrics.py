@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import time
 
 from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
@@ -74,7 +75,5 @@ class AppMetrics:
         independently best-effort.
         """
         for metric in (self.upload_total, self.camera_last_seen_timestamp):
-            try:
+            with contextlib.suppress(KeyError):
                 metric.remove(camera_id)
-            except KeyError:
-                pass

@@ -185,7 +185,7 @@ def test_storage_read_video_path_traversal_raises(tmp_path):
 
     try:
         storage.read_video_path_by_relative_path("../../etc/passwd")
-        assert False, "should raise FileNotFoundError"
+        raise AssertionError("should raise FileNotFoundError")
     except FileNotFoundError:
         pass
 
@@ -196,6 +196,6 @@ def test_storage_read_video_absolute_path_raises(tmp_path):
 
     try:
         storage.read_video_path_by_relative_path("/etc/passwd")
-        assert False, "should raise FileNotFoundError"
+        raise AssertionError("should raise FileNotFoundError")
     except FileNotFoundError:
         pass

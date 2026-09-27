@@ -260,10 +260,9 @@ class TFLiteCpuDetector:
         boxes = self._normalize_box_rows(output_map["boxes"])
         classes = self._normalize_values(output_map["classes"])
         scores = self._normalize_values(output_map["scores"])
-        if "count" in output_map:
-            count = self._normalize_count(output_map["count"])
-        else:
-            count = len(scores)
+        count = (
+            self._normalize_count(output_map["count"]) if "count" in output_map else len(scores)
+        )
 
         detections: list[Detection] = []
         for index in range(min(count, len(scores))):
