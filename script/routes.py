@@ -651,7 +651,19 @@ def upload_file():
         return jsonify({"message": "Payload too large"}), 413
 
     if request.mimetype != "image/jpeg":
-        current_app.logger.error("Unsupported content type: %s", request.content_type)
+        # request.content_type is the raw, device-supplied Content-Type header
+        # value and, unlike device_id below, isn't restricted to a safe
+        # character set or bounded length before this point. A raw HTTP
+        # header value can't itself carry an embedded newline (the HTTP
+        # parser rejects that), so this isn't the same CRLF log-injection
+        # primitive #429 fixed for the JSON-body message field, but an
+        # unbounded/unusual header value would still land in the log
+        # verbatim. Route it through the same _sanitize_log_value() helper
+        # used for other untrusted values for consistency and to bound its
+        # length in the log line.
+        current_app.logger.error(
+            "Unsupported content type: %s", _sanitize_log_value(request.content_type)
+        )
         return jsonify({"message": "Unsupported content type"}), 415
 
     jpeg_error = _validate_jpeg_image(request.data)

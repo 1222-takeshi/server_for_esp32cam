@@ -230,6 +230,31 @@ def test_upload_rejects_unsupported_content_type(client):
     assert response.get_json()["message"] == "Unsupported content type"
 
 
+def test_upload_sanitizes_long_content_type_before_logging(client, caplog):
+    overlong_content_type = "image/png" + "a" * 200
+
+    with caplog.at_level(logging.ERROR, logger="script.app"):
+        response = client.post(
+            "/upload",
+            data=b"png",
+            headers={
+                "Content-Type": overlong_content_type,
+                "X-Device-Id": "esp32cam-front-door",
+                "X-Captured-At": "2026-03-11T12:34:56Z",
+            },
+        )
+
+    assert response.status_code == 415
+    log_messages = [r.message for r in caplog.records if "Unsupported content type" in r.message]
+    assert log_messages
+    for log_message in log_messages:
+        # _sanitize_log_value() caps untrusted values at 64 chars before
+        # they reach the log, so the full 209-char header value must not
+        # appear verbatim in the log line.
+        assert overlong_content_type not in log_message
+        assert len(log_message) < len(overlong_content_type)
+
+
 def test_upload_rejects_invalid_jpeg_payload(client):
     response = client.post("/upload", data=b"not-jpeg", headers=UPLOAD_HEADERS)
 
