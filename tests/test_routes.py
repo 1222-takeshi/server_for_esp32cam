@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import logging
 import os
 import uuid
 from datetime import datetime, timezone
@@ -1259,6 +1260,31 @@ def test_log_error_rejects_too_long_message(client):
 
     assert response.status_code == 400
     assert response.get_json()["message"] == "message is too long"
+
+
+def test_log_error_sanitizes_newlines_in_message_before_logging(client, caplog):
+    client.post(
+        "/api/status_update", json={"device_id": "cam-injection"}, content_type="application/json"
+    )
+    malicious_message = "boom\n2026-01-01 00:00:00 ERROR Fake admin login succeeded"
+
+    with caplog.at_level(logging.INFO, logger="script.app"):
+        response = client.post(
+            "/api/log_error",
+            json={"device_id": "cam-injection", "message": malicious_message},
+            content_type="application/json",
+        )
+
+    assert response.status_code == 201
+    # The stored/returned message is untouched -- only the server's own log
+    # line must not contain a raw newline the device could use to forge a
+    # fake log entry.
+    assert response.get_json()["message"] == malicious_message
+    log_messages = [r.message for r in caplog.records if "Device log from cam-injection" in r.message]
+    assert log_messages
+    for log_message in log_messages:
+        assert "\n" not in log_message
+        assert "boom\\n2026-01-01 00:00:00 ERROR Fake admin login succeeded" in log_message
 
 
 def test_log_error_rejects_invalid_level(client):
