@@ -533,7 +533,13 @@ def index():
     camera_total = store.count_cameras()
     if camera_total and offset >= camera_total:
         offset = ((camera_total - 1) // limit) * limit
-    camera_summaries = store.list_camera_summaries(limit=limit, offset=offset)
+    # templates/index.html renders neither latest_snapshot.detections nor
+    # latest_detection_at, so skip both extra per-camera lookups
+    # list_camera_summaries() would otherwise run for this, the single most
+    # frequently reloaded page (see _cached_total_snapshot_count() above).
+    camera_summaries = store.list_camera_summaries(
+        limit=limit, offset=offset, include_detections=False, include_latest_detection_at=False
+    )
     one_hour_ago = datetime.now(tz=timezone.utc) - timedelta(hours=1)
     cameras_with_errors = store.camera_ids_with_recent_errors(since=one_hour_ago)
     return render_template(
@@ -965,7 +971,12 @@ def list_cameras():
     camera_total = store.count_cameras()
     if camera_total and offset >= camera_total:
         offset = ((camera_total - 1) // limit) * limit
-    camera_summaries = store.list_camera_summaries(limit=limit, offset=offset)
+    # templates/cameras.html renders latest_snapshot.detections (a per-card
+    # count) but never latest_detection_at, so only opt out of the latter --
+    # unlike index() above, which skips both.
+    camera_summaries = store.list_camera_summaries(
+        limit=limit, offset=offset, include_latest_detection_at=False
+    )
     return render_template(
         "cameras.html",
         camera_summaries=camera_summaries,
