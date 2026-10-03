@@ -1166,6 +1166,9 @@ def api_delete_camera(camera_id: str):
 
     current_app.logger.info("Camera deleted: camera_id=%s delete_files=%s", camera_id, delete_files)
 
+    # Drop the cached last-seen rows so the next /metrics scrape can't
+    # re-create the gauge label forget_camera() is about to remove.
+    _camera_last_seen_cache.pop(str(current_app.config["DB_PATH"]), None)
     app_metrics = current_app.extensions.get("app_metrics")
     if app_metrics is not None:
         app_metrics.forget_camera(camera_id)
@@ -1601,6 +1604,26 @@ def _cached_disk_usage(path: str):
     return usage
 
 
+_CAMERA_LAST_SEEN_CACHE_SECONDS = 5.0
+_camera_last_seen_cache: dict[str, tuple[float, list]] = {}
+
+
+def _cached_camera_last_seen(store) -> list:
+    """`list_camera_last_seen()` with a short TTL cache, keyed by DB path.
+
+    Mirrors `_cached_disk_usage()`: `/metrics` is scraped on a fixed interval,
+    and last-seen timestamps don't need sub-TTL freshness for a gauge.
+    """
+    key = str(current_app.config["DB_PATH"])
+    now = time.monotonic()
+    cached = _camera_last_seen_cache.get(key)
+    if cached is not None and now - cached[0] < _CAMERA_LAST_SEEN_CACHE_SECONDS:
+        return cached[1]
+    rows = store.list_camera_last_seen()
+    _camera_last_seen_cache[key] = (now, rows)
+    return rows
+
+
 @server.route("/metrics")
 @require_admin_auth
 def metrics():
@@ -1620,7 +1643,7 @@ def metrics():
     if inference_svc is not None:
         app_metrics.inference_queue_length.set(inference_svc.queue_length())
 
-    for camera_id, last_seen_at in _metadata_store().list_camera_last_seen():
+    for camera_id, last_seen_at in _cached_camera_last_seen(_metadata_store()):
         ts = last_seen_at.timestamp() if last_seen_at else 0
         app_metrics.camera_last_seen_timestamp.labels(camera_id=camera_id).set(ts)
 
