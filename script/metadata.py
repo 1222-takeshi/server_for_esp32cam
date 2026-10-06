@@ -1050,8 +1050,32 @@ class SQLiteMetadataStore:
         return int(row["count"])
 
     def list_camera_summaries(
-        self, *, limit: int | None = None, offset: int = 0
+        self,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+        include_detections: bool = True,
+        include_latest_detection_at: bool = True,
     ) -> list[CameraSummary]:
+        """List camera summaries, one latest-snapshot row per camera.
+
+        `include_detections` and `include_latest_detection_at` gate the two
+        extra per-camera lookups below independently, mirroring the
+        `include_detections` flag other listing methods already support
+        (e.g. `get_snapshot()`, `list_recent_snapshots_page()`). Callers that
+        don't render one of these fields should opt out instead of paying for
+        it on every call:
+
+        - `GET /` (`index()` in routes.py) renders neither
+          `latest_snapshot.detections` nor `latest_detection_at` --
+          `templates/index.html` has no reference to either field -- so it
+          passes both flags `False` and skips both extra lookups entirely.
+        - `GET /cameras` (`list_cameras()`) renders `latest_snapshot.
+          detections` (a per-card detection count) but not
+          `latest_detection_at`, so it only opts out of the latter.
+        - `GET /api/cameras` (`api_cameras()`) serializes both fields in its
+          JSON response and keeps the defaults.
+        """
         conn = self._get_connection()
         query = "SELECT * FROM cameras ORDER BY last_seen_at DESC, camera_id ASC"
         params: list[int] = []
@@ -1097,20 +1121,25 @@ class SQLiteMetadataStore:
                     chunk,
                 ).fetchall()
             )
-            detection_rows.extend(
-                conn.execute(
-                    f"""
-                    SELECT snapshots.camera_id, MAX(snapshots.stored_at) AS latest_detection_at
-                    FROM detections
-                    JOIN snapshots ON snapshots.id = detections.snapshot_id
-                    WHERE snapshots.camera_id IN ({placeholders})
-                    GROUP BY snapshots.camera_id
-                    """,
-                    chunk,
-                ).fetchall()
-            )
+            if include_latest_detection_at:
+                detection_rows.extend(
+                    conn.execute(
+                        f"""
+                        SELECT snapshots.camera_id, MAX(snapshots.stored_at) AS latest_detection_at
+                        FROM detections
+                        JOIN snapshots ON snapshots.id = detections.snapshot_id
+                        WHERE snapshots.camera_id IN ({placeholders})
+                        GROUP BY snapshots.camera_id
+                        """,
+                        chunk,
+                    ).fetchall()
+                )
 
-        detections_by_id = self._detections_by_snapshot_id([row["id"] for row in snapshot_rows])
+        detections_by_id = (
+            self._detections_by_snapshot_id([row["id"] for row in snapshot_rows])
+            if include_detections
+            else {}
+        )
         latest_snapshot_by_camera: dict[str, SnapshotRecord] = {
             row["camera_id"]: self._snapshot_from_row(row, detections_by_id.get(row["id"], ()))
             for row in snapshot_rows
