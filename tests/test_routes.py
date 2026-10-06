@@ -1736,6 +1736,20 @@ def test_metrics_endpoint_includes_http_request_count(client):
     assert "esp32cam_http_requests_total" in body
 
 
+def test_metrics_endpoint_caches_camera_last_seen_within_ttl(client):
+    import script.routes as routes_module
+
+    routes_module._camera_last_seen_cache.clear()
+
+    with patch(
+        "script.metadata.SQLiteMetadataStore.list_camera_last_seen", return_value=[]
+    ) as mock_last_seen:
+        client.get("/metrics")
+        client.get("/metrics")
+
+    assert mock_last_seen.call_count == 1
+
+
 def test_metrics_endpoint_caches_disk_usage_within_ttl(client):
     import script.routes as routes_module
 
