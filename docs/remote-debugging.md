@@ -25,6 +25,25 @@ curl http://<server>:8080/api/cameras
 # check last_seen_at — if it is stale, uploads are not arriving
 ```
 
+### UI connection diagnostics
+
+`/cameras/<camera_id>` の「接続診断」は、最終通信からの経過秒数、サーバーの
+readiness、送信先IP変更・Wi-Fi・認証キーの確認項目を表示します。
+30秒ごとに更新され、取得失敗時は確認不能と表示します。`offline` は未受信の
+時間から算出した状態で、電源断やWi-Fi切断を確定するものではありません。
+
+カメラに設定すべきLAN側の送信先を表示するには、サーバーの `.env` に設定して
+再起動してください（表示専用で、実機の設定変更や自動照合は行いません）。
+
+```dotenv
+ESP32CAM_DEVICE_SERVER_BASE_URL=http://raspi-server.local:8080
+```
+
+この値には認証情報、path、query、fragmentを含めないでください。未指定・不正な
+値は表示しません。Tailscaleの閲覧用IPをESP32の送信先と混同しないでください。
+PiのDHCPアドレス変更に備え、mDNSで解決できる `.local` 名かDHCP予約を使います。
+送信先の変更後は新しいsnapshotの到着まで確認してください。
+
 ### 1.2 Is the device on the network?
 
 ```bash

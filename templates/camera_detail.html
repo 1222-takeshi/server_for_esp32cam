@@ -48,6 +48,27 @@
     <span>Snapshots <span class="text-2 mono" id="snapshot-count">{{ snapshots | length }}</span></span>
   </div>
 
+  <section class="card" id="connection-diagnostics" style="padding:16px 20px;margin-bottom:20px;"
+           data-url="{{ url_for('server.api_camera_connection', camera_id=camera.camera_id) }}">
+    <h2 style="font-size:15px;margin:0 0 12px;">接続診断</h2>
+    <p id="connection-status" aria-live="polite">サーバーへの最終通信から {{ connection.seconds_since_contact }} 秒（{{ connection.status }}）</p>
+    <p id="connection-frames">WebSocket受信フレーム数：{{ connection.websocket_frames_received }} 件（再起動等でリセット）。最終受信：{{ connection.last_websocket_frame_at or "記録なし" }}</p>
+    {% if connection.keep_only_detected_snapshots %}<p>検知対象がない画像は保存しない設定です。通信・画像受信が正常でも、保存画像が更新されない場合があります。</p>{% endif %}
+    <p>サーバー状態：<span id="connection-server-health">確認中…</span></p>
+    <p>カメラに設定する送信先：<code>{% if connection.device_server_base_url %}{{ connection.device_server_base_url }}{% else %}未指定（管理者による設定が必要）{% endif %}</code></p>
+    <p class="text-4">送信先は運用者の指定値です。カメラ実機の設定とは自動照合していません。Tailscaleの閲覧用IPと、カメラがLANで使う送信先は異なります。</p>
+    <div id="connection-checks" {% if connection.status == 'healthy' %}hidden{% endif %}>
+      <strong>考えられる原因・確認項目（未確認）</strong>
+      <ul>
+        <li>送信先IP・ポートの不一致：PiのIP変更後もカメラが古いIPへ送信していないか確認。</li>
+        <li>カメラの電源・Wi-Fi接続、LANの経路・ファイアウォールを確認。</li>
+        <li>認証キーの不一致：送信先が正しくても、キーが古いと受信できません。</li>
+      </ul>
+    </div>
+    <p class="text-4">offlineは通信の途絶を示します。電源断やWi-Fi切断を確定する表示ではありません。サーバー状態も、閲覧端末からの確認結果です。</p>
+  </section>
+  <script src="{{ url_for('static', filename='camera_connection.js') }}" defer></script>
+
   <div style="display:grid;grid-template-columns:1fr 340px;gap:20px;align-items:start;" class="detail-grid">
 
     <!-- ── Latest snapshot ── -->
