@@ -197,6 +197,51 @@ paths:
               schema:
                 $ref: "#/components/schemas/CameraList"
 
+  /api/cameras/{camera_id}/connection:
+    get:
+      summary: Camera server-contact diagnostics
+      description: >-
+        Reports successful server-contact age, not network reachability or a proven
+        failure cause. The optional LAN origin is operator-configured, never probed,
+        and does not describe the actual flashed camera settings. No credentials
+        or admin-only desired configuration are returned. Responses are not cached.
+      tags: [camera]
+      parameters:
+        - $ref: "#/components/parameters/camera_id"
+      responses:
+        "200":
+          description: Contact diagnostics
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, last_seen_at, seconds_since_contact, expected_interval_seconds, device_server_base_url, websocket_frames_received, last_websocket_frame_at, keep_only_detected_snapshots]
+                properties:
+                  status:
+                    type: string
+                    enum: [healthy, stale, offline]
+                  last_seen_at:
+                    type: string
+                    format: date-time
+                  websocket_frames_received:
+                    type: integer
+                    minimum: 0
+                  last_websocket_frame_at:
+                    type: [string, "null"]
+                    format: date-time
+                  keep_only_detected_snapshots:
+                    type: boolean
+                  seconds_since_contact:
+                    type: integer
+                    minimum: 0
+                  expected_interval_seconds:
+                    type: integer
+                    minimum: 1
+                  device_server_base_url:
+                    type: [string, "null"]
+        "404":
+          description: Invalid or unknown camera
+
   /api/cameras/{camera_id}/videos:
     post:
       summary: Upload an MP4 video for a camera

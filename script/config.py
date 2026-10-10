@@ -133,6 +133,8 @@ class Config:
         os.getenv("ESP32CAM_THUMBNAIL_CACHE_MAX_ENTRIES", "256")
     )
     PORT = int(os.getenv("PORT", "8080"))
+    # Display-only LAN origin for camera setup; never used as a probe target.
+    DEVICE_SERVER_BASE_URL = os.getenv("ESP32CAM_DEVICE_SERVER_BASE_URL", "")
     MAX_CONTENT_LENGTH = int(os.getenv("ESP32CAM_MAX_CONTENT_LENGTH", str(1 * 1024 * 1024)))
     SNAPSHOT_MAX_CONTENT_LENGTH = MAX_CONTENT_LENGTH
     MAX_VIDEO_CONTENT_LENGTH = int(

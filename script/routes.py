@@ -9,6 +9,7 @@ import shutil
 import threading
 import time
 import uuid
+from urllib.parse import urlsplit
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from io import BytesIO, StringIO
@@ -42,6 +43,7 @@ from script.auth import (
 from script.metadata import (
     ALLOWED_LOG_LEVELS,
     CameraSummary,
+    _camera_status,
     DesiredConfigVersionConflict,
     DeviceLogRecord,
     SnapshotRecord,
@@ -998,6 +1000,47 @@ def list_cameras():
     )
 
 
+def _camera_connection_details(camera) -> dict[str, object]:
+    now = datetime.now(timezone.utc)
+    # An operator-supplied LAN origin, not the browser's (possibly Tailscale) host.
+    origin = current_app.config.get("DEVICE_SERVER_BASE_URL", "")
+    try:
+        parsed = urlsplit(origin)
+        valid = (
+            parsed.scheme in {"http", "https"} and parsed.hostname
+            and not parsed.username and not parsed.password
+            and parsed.path in {"", "/"} and not parsed.query and not parsed.fragment
+            and parsed.port != 0
+            and not any(char.isspace() for char in origin)
+        )
+        origin = f"{parsed.scheme}://{parsed.netloc}" if valid else None
+    except (ValueError, TypeError):
+        origin = None
+    metrics = current_app.extensions["upload_metrics"].snapshot(camera.camera_id)
+    return {
+        "websocket_frames_received": metrics["frames_received"],
+        "last_websocket_frame_at": metrics["last_frame_at"],
+        "keep_only_detected_snapshots": current_app.config["KEEP_ONLY_DETECTED_SNAPSHOTS"],
+        "status": _camera_status(camera.last_seen_at, camera.expected_interval_seconds, now=now),
+        "last_seen_at": camera.last_seen_at.isoformat(),
+        "seconds_since_contact": max(0, int((now - camera.last_seen_at).total_seconds())),
+        "expected_interval_seconds": camera.expected_interval_seconds,
+        "device_server_base_url": origin,
+    }
+
+
+@server.route("/api/cameras/<camera_id>/connection")
+def api_camera_connection(camera_id: str):
+    if _validate_device_id(camera_id):
+        return jsonify({"message": "Camera not found"}), 404
+    camera = _metadata_store().get_camera(camera_id)
+    if camera is None:
+        return jsonify({"message": "Camera not found"}), 404
+    response = jsonify(_camera_connection_details(camera))
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @server.route("/cameras/<camera_id>")
 def camera_detail(camera_id: str):
     if _validate_device_id(camera_id):
@@ -1014,6 +1057,7 @@ def camera_detail(camera_id: str):
     return render_template(
         "camera_detail.html",
         camera=camera,
+        connection=_camera_connection_details(camera),
         snapshots=snapshots,
         latest=latest,
         recent_logs=recent_logs,
