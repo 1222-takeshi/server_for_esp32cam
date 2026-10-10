@@ -932,13 +932,6 @@ def mjpeg_stream(camera_id: str):
             float(expected_interval_seconds) + 30.0,
             float(configured_idle_timeout),
         )
-        latest = _metadata_store().list_recent_snapshots(
-            camera_id=camera_id, limit=1, include_detections=False
-        )
-        initial_frame: bytes | None = None
-        if latest:
-            with contextlib.suppress(FileNotFoundError):
-                initial_frame = storage.read_image_by_relative_path(latest[0].relative_path)
     except Exception:
         # Setup failed before the streaming Response (and its generator's
         # `finally` block) exists to release the slot — release it here so a
@@ -953,14 +946,19 @@ def mjpeg_stream(camera_id: str):
     def generate():
         global _mjpeg_stream_count
         try:
-            if initial_frame:
-                yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + initial_frame + b"\r\n"
             while True:
                 try:
                     data = frame_queue.get(timeout=idle_timeout_seconds)
                 except Empty:
                     break
-                yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + data + b"\r\n"
+                # A live stream starts with the next received frame, never a
+                # historical saved snapshot. Explicit lengths let browsers
+                # render a complete JPEG without waiting for the next boundary.
+                header = (
+                    b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
+                    + str(len(data)).encode("ascii") + b"\r\n\r\n"
+                )
+                yield header + data + b"\r\n"
         finally:
             unsubscribe()
             with _mjpeg_stream_lock:

@@ -36,7 +36,7 @@ def test_mjpeg_stream_valid_camera_returns_200_multipart(client):
     assert "boundary=frame" in response.content_type
 
 
-def test_mjpeg_stream_includes_initial_frame(app):
+def test_mjpeg_stream_never_replays_saved_snapshot_without_new_frame(app):
     with app.test_client() as c:
         c.post("/upload", data=MINIMAL_JPEG, headers=UPLOAD_HEADERS)
 
@@ -44,8 +44,7 @@ def test_mjpeg_stream_includes_initial_frame(app):
         response = c.get("/stream/cameras/esp32cam-front-door")
 
     assert response.status_code == 200
-    assert b"--frame" in response.data
-    assert b"Content-Type: image/jpeg" in response.data
+    assert response.data == b""
 
 
 def test_mjpeg_stream_yields_new_frame_on_event(client):
@@ -55,6 +54,7 @@ def test_mjpeg_stream_yields_new_frame_on_event(client):
     assert response.status_code == 200
     assert b"--frame" in response.data
     assert MINIMAL_JPEG in response.data
+    assert f"Content-Length: {len(MINIMAL_JPEG)}\r\n".encode() in response.data
 
 
 def test_mjpeg_stream_waits_longer_than_camera_interval(app):
@@ -111,3 +111,35 @@ def test_mjpeg_stream_releases_slot_when_setup_fails(app):
         assert response.status_code == 200
     finally:
         del app.config["MAX_MJPEG_STREAMS"]
+
+
+def test_mjpeg_stream_uses_fresh_raw_frames_when_saved_file_is_gone(app):
+    with app.test_client() as c:
+        c.post("/upload", data=MINIMAL_JPEG, headers=UPLOAD_HEADERS)
+    store = app.extensions["metadata_store"]
+    snapshot = store.list_recent_snapshots(camera_id="esp32cam-front-door", limit=1)[0]
+    publisher = app.extensions["snapshot_event_publisher"]
+    queue = _mock_queue()
+    fresh = [MINIMAL_JPEG + b"new-1", MINIMAL_JPEG + b"new-2"]
+
+    def receive(**kwargs):
+        if not fresh:
+            raise Empty
+        publisher.publish_snapshot_created(snapshot, image_bytes=fresh.pop(0))
+        return queue.put_nowait.call_args.args[0]
+
+    queue.get.side_effect = receive
+    storage = app.extensions["storage"]
+    with (
+        app.test_client() as c,
+        patch("script.routes.Queue", return_value=queue),
+        patch.object(storage, "read_image_by_relative_path", side_effect=FileNotFoundError) as read,
+    ):
+        response = c.get("/stream/cameras/esp32cam-front-door")
+        body = response.data
+    assert response.status_code == 200
+    assert body.count(b"--frame\r\n") == 2
+    assert MINIMAL_JPEG + b"new-1\r\n" in body
+    assert MINIMAL_JPEG + b"new-2\r\n" in body
+    assert b"Content-Length: " in body
+    read.assert_not_called()
