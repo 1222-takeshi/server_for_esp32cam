@@ -45,7 +45,7 @@
     <span>Expected interval <span class="text-2 mono">{{ camera.expected_interval_seconds }}s</span></span>
     <span>Live interval <span class="text-2 mono" id="camera-live-interval" data-last-seen="{{ camera.last_seen_at.isoformat() }}">—</span></span>
     <span>Last frame <span class="text-2 mono" id="camera-frame-size">{% if latest %}{{ '%.1f'|format(latest.size / 1024) }} KB{% else %}—{% endif %}</span></span>
-    <span>Snapshots <span class="text-2 mono" id="snapshot-count">{{ snapshots | length }}</span></span>
+    <span>Saved snapshots <span class="text-2 mono" id="snapshot-count">{{ snapshots | length }}</span></span>
   </div>
 
   <section class="card" id="connection-diagnostics" style="padding:16px 20px;margin-bottom:20px;"
@@ -75,17 +75,24 @@
     <div class="card" style="overflow:visible;">
       <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;">
         <div style="display:flex;align-items:center;gap:8px;">
-          <span style="font-size:13px;font-weight:600;color:var(--text-1);">Latest Snapshot</span>
-          <button id="stream-toggle-btn" class="btn" style="padding:4px 10px;font-size:12px;" onclick="toggleStream()">&#9654; Live Stream</button>
+          <span style="font-size:13px;font-weight:600;color:var(--text-1);">{{ 'Live Camera' if connection.keep_only_detected_snapshots else 'Latest Snapshot' }}</span>
+          {% if not connection.keep_only_detected_snapshots %}<button id="stream-toggle-btn" class="btn" style="padding:4px 10px;font-size:12px;" onclick="toggleStream()">&#9654; Live Stream</button>{% endif %}
         </div>
-        {% if latest %}
+        {% if latest and not connection.keep_only_detected_snapshots %}
         <span id="latest-badge" class="badge {{ latest.inference_status }}">
           <span class="badge-dot"></span>{{ latest.inference_status }}
         </span>
         {% endif %}
       </div>
       <div style="padding:20px;">
-        {% if latest %}
+        {% if connection.keep_only_detected_snapshots %}
+        <div class="img-wrap" style="max-width:100%;">
+          <img id="live-img" src="{{ url_for('server.mjpeg_stream', camera_id=camera.camera_id) }}" alt="カメラのライブ画像"
+               onload="document.getElementById('live-image-state').textContent='ライブ画像を表示中（保存画像とは別です）'"
+               onerror="document.getElementById('live-image-state').textContent='ライブ画像を取得できません。再読み込みして接続診断を確認してください。'">
+        </div>
+        <p id="live-image-state" style="font-size:12px;color:var(--text-4);">ライブ画像の受信待ち…保存対象がなくても、受信した画像を表示します。</p>
+        {% elif latest %}
         <div class="img-wrap" id="latest-img-wrap" style="max-width:100%;">
           <img id="latest-img" src="{{ url_for('server.get_file', filename=latest.filename) }}" alt="{{ latest.filename }}">
           {% for d in latest.detections %}
@@ -118,7 +125,7 @@
     <!-- ── Recent snapshots ── -->
     <div class="card">
       <div style="padding:14px 16px;border-bottom:1px solid var(--border);">
-        <span style="font-size:13px;font-weight:600;color:var(--text-1);">Recent</span>
+        <span style="font-size:13px;font-weight:600;color:var(--text-1);">保存済みの画像</span>
       </div>
       <div style="padding:12px;max-height:520px;overflow-y:auto;" id="snap-list">
         {% if snapshots %}
@@ -212,6 +219,7 @@
 <script>
 (function () {
   const CAMERA_ID   = {{ camera.camera_id | tojson }};
+  const KEEP_ONLY_DETECTED = {{ connection.keep_only_detected_snapshots | tojson }};
   // formatTimestamp/formatFrameSize and the reconnect timing constants are
   // defined once in static/dashboard-shared.js (loaded from _base.html)
   // instead of duplicated here and in index.html -- see #358.
@@ -293,19 +301,24 @@
 
     const snap = data.snapshot || {};
 
-    incrementSnapshotCount();
     markCameraHealthy();
     updateCameraTiming(snap);
     updateFrameSize(snap);
 
-    if (latImg && snap.url) {
+    // Upload events precede inference; they do not prove a file was retained.
+    // The live view receives raw frames even when the file is discarded.
+    if (KEEP_ONLY_DETECTED) return;
+    incrementSnapshotCount();
+    const streaming = latImg && latImg.src.includes('/stream/');
+
+    if (!streaming && latImg && snap.url) {
       latImg.src = snap.url;
     }
-    if (latTs && snap.captured_at) {
+    if (!streaming && latTs && snap.captured_at) {
       const timestamp = formatTimestamp(snap.captured_at);
       if (timestamp) latTs.textContent = timestamp;
     }
-    if (latName && snap.filename) {
+    if (!streaming && latName && snap.filename) {
       latName.textContent = snap.filename;
     }
 
@@ -355,12 +368,14 @@ function toggleStream() {
   const img = document.getElementById('latest-img');
   const btn = document.getElementById('stream-toggle-btn');
   if (!img || !btn) return;
-  const streamUrl = '/stream/cameras/' + encodeURIComponent(CAMERA_ID);
+  const streamUrl = {{ url_for('server.mjpeg_stream', camera_id=camera.camera_id) | tojson }};
   if (img.src.includes('/stream/')) {
     img.src = img.dataset.snapshotSrc || '';
     btn.textContent = '▶ Live Stream';
   } else {
     img.dataset.snapshotSrc = img.src;
+    // Saved detections describe the saved frame, not the live stream.
+    document.querySelectorAll('#latest-img-wrap .bbox').forEach(box => box.remove());
     img.src = streamUrl;
     btn.textContent = '⏹ Stop Stream';
   }

@@ -93,7 +93,8 @@ def test_connection_explains_received_frames_without_saved_snapshot(app, client)
     html = client.get('/cameras/cam').get_data(as_text=True)
     assert '検知対象がない画像は保存しない設定です' in html
     assert 'WebSocket受信フレーム数：1 件' in html
-    assert 'No snapshots yet' in html
+    assert 'No snapshots' in html
+    assert 'id="live-img" src="/stream/cameras/cam"' in html
 
 
 @pytest.mark.parametrize('scenario', ['healthy', 'offline', 'degraded', 'network', 'invalid', 'http'])
