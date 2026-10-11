@@ -53,7 +53,8 @@ def _read_sources(paths: list[Path]) -> tuple[list[bytes], list[dict[str, object
             data = stream.read(MAX_INPUT_BYTES + 1)
         if len(data) > MAX_INPUT_BYTES:
             raise ValueError("each input must be at most 8 MiB")
-        if data.count(b"\n") > MAX_INPUT_LINES:
+        line_count = data.count(b"\n") + (1 if data and not data.endswith(b"\n") else 0)
+        if line_count > MAX_INPUT_LINES:
             raise ValueError("too many input lines")
         file_lines = data.split(b"\n") if data else []
         if data.endswith(b"\n"):

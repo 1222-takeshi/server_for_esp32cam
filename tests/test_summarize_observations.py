@@ -217,3 +217,13 @@ def test_excessive_line_count_is_rejected_before_splitting(tmp_path):
     path.write_bytes(b"\n" * (summary.MAX_INPUT_LINES + 1))
     with pytest.raises(ValueError, match="too many input lines"):
         summary.summarize([path], START, END, ["camera-a"], now=END)
+
+
+def test_unterminated_final_line_counts_toward_limit(tmp_path):
+    path = tmp_path / "line-boundary.jsonl"
+    path.write_bytes(b"\n" * summary.MAX_INPUT_LINES)
+    lines, _ = summary._read_sources([path])
+    assert len(lines) == summary.MAX_INPUT_LINES
+    path.write_bytes(path.read_bytes() + b"x")
+    with pytest.raises(ValueError, match="too many input lines"):
+        summary._read_sources([path])
