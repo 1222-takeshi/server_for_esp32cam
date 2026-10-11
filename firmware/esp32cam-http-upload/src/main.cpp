@@ -13,6 +13,9 @@
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
 #include <time.h>
+#ifdef WEBSOCKET_UPLOAD_SMOKE_TEST
+#include "desired_config_restart_gate.h"
+#endif
 #endif
 
 #ifdef WEBSOCKET_UPLOAD_SMOKE_TEST
@@ -71,6 +74,9 @@
 #endif
 #ifndef DESIRED_CONFIG_POLL_INTERVAL_MS
 #define DESIRED_CONFIG_POLL_INTERVAL_MS 60000
+#endif
+#ifndef DESIRED_CONFIG_WS_TIMEOUT_MS
+#define DESIRED_CONFIG_WS_TIMEOUT_MS 500
 #endif
 #ifndef DESIRED_CONFIG_FIRMWARE_VERSION
 #define DESIRED_CONFIG_FIRMWARE_VERSION "0.3.0"
@@ -164,11 +170,11 @@ bool desiredConfigLoaded = false;
 bool requestedOtaWindowActive = false;
 uint32_t requestedOtaWindowStartedMs = 0;
 uint32_t requestedOtaWindowDurationMs = 0;
-bool pendingRestart = false;
-uint32_t pendingRestartVersion = 0;
+uint32_t requestedOtaWindowVersion = 0;
+DesiredConfigRestartGate restartGate;
 #endif
 #ifdef ENABLE_ARDUINO_OTA
-void setupArduinoOta();
+bool setupArduinoOta();
 #endif
 #endif
 
@@ -572,13 +578,25 @@ bool addDeviceApiKeyHeader(HTTPClient &http) {
   return true;
 }
 
+void setDesiredConfigTimeouts(HTTPClient &http) {
+#ifdef WEBSOCKET_UPLOAD_SMOKE_TEST
+  // Each GET/ACK has a connect and a read phase. Keep the normal poll cycle
+  // near two seconds even when the device API is unreachable.
+  http.setConnectTimeout(DESIRED_CONFIG_WS_TIMEOUT_MS);
+  http.setTimeout(DESIRED_CONFIG_WS_TIMEOUT_MS);
+#else
+  http.setConnectTimeout(DESIRED_CONFIG_POLL_TIMEOUT_MS);
+  http.setTimeout(DESIRED_CONFIG_POLL_TIMEOUT_MS);
+#endif
+}
+
 bool sendDesiredConfigAck(const uint32_t version, const bool applied, const String &message) {
   if (strlen(DEVICE_API_BASE_URL) == 0) {
     Serial.println("Desired config ack skipped: DEVICE_API_BASE_URL is not configured.");
     return false;
   }
   HTTPClient http;
-  http.setTimeout(DESIRED_CONFIG_POLL_TIMEOUT_MS);
+  setDesiredConfigTimeouts(http);
   const String url = desiredConfigUrl("/desired-config/ack");
   if (!http.begin(url)) {
     Serial.println("Desired config ack failed: HTTP client begin failed.");
@@ -653,11 +671,14 @@ bool applyDesiredConfig(JsonObject config, const uint32_t version, String &messa
   // Apply live camera changes before ACK; a failed sensor update must not be
   // reported as successfully applied to the server.
   sensor_t *sensor = esp_camera_sensor_get();
-  if (sensor != nullptr &&
-      (sensor->set_framesize(sensor, next.frameSize) != 0 ||
+  if (sensor == nullptr) {
+    message = "camera_apply_failed";
+    return false;
+  }
+  if (sensor->set_framesize(sensor, next.frameSize) != 0 ||
        sensor->set_quality(sensor, next.jpegQuality) != 0 ||
        sensor->set_vflip(sensor, next.vflip ? 1 : 0) != 0 ||
-       sensor->set_hmirror(sensor, next.hmirror ? 1 : 0) != 0)) {
+       sensor->set_hmirror(sensor, next.hmirror ? 1 : 0) != 0) {
     sensor->set_framesize(sensor, desiredConfig.frameSize);
     sensor->set_quality(sensor, desiredConfig.jpegQuality);
     sensor->set_vflip(sensor, desiredConfig.vflip ? 1 : 0);
@@ -679,7 +700,7 @@ bool pollDesiredConfig() {
     return false;
   }
   HTTPClient http;
-  http.setTimeout(DESIRED_CONFIG_POLL_TIMEOUT_MS);
+  setDesiredConfigTimeouts(http);
   const String suffix = String("/desired-config?current_version=") + desiredConfigVersion;
   const String url = desiredConfigUrl(suffix.c_str());
   Serial.printf("Desired config GET: %s\n", url.c_str());
@@ -729,7 +750,25 @@ bool pollDesiredConfig() {
     sendDesiredConfigAck(version, false, message);
     return false;
   }
-  if (!sendDesiredConfigAck(version, true, message)) {
+#ifdef ENABLE_ARDUINO_OTA
+  const bool otaPrepared = desiredConfig.otaUpdateRequested && version != lastOtaHandledVersion;
+  if (otaPrepared && !setupArduinoOta()) {
+    desiredConfigMessage = "ota_setup_failed";
+    sendDesiredConfigAck(version, false, desiredConfigMessage);
+    return false;
+  }
+#endif
+  const bool acknowledged = sendDesiredConfigAck(version, true, message);
+#ifdef WEBSOCKET_UPLOAD_SMOKE_TEST
+  restartGate.recordAck(acknowledged, version, desiredConfig.restartRequested,
+                        lastRestartHandledVersion);
+#endif
+  if (!acknowledged) {
+#ifdef ENABLE_ARDUINO_OTA
+    if (otaPrepared) {
+      ArduinoOTA.end();
+    }
+#endif
     desiredConfigMessage = "ack_failed";
     return false;
   }
@@ -737,10 +776,6 @@ bool pollDesiredConfig() {
   desiredConfigPollSucceeded = true;
 #ifdef WEBSOCKET_UPLOAD_SMOKE_TEST
   desiredConfigLoaded = true;
-  if (desiredConfig.restartRequested && desiredConfigVersion != lastRestartHandledVersion) {
-    pendingRestart = true;
-    pendingRestartVersion = desiredConfigVersion;
-  }
 #endif
   Serial.printf("Desired config applied: version=%lu capture_interval_seconds=%lu frame_size=%s jpeg_quality=%d vflip=%s hmirror=%s restart_requested=%s ota_update_requested=%s ota_window_seconds=%lu\n",
                 static_cast<unsigned long>(desiredConfigVersion),
@@ -779,7 +814,6 @@ void runRequestedOtaWindow() {
     sendDesiredConfigAck(desiredConfigVersion, false, "ota_requested_but_ota_password_empty");
     return;
   }
-  setupArduinoOta();
   sendDesiredConfigAck(desiredConfigVersion, true, "ota_ready");
   const uint32_t windowMs = desiredConfig.otaWindowSeconds * 1000UL;
   const uint32_t startedAt = millis();
@@ -788,6 +822,7 @@ void runRequestedOtaWindow() {
   requestedOtaWindowActive = true;
   requestedOtaWindowStartedMs = startedAt;
   requestedOtaWindowDurationMs = windowMs;
+  requestedOtaWindowVersion = desiredConfigVersion;
 #else
   while (millis() - startedAt < windowMs) {
     ArduinoOTA.handle();
@@ -1078,10 +1113,10 @@ void captureAndUploadWebSocketFrame() {
 #endif
 
 #ifdef ENABLE_ARDUINO_OTA
-void setupArduinoOta() {
+bool setupArduinoOta() {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("OTA setup skipped: Wi-Fi is not connected.");
-    return;
+    return false;
   }
 
   ArduinoOTA.setHostname(OTA_HOSTNAME);
@@ -1107,6 +1142,7 @@ void setupArduinoOta() {
                 OTA_HOSTNAME,
                 static_cast<unsigned int>(OTA_PORT),
                 WiFi.localIP().toString().c_str());
+  return true;
 }
 #endif
 
@@ -1168,13 +1204,15 @@ void loop() {
       millis() - requestedOtaWindowStartedMs >= requestedOtaWindowDurationMs) {
     requestedOtaWindowActive = false;
     ArduinoOTA.end();
-    sendDesiredConfigAck(desiredConfigVersion, false, "ota_timeout");
+    if (desiredConfigVersion == requestedOtaWindowVersion) {
+      sendDesiredConfigAck(requestedOtaWindowVersion, false, "ota_timeout");
+    }
     Serial.println("Desired config OTA window timed out; continuing normal upload cycle.");
   }
 #endif
-  if (pendingRestart && !requestedOtaWindowActive) {
-    lastRestartHandledVersion = pendingRestartVersion;
-    pendingRestart = false;
+  uint32_t restartVersion = 0;
+  if (restartGate.consumeIfReady(requestedOtaWindowActive, &restartVersion)) {
+    lastRestartHandledVersion = restartVersion;
     Serial.println("Desired config requested restart; restarting after ack.");
     delay(500);
     ESP.restart();

@@ -374,6 +374,7 @@ HTTP upload envはWi-Fi接続後・撮影前に、WebSocket upload envは起動�
 #define DEVICE_API_KEY "per-device-api-key"  // ESP32CAM_DEVICE_API_KEYS 未使用なら空文字でも可
 #define DESIRED_CONFIG_POLL_TIMEOUT_MS 10000
 #define DESIRED_CONFIG_POLL_INTERVAL_MS 60000  // WebSocket接続中の再取得間隔
+#define DESIRED_CONFIG_WS_TIMEOUT_MS 500       // WebSocket用の接続・読込それぞれのtimeout
 #define DESIRED_CONFIG_FIRMWARE_VERSION "0.3.0"
 ```
 
@@ -386,6 +387,8 @@ HTTP upload envはWi-Fi接続後・撮影前に、WebSocket upload envは起動�
 5. `restart_requested=true` の場合、ack後に `ESP.restart()` します。
 
 WebSocket uploadでは `capture_interval_seconds` が撮影間隔を上書きします。既定desired configは300秒・SVGAなので、既存の5秒・QVGA送信を維持するにはファームウェア更新前に管理者APIで両方を明示的に設定してください。HTTP `/upload` は既定10回/分のレート制限があるため、5秒間隔の連続送信にはWebSocket uploadを使います。OTAは非空パスワードを要求し、要求されたwindow中だけ受け付けます。
+
+WebSocket側の設定取得は既定60秒ごとに行います。GETとACKの接続・読込はそれぞれ500msでtimeoutし、通常のGET+ACKによる送信停止を目安2秒以内に抑えます。DNS解決や低速な複数chunkの応答はこの目安外です。失敗時は次回pollで再試行します。成功ACKがサーバーに届いた後で応答だけが失われると、サーバーは一回限り要求を解除し、デバイスは安全のため再起動/OTAを実行しません。実行を確認できない場合、運用者が新しいversionとして要求を再発行してください。厳密な一回限りの実行保証はありません。
 
 `DEVICE_API_KEY` は `/upload` の `X-API-Key` にも付与されます。サーバー側で単一デバイス用の
 `ESP32CAM_DEVICE_API_KEY` を設定する場合は、`ESP32CAM_SHARED_KEY_DEVICE_ID` をこの

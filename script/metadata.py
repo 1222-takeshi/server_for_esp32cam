@@ -1756,7 +1756,7 @@ class SQLiteMetadataStore:
             if current_version != version:
                 raise DesiredConfigVersionConflict(current_version, version)
             config = json.loads(row["config_json"])
-            if clear_one_shot_requests:
+            if clear_one_shot_requests and applied:
                 config["restart_requested"] = False
                 config["ota_update_requested"] = False
             config_json = json.dumps(config, sort_keys=True, separators=(",", ":"))
