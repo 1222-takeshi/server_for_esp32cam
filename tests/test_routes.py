@@ -565,7 +565,7 @@ def test_api_cameras_rejects_invalid_pagination(client):
     assert response.status_code == 400
 
 
-def test_index_page_marks_snapshot_stats_for_live_updates(client):
+def test_index_page_marks_snapshot_stats_as_page_load_values(client):
     client.post(
         "/upload",
         data=MINIMAL_JPEG,
@@ -584,14 +584,15 @@ def test_index_page_marks_snapshot_stats_for_live_updates(client):
     assert 'id="cam-frame-size-esp32cam_front_door"' in page
     assert "2026-03-11 21:34:56 JST" in page
     assert "2026-03-11 12:34:56 UTC" not in page
-    assert "incrementStatSnapshotCount" in page
+    assert "Saved snapshots at page load" in page
+    assert "incrementStatSnapshotCount" not in page
     assert "markCameraHealthy" in page
     assert "updateCameraTiming" in page
     assert "updateFrameSize" in page
     assert "scheduleHealthChecks" in page
 
 
-def test_camera_detail_page_marks_snapshot_count_for_live_updates(client):
+def test_camera_detail_page_loads_saved_snapshot_polling(client):
     client.post(
         "/upload",
         data=MINIMAL_JPEG,
@@ -608,7 +609,8 @@ def test_camera_detail_page_marks_snapshot_count_for_live_updates(client):
     assert 'id="camera-frame-size"' in page
     assert "2026-03-11 21:34:56 JST" in page
     assert "2026-03-11 12:34:56 UTC" not in page
-    assert "incrementSnapshotCount" in page
+    assert "saved_snapshots.js" in page
+    assert "incrementSnapshotCount" not in page
     assert "updateCameraTiming" in page
     assert "updateFrameSize" in page
     assert "scheduleHealthChecks" in page

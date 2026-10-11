@@ -45,7 +45,8 @@
     <span>Expected interval <span class="text-2 mono">{{ camera.expected_interval_seconds }}s</span></span>
     <span>Live interval <span class="text-2 mono" id="camera-live-interval" data-last-seen="{{ camera.last_seen_at.isoformat() }}">—</span></span>
     <span>Last frame <span class="text-2 mono" id="camera-frame-size">{% if latest %}{{ '%.1f'|format(latest.size / 1024) }} KB{% else %}—{% endif %}</span></span>
-    <span>Saved snapshots <span class="text-2 mono" id="snapshot-count">{{ snapshots | length }}</span></span>
+    <span>Saved snapshots <span class="text-2 mono" id="snapshot-count">確認中</span></span>
+    <span id="saved-snapshot-state" aria-live="polite">保存済み画像を確認中…</span>
   </div>
 
   <section class="card" id="connection-diagnostics" style="padding:16px 20px;margin-bottom:20px;"
@@ -78,9 +79,9 @@
           <span style="font-size:13px;font-weight:600;color:var(--text-1);">{{ 'Live Camera' if connection.keep_only_detected_snapshots else 'Latest Snapshot' }}</span>
           {% if not connection.keep_only_detected_snapshots %}<button id="stream-toggle-btn" class="btn" style="padding:4px 10px;font-size:12px;" onclick="toggleStream()">&#9654; Live Stream</button>{% endif %}
         </div>
-        {% if latest and not connection.keep_only_detected_snapshots %}
-        <span id="latest-badge" class="badge {{ latest.inference_status }}">
-          <span class="badge-dot"></span>{{ latest.inference_status }}
+        {% if not connection.keep_only_detected_snapshots %}
+        <span id="latest-badge" class="badge {% if latest %}{{ latest.inference_status }}{% endif %}" {% if not latest %}hidden{% endif %}>
+          <span class="badge-dot"></span><span id="latest-status">{% if latest %}{{ latest.inference_status }}{% endif %}</span>
         </span>
         {% endif %}
       </div>
@@ -92,26 +93,21 @@
                onerror="document.getElementById('live-image-state').textContent='ライブ画像を取得できません。再読み込みして接続診断を確認してください。'">
         </div>
         <p id="live-image-state" style="font-size:12px;color:var(--text-4);">ライブ画像の受信待ち…保存対象がなくても、受信した画像を表示します。</p>
-        {% elif latest %}
-        <div class="img-wrap" id="latest-img-wrap" style="max-width:100%;">
-          <img id="latest-img" src="{{ url_for('server.get_file', filename=latest.filename) }}" alt="{{ latest.filename }}">
-          {% for d in latest.detections %}
+        {% else %}
+        <div class="img-wrap" id="latest-img-wrap" style="max-width:100%;{% if not latest %}display:none;{% endif %}">
+          <img id="latest-img" {% if latest %}src="{{ url_for('server.get_file', filename=latest.filename) }}" alt="{{ latest.filename }}" data-saved-filename="{{ latest.filename }}"{% endif %}>
+          {% if latest %}{% for d in latest.detections %}
           <div class="bbox" style="left:{{ d.x1*100 }}%;top:{{ d.y1*100 }}%;width:{{ (d.x2-d.x1)*100 }}%;height:{{ (d.y2-d.y1)*100 }}%;">
             <div class="bbox-label">{{ d.label }} {{ '%.0f'|format(d.score*100) }}%</div>
           </div>
-          {% endfor %}
+          {% endfor %}{% endif %}
         </div>
-        <div style="margin-top:12px;display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--text-4);">
-          <span class="mono" id="latest-filename">{{ latest.filename }}</span>
-          {% if latest.captured_at %}
-          <span id="latest-ts">{{ latest.captured_at | jst }}</span>
-          {% endif %}
-          {% if latest.inference_error %}
-          <span style="color:var(--red);">{{ latest.inference_error }}</span>
-          {% endif %}
+        <div id="latest-meta" style="margin-top:12px;display:{% if latest %}flex{% else %}none{% endif %};gap:16px;flex-wrap:wrap;font-size:12px;color:var(--text-4);">
+          <span class="mono" id="latest-filename">{% if latest %}{{ latest.filename }}{% endif %}</span>
+          <span id="latest-ts">{% if latest %}{{ (latest.captured_at or latest.stored_at) | jst }}{% endif %}</span>
+          <span id="latest-inference-error" style="color:var(--red);">{% if latest and latest.inference_error %}{{ latest.inference_error }}{% endif %}</span>
         </div>
-        {% else %}
-        <div class="empty" style="padding:40px 0;">
+        <div class="empty" id="saved-image-empty" style="padding:40px 0;{% if latest %}display:none;{% endif %}">
           <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
             <rect x="3" y="3" width="18" height="18" rx="3"/>
             <path d="M3 9l4-4 4 4 4-6 4 6"/>
@@ -127,7 +123,11 @@
       <div style="padding:14px 16px;border-bottom:1px solid var(--border);">
         <span style="font-size:13px;font-weight:600;color:var(--text-1);">保存済みの画像</span>
       </div>
-      <div style="padding:12px;max-height:520px;overflow-y:auto;" id="snap-list">
+      <div style="padding:12px;max-height:520px;overflow-y:auto;" id="snap-list"
+           data-api-url="{{ url_for('server.api_camera_snapshots', camera_id=camera.camera_id, limit=20) }}"
+           data-file-url="{{ url_for('server.get_file', filename='__filename__') }}"
+           data-thumbnail-url="{{ url_for('server.get_file_thumbnail', filename='__filename__') }}"
+           data-keep-only-detected="{{ 'true' if connection.keep_only_detected_snapshots else 'false' }}">
         {% if snapshots %}
         {% for snap in snapshots %}
         <a href="{{ url_for('server.get_file', filename=snap.filename) }}" target="_blank"
@@ -155,6 +155,7 @@
       </div>
     </div>
   </div>
+  <script src="{{ url_for('static', filename='saved_snapshots.js') }}" defer></script>
 
   <!-- ── Recent Logs ── -->
   <div class="card" style="margin-top:20px;">
@@ -219,23 +220,11 @@
 <script>
 (function () {
   const CAMERA_ID   = {{ camera.camera_id | tojson }};
-  const KEEP_ONLY_DETECTED = {{ connection.keep_only_detected_snapshots | tojson }};
   // formatTimestamp/formatFrameSize and the reconnect timing constants are
   // defined once in static/dashboard-shared.js (loaded from _base.html)
   // instead of duplicated here and in index.html -- see #358.
   const { RECONNECT_MS, STALE_AFTER_MS, OFFLINE_AFTER_MS, formatTimestamp, formatFrameSize } = window.CameraShared;
   const pill     = document.getElementById('live-pill-detail');
-  const latImg   = document.getElementById('latest-img');
-  const latTs    = document.getElementById('latest-ts');
-  const latName  = document.getElementById('latest-filename');
-  const snapList = document.getElementById('snap-list');
-
-  function incrementSnapshotCount() {
-    const count = document.getElementById('snapshot-count');
-    if (!count) return;
-    const current = Number.parseInt(count.textContent, 10);
-    count.textContent = String(Number.isFinite(current) ? current + 1 : 1);
-  }
 
   function updateFrameSize(snap) {
     const target = document.getElementById('camera-frame-size');
@@ -305,41 +294,8 @@
     updateCameraTiming(snap);
     updateFrameSize(snap);
 
-    // Upload events precede inference; they do not prove a file was retained.
-    // The live view receives raw frames even when the file is discarded.
-    if (KEEP_ONLY_DETECTED) return;
-    incrementSnapshotCount();
-    const streaming = latImg && latImg.src.includes('/stream/');
-
-    if (!streaming && latImg && snap.url) {
-      latImg.src = snap.url;
-    }
-    if (!streaming && latTs && snap.captured_at) {
-      const timestamp = formatTimestamp(snap.captured_at);
-      if (timestamp) latTs.textContent = timestamp;
-    }
-    if (!streaming && latName && snap.filename) {
-      latName.textContent = snap.filename;
-    }
-
-    // Prepend thumbnail to recent list
-    if (snapList && snap.url && snap.filename) {
-      const a = document.createElement('a');
-      a.href = snap.url; a.target = '_blank';
-      a.style.cssText = 'display:flex;gap:10px;align-items:center;padding:8px;border-radius:6px;text-decoration:none;transition:background .15s;';
-      a.onmouseover = () => a.style.background = 'var(--bg-hover)';
-      a.onmouseout  = () => a.style.background = '';
-      a.innerHTML = `
-        <div style="width:56px;height:42px;border-radius:4px;overflow:hidden;background:#12131a;flex-shrink:0;">
-          <img src="${snap.thumbnail_url || snap.url}" alt="" style="width:100%;height:100%;object-fit:cover;">
-        </div>
-        <div style="flex:1;min-width:0;">
-          <div style="font-size:11px;color:var(--text-1);font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${snap.filename}</div>
-          <div style="font-size:11px;color:var(--text-4);margin-top:2px;">just now</div>
-        </div>
-      `;
-      snapList.insertBefore(a, snapList.firstChild);
-    }
+    // This event is emitted before inference and retention. The saved view is
+    // reconciled from the snapshots API by saved_snapshots.js.
   }
 
   function connect() {
@@ -372,10 +328,13 @@ function toggleStream() {
   if (img.src.includes('/stream/')) {
     img.src = img.dataset.snapshotSrc || '';
     btn.textContent = '▶ Live Stream';
+    window.SavedSnapshotView?.restore();
   } else {
     img.dataset.snapshotSrc = img.src;
     // Saved detections describe the saved frame, not the live stream.
     document.querySelectorAll('#latest-img-wrap .bbox').forEach(box => box.remove());
+    const badge = document.getElementById('latest-badge');
+    if (badge) { badge.hidden = true; badge.style.display = 'none'; }
     img.src = streamUrl;
     btn.textContent = '⏹ Stop Stream';
   }
