@@ -441,8 +441,13 @@ docker run --rm \
 docker compose start app
 ```
 
-For online backup (without stopping), the SQLite WAL mode is enabled by default.
-Use `.backup` SQL command or `sqlite3 /path/to/db .dump > dump.sql` against the live file.
+For online backup (without stopping), use SQLite's online backup API, as in
+`scripts/backup.sh`; copying only the live database file can omit uncheckpointed
+WAL transactions. An online database backup and a later copy of uploads are
+not an atomic pair. Stop writes for a fully consistent database/upload backup.
+Before restoration, run `scripts/check_backup.py --db <backup-db> --uploads
+<backup-uploads>` on the backup copy; this checks SQLite and file references
+without modifying production data.
 
 ### Recovery
 
