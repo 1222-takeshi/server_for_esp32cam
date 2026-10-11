@@ -1,114 +1,35 @@
-# 将来の開発 / ロードマップ
+# 開発ロードマップ
 
-このプロジェクトは現在、次の実用的な最初のマイルストーンにあります:
+2026-10-11時点。実装の完了と実機での評価完了を分けて管理する。全体管理はオーケストレーター、領域ごとの開発と検証準備は担当PMが責任を持つ。進行管理は [#451](https://github.com/1222-takeshi/server_for_esp32cam/issues/451)。
 
-* 単一の ESP32-CAM
-* JPEG スナップショット upload
-* 中央サーバー保存
-* ブラウザからの閲覧
+## 現状
 
-今後の拡張は、このスナップショット優先の本線を崩さない形で進めます。
+| 領域 | 実装・実機確認 | 残る評価・開発 |
+|---|---|---|
+| 撮影・保存・閲覧 | 1台のESP32-CAMからRaspberry PiへのJPEG送信、保存、ブラウザ閲覧。新着フレームだけを使うMJPEG経路 | 保存一覧の自動更新、保存時刻とライブの区別 |
+| 検知・保存制御 | 人物検知、非同期推論、検知画像のみ保持。現在の実機で人物検知保存を確認 | 猫の精度評価。保存がない場合に古い画像を最新撮影と誤認させない表示 |
+| 運用 | Tailscale経由SSH、Netdata、サーバー自動起動 | 7日間の実測、バックアップからの隔離復元、復旧時間の計測 |
+| 遠隔設定 | desired config API、ACK、OTA。OTA書換えの実機確認あり | 現在のWebSocketファームから設定取得・反映・ACKの実機確認 |
+| 拡張 | Webhook、動画upload、カメラ別管理、trackingのサーバー実装 | 通知配信の実測、ESP側の短い動画生成、複数実機、tracking実機評価 |
+| 外部連携 | ローカル保存を使用 | NAS/Drive/S3、Tapo等は未実装・未評価 |
 
-ペット監視 MVP、1週間連続稼働、Raspberry Pi Zero 候補、月額0円運用を前提にした詳細な導入判断と優先順位は [`docs/ja/business-scenarios.md`](business-scenarios.md) にまとめています。
+## 並列開発と受入条件
 
----
+| マイルストーン / PM | 独立Issue | 完了条件 |
+|---|---|---|
+| [M1 閲覧](https://github.com/1222-takeshi/server_for_esp32cam/milestone/1) / 閲覧PM | [#444](https://github.com/1222-takeshi/server_for_esp32cam/issues/444) | 保存APIの結果を画面に定期反映。空・失敗状態、表示件数を明示し、ライブ経路を維持。実機画面を確認 |
+| [M2 運用](https://github.com/1222-takeshi/server_for_esp32cam/milestone/2) / 運用PM | [#445](https://github.com/1222-takeshi/server_for_esp32cam/issues/445)、[#448](https://github.com/1222-takeshi/server_for_esp32cam/issues/448) | 容量・CPU・メモリ・ready・接続を低負荷で記録。隔離コピーでSQLite整合性と画像参照を検証。7日実測と復旧訓練の結果を記録 |
+| [M3 遠隔設定](https://github.com/1222-takeshi/server_for_esp32cam/milestone/3) / デバイスPM | [#446](https://github.com/1222-takeshi/server_for_esp32cam/issues/446) | WebSocket運用でも設定取得・適用・ACK。現在の5秒送信を明示維持。再起動・OTA要求が一度だけ実行され、再接続を実機確認 |
+| [M4 ペット評価](https://github.com/1222-takeshi/server_for_esp32cam/milestone/4) / 評価PM | [#447](https://github.com/1222-takeshi/server_for_esp32cam/issues/447) | 固定した画像・正解bbox・モデル・labelsのハッシュと設定を保存。猫あり/なしのprecision・recall、誤検知・見逃し、推論時間を実測。未提供データは未評価とする |
 
-## 導入シナリオと MVP KPI
+各PMは専用branch/worktreeを使用する。閲覧PMは画面、運用PMはscriptsと運用文書、デバイスPMはファームと遠隔設定契約、評価PMはオフライン評価ツールを担当する。境界変更はオーケストレーターが調整する。必要な専門担当だけ配置し、各PRを2名以上のread-only reviewerが確認する。BLOCKING・IMPORTANTを解消し、tests・静的解析・CIを確認した後、オーケストレーターがmergeする。
 
-### ユースケース
+## 依存関係と次の段階
 
-| # | シナリオ | 主な利用者 | 価値 |
-|---|---------|----------|------|
-| 1 | **自宅・事務所の防犯モニタリング** | 個人・小規模事業者 | LAN 内の低コスト常時撮影、人物検知アラート |
-| 2 | **屋外・農場の定点観測** | 農業・研究用途 | 天候・生育状況の時系列記録、電池駆動での長期運用 |
-| 3 | **DIY スマートホーム連携** | 技術者・自作愛好家 | Webhook で外部サービスへ通知、既存スマートホームと統合 |
-| 4 | **複数カメラの集中管理** | 小規模施設管理者 | 最大 10 台の ESP32-CAM を 1 台の Raspberry Pi で管理 |
-| 5 | **研究・開発プロトタイプ** | 開発者 | OpenAPI で他システムと統合、TFLite モデルの評価環境 |
+M1・M2・M3の実装は並列に進める。実機deployとOTAはオーケストレーターが順番を管理し、設定・データのバックアップを確保する。M2の観測開始日は実際のtimer稼働時に記録し、7日経過前には連続稼働を達成扱いにしない。現在の観測ツールの実装完了だけではM2は完了しない。
 
-### MVP で追う KPI
+M4の評価ツールは並列に整備できるが、現場画像と正解ラベルが揃うまでは猫検知の精度を判断できない。合格しきい値は評価前に明示し、結果を見てbaselineを変更しない。通知は設定済みでも配信成功を別途検証する。
 
-| KPI | 目標値 | 計測方法 |
-|-----|--------|---------|
-| 継続稼働日数 | 30 日以上 (Raspberry Pi) | `/healthz/ready` の継続モニタリング |
-| 撮影成功率 | 95% 以上 (upload 成功 / 試行) | Prometheus `upload_total` / `upload_errors_total` |
-| 検知通知の有用性 | 誤報率 < 20% | 人物検知スコアしきい値の調整で評価 |
-| 復旧時間 (RTO) | 15 分以内 | バックアップからのリストア訓練で計測 |
-| 運用工数 | 月 30 分以下 | ログ確認・容量管理・バックアップ取得の実績 |
+基盤の実機評価後、検知時の短い動画、通知の有用性、複数ESP32-CAMの負荷評価を個別Issueで計画する。Tapo・外部保存先・可動部の制御は接続方式、認証、費用、必要性を調査してから着手する。サーバー側APIがあることを端末からの動画取得や外部連携の完成とは扱わない。
 
-### 優先しない機能（今はやらないこと）
-
-以下は将来の Issue として管理しており、MVP 判断には含めません:
-
-| 機能 | 対応 Issue | 理由 |
-|------|----------|------|
-| ライブビデオストリーミング | [#9](https://github.com/1222-takeshi/server_for_esp32cam/issues/9) | 電力・帯域コストが高く、スナップショットで代替可能 |
-| 将来の機能拡張案 | [#20](https://github.com/1222-takeshi/server_for_esp32cam/issues/20) | 優先順位未確定 |
-| 動画アップロード API | [#35](https://github.com/1222-takeshi/server_for_esp32cam/issues/35) | ストレージ設計・形式選定が必要 |
-
-### 運用コスト・制約の比較
-
-| 環境 | ハード費用 | 電力 | スキル要件 | 制約 |
-|------|-----------|------|----------|------|
-| Mac ローカル (開発) | 既存 PC | 通常 | Python 環境 | 常時稼働には不向き |
-| Raspberry Pi 4 (推奨) | 約 ¥8,000〜 | 約 3〜5W | SSH・Docker | 10 台規模まで |
-| クラウド (将来) | 月額従量 | — | クラウド知識 | Redis・外部ボリューム必要 |
-
----
-
-## 機能ロードマップ
-
-### 1. 単一カメラスナップショット経路の安定化 ✅
-
-*   upload 検証と保存挙動を強化する
-*   ブラウザ UI を単純かつ確実に保つ
-*   deep sleep 前提の低電力スナップショット運用を改善する
-
-### 2. 保存先 backend の柔軟化
-
-*   ESP32-CAM からの upload は常に中央サーバー API に送る
-*   サーバー側で次の保存先を切り替えられるようにする
-    * ローカルディスク
-    * NAS
-    * Google Drive
-
-### 3. camera-aware な扱いの拡張 ✅
-
-*   upload 契約には最初から `device_id` と `captured_at` を含める
-*   保存先 backend 拡張時に、資産をカメラ単位に整理できるようにする
-*   UI 上で画像ソースを見分けやすくする
-
-### 4. ESP32-CAM 遠隔制御APIの設計
-
-*   deep sleep 前提のため、サーバーpushではなく device polling で desired config を取得する
-*   まずは撮影間隔、解像度、JPEG品質、向き補正、再起動要求、OTA待受要求に限定する
-*   OTA待受は非空OTAパスワード必須とし、次回起床時の明示的な待受ウィンドウ内だけ受け付ける
-*   参照: [#137 ESP32-CAM遠隔制御APIを設計する](https://github.com/1222-takeshi/server_for_esp32cam/issues/137), [`docs/design/remote-control-api.md`](../design/remote-control-api.md)
-
-### 5. 短い動画クリップの評価
-
-*   連続動画は最初のデフォルトにしない
-*   スナップショットだけでは足りない場合に短いクリップ upload を検討する
-*   低電力運用を引き続き設計制約とする
-*   参照: [#35 動画アップロード API と保存方式の設計](https://github.com/1222-takeshi/server_for_esp32cam/issues/35), [`docs/design/video-upload.md`](../design/video-upload.md)
-
-### 6. 高度機能は後回しにする
-
-*   ML 処理
-*   アラート / 通知
-*   モーターなど可動部を伴うリモート I/O 制御
-*   より高度な自動化パイプライン
-
-これらは、スナップショットと保存経路が安定した後に追加します。
-
----
-
-## 関連ドキュメント
-
-| ドキュメント | 内容 |
-|------------|------|
-| [`docs/ja/requirements.md`](requirements.md) | 機能・非機能要件と受け入れ基準 |
-| [`docs/ja/business-scenarios.md`](business-scenarios.md) | 事業・導入シナリオとKPI |
-| [`docs/design/remote-control-api.md`](../design/remote-control-api.md) | ESP32-CAM 遠隔制御API設計 |
-| [`docs/ja/security.md`](security.md) | 脅威モデルと運用チェックリスト |
-| [`docs/ja/operations-runbook.md`](operations-runbook.md) | 運用 Runbook |
-| [`docs/deployment.md`](../deployment.md) | Docker デプロイガイド |
+詳細な利用目的は [business-scenarios.md](business-scenarios.md)、遠隔設定契約は [remote-control-api.md](../design/remote-control-api.md)、運用手順は [operations-runbook.md](operations-runbook.md) を参照する。
