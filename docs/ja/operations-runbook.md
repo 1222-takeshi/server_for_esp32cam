@@ -219,7 +219,12 @@ docker compose start app
 echo "バックアップ完了: $BACKUP_DIR"
 ```
 
-### オンラインバックアップ (停止なし / WAL モード利用)
+### オンラインバックアップ (停止なし / DB のみ整合)
+
+ホストの `scripts/backup.sh` を使う場合は `sqlite3` CLI が必要です。
+Raspberry Pi の Ubuntu では最初に `sudo apt-get update && sudo apt-get install sqlite3`
+で導入し、`command -v sqlite3` で確認してください。このスクリプトは DB だけを
+取得します。画像を含む完全な対が必要なら停止バックアップを使用します。
 
 SQLite は WAL モードが有効になっているため、停止なしでもバックアップ可能です:
 
@@ -227,11 +232,11 @@ SQLite は WAL モードが有効になっているため、停止なしでも�
 BACKUP_DIR="./backup/$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$BACKUP_DIR/uploads"
 
-# DB をオンラインバックアップ (WAL ファイルが統合される)
+# SQLite の online backup API で WAL を含む整合した DB を取得する
 docker run --rm \
-  -v server_for_esp32cam_data:/src \
+  -v server_for_esp32cam_data:/src:ro \
   -v "$(pwd)/$BACKUP_DIR":/dst \
-  busybox sh -c "cp /src/esp32cam.sqlite3 /dst/esp32cam.sqlite3; sync"
+  python:3.11-slim python -c 'import sqlite3; src=sqlite3.connect("file:/src/esp32cam.sqlite3?mode=ro", uri=True); dst=sqlite3.connect("/dst/esp32cam.sqlite3"); src.backup(dst); dst.close(); src.close()'
 
 # 画像ファイルをコピー
 docker run --rm \
@@ -242,7 +247,10 @@ docker run --rm \
 echo "バックアップ完了: $BACKUP_DIR"
 ```
 
-> オンラインバックアップ中に書き込みが発生した場合、画像ファイルと DB の間に最大数秒のずれが生じる可能性があります。重要な運用では停止バックアップを推奨します。
+> DB ファイルを `cp` するだけでは WAL 内の未checkpointデータが欠落し得ます。
+> online backup API が保証するのは DB 自体の整合性です。画像とのコピー時点は
+> 原子的に揃わず、保存処理や retention と競合し得ます。完全な対を取得するには
+> 上の停止バックアップを使ってください。
 
 ### バックアップの確認
 
@@ -252,11 +260,27 @@ sqlite3 "$BACKUP_DIR/esp32cam.sqlite3" "SELECT COUNT(*) FROM snapshots;"
 
 # 画像ファイルの件数確認
 find "$BACKUP_DIR/uploads" -name "*.jpg" | wc -l
+
+# 元データを変更せず、隔離コピーした DB と画像参照を検査する
+python3 scripts/check_backup.py --db "$BACKUP_DIR/esp32cam.sqlite3" \
+  --uploads "$BACKUP_DIR/uploads"
 ```
+
+`status: passed` は SQLite quick_check と全 snapshot/video のファイル存在・
+サイズが一致したことを示します。`failed` のときは復元に使わず、JSON の
+`missing_files`、`size_mismatches`、`invalid_paths`、`incomplete` を確認します。
+`error: backup_read_failed` は破損DBや必要テーブル欠落などで読み取りに失敗した
+ことを示します。`error: backup_input_missing_or_unsafe` は DB/画像dir欠落、
+DB symlink、WAL sidecar存在を示します。正しいバックアップ一式を選び直してください。
+この検査はアプリ起動や画像表示の成功までは保証しません。
 
 ---
 
 ## 7. リストア
+
+まず前節の検査をバックアップに実行し、停止を伴う復元手順を別の隔離環境で
+演習してください。本番復元の前に現在のデータを保全し、復元後は readiness と
+画像の表示を確認します。readiness だけでは画像と DB の対応は検証できません。
 
 ```bash
 BACKUP_DIR="./backup/<使用するバックアップのディレクトリ>"

@@ -16,6 +16,11 @@ DB_PATH="${DB_PATH:-./esp32cam.sqlite3}"
 BACKUP_DIR="${BACKUP_DIR:-./backups}"
 RETAIN_DAYS="${RETAIN_DAYS:-7}"
 
+if ! command -v sqlite3 >/dev/null 2>&1; then
+    echo "ERROR: sqlite3 CLI is required (install package sqlite3)" >&2
+    exit 1
+fi
+
 # Validate that RETAIN_DAYS is a positive integer to prevent find -mtime misuse.
 if ! [[ "$RETAIN_DAYS" =~ ^[1-9][0-9]*$ ]]; then
     echo "ERROR: RETAIN_DAYS must be a positive integer, got: '$RETAIN_DAYS'" >&2
@@ -36,11 +41,20 @@ fi
 mkdir -p "$BACKUP_DIR"
 
 DEST="${BACKUP_DIR}/esp32cam_$(date +%Y%m%d).sqlite3"
-# Restrict new file permissions to owner-only before SQLite creates the backup file.
 umask 077
-# Use printf to pass the path to .backup, avoiding shell expansion inside the dot-command.
-sqlite3 "$DB_PATH" "$(printf '.backup %s' "$DEST")"
-chmod 600 "$DEST"
+TMP=$(mktemp "${BACKUP_DIR}/.esp32cam_$(date +%Y%m%d).XXXXXX")
+trap 'rm -f "$TMP" "$TMP-wal" "$TMP-shm"' EXIT
+# Publish only a complete, checked SQLite backup; do not replace yesterday's
+# usable copy if .backup fails partway through.
+sqlite3 "$DB_PATH" "$(printf '.backup %s' "$TMP")"
+if [ "$(sqlite3 "$TMP" 'PRAGMA journal_mode=DELETE; PRAGMA quick_check;')" != "$(printf 'delete\nok')" ]; then
+    echo "ERROR: backup integrity check failed" >&2
+    exit 1
+fi
+chmod 600 "$TMP"
+rm -f "$TMP-wal" "$TMP-shm"
+mv -f "$TMP" "$DEST"
+trap - EXIT
 echo "Backup written: $DEST"
 
 find "$BACKUP_DIR" -name 'esp32cam_*.sqlite3' -mtime "+${RETAIN_DAYS}" -delete
