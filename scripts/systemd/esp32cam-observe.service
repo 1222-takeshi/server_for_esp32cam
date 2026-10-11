@@ -1,0 +1,9 @@
+[Unit]
+Description=Record one ESP32-CAM host observation
+After=esp32cam-server.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/server_for_esp32cam
+ExecStart=/usr/bin/python3 scripts/observe_host.py --storage-path uploads --output %h/.local/state/esp32cam/observations.jsonl
+TimeoutStartSec=75

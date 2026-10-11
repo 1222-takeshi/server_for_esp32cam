@@ -38,15 +38,39 @@ curl http://localhost:8080/healthz/ready
 ```json
 {
   "status": "ready",
-  "checks": {
-    "database": "ok",
-    "storage": "ok",
-    "inference": "ok"
-  }
+  "db": "ok",
+  "storage": "ok",
+  "disk_free_mb": 1024,
+  "inference_worker": "running"
 }
 ```
 
-いずれかの `checks` が `"ok"` 以外の場合は障害対応セクションへ進む。
+HTTP 503 または `status: degraded` の場合は DB、保存先、空き容量、推論ワーカーを確認します。
+
+### 7 日間の安定性観測（Raspberry Pi の user systemd）
+
+同梱の one-shot sampler はローカル `/healthz/ready` と指定カメラの
+`/api/cameras/<id>/connection` を問い合わせ、ホストの空き容量・1 分負荷・
+利用可能メモリを 1 行の JSON として追記します。カメラ ID は対象機のものを
+指定してください。API key や認証 URL は不要で、レスポンス全体や秘密を記録しません。
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp scripts/systemd/esp32cam-observe.{service,timer} ~/.config/systemd/user/
+# service の ExecStart に --camera-id <対象ID> を追加する（複数なら繰り返す）
+systemctl --user daemon-reload
+systemctl --user enable --now esp32cam-observe.timer
+systemctl --user list-timers esp32cam-observe.timer
+```
+
+5 分間隔で 7 日間なら約 2016 行です。`~/.local/state/esp32cam/observations.jsonl`
+と `.jsonl.1` に各最大 8 MiB を保持します。ローテーション後に古い行は消えます。
+全期間を残すには 7 日終了時に両ファイルを別媒体へコピーし、行数・最初と最後の
+`timestamp_utc` を確認してください。収集開始前の時間は実測期間に含めません。
+readiness の `error` と各 camera の `error` は独立して記録されます。
+`status: offline` は通信途絶、`error: unreachable` は監視側の問い合わせ失敗です。
+`load_1m` は CPU 使用率ではなく、CPU 数と比較するための 1 分平均負荷です。
+観測が終わったら `systemctl --user disable --now esp32cam-observe.timer` で停止します。
 
 ### コンテナ状態確認
 
