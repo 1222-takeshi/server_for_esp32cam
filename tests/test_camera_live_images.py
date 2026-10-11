@@ -244,3 +244,52 @@ assert.equal(count.textContent,'1');
     result = subprocess.run([node, '-e', f'const SCRIPT={json.dumps(script)};\n' + harness],
                             capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize('fail_initial', [False, True])
+def test_hidden_detail_fetches_once_then_waits_until_visible(app, fail_initial):
+    node = shutil.which('node')
+    if not node:
+        pytest.skip('Node is required for browser polling regression checks')
+    script = (__import__('pathlib').Path(app.static_folder) / 'saved_snapshots.js').read_text()
+    harness = r'''
+const vm=require('vm'),assert=require('assert');
+const list={dataset:{apiUrl:'/api/cameras/cam/snapshots?limit=20',keepOnlyDetected:'false'},
+ replaceChildren(node){this.children=node.children}};
+const count={textContent:'確認中'},state={textContent:'保存済み画像を確認中…'};
+const document={hidden:true,getElementById:id=>({
+ 'snap-list':list,'snapshot-count':count,'saved-snapshot-state':state})[id]||null,
+ createDocumentFragment:()=>({children:[],appendChild(child){this.children.push(child)}}),
+ createElement:()=>({textContent:'',className:''})};
+const timers=[];let calls=0;
+const response=()=>({ok:true,json:async()=>({total:0,snapshots:[]})});
+const context={document,window:{CameraShared:{formatTimestamp:x=>x}},
+ AbortController:class{constructor(){this.signal={}}abort(){}},
+ setTimeout:(fn,ms)=>{timers.push({fn,ms,used:false});return timers.length},
+ clearTimeout:()=>{},
+ fetch:(url,options)=>{calls++;assert.equal(url,list.dataset.apiUrl);
+ assert.equal(options.cache,'no-store');
+ return calls===1&&FAIL_INITIAL?Promise.reject(new Error('network')):Promise.resolve(response())}};
+const tick=()=>new Promise(resolve=>setImmediate(resolve));
+function nextPoll(){const timer=timers.find(t=>t.ms===10000&&!t.used);
+ assert.ok(timer,'next poll scheduled');timer.used=true;timer.fn()}
+(async()=>{
+ vm.runInNewContext(SCRIPT,context);
+ assert.equal(calls,1,'hidden startup must fetch once');
+ await tick();await tick();
+ assert.equal(state.textContent,FAIL_INITIAL?
+  '保存済み画像を確認できません（表示内容は前回確認時点）':'最終保存: なし');
+ if(!FAIL_INITIAL)assert.equal(count.textContent,'0');
+ nextPoll();
+ assert.equal(calls,1,'hidden failure/success must not repeatedly fetch');
+ document.hidden=false;
+ nextPoll();
+ assert.equal(calls,2,'visible tab resumes polling');
+ await tick();await tick();
+ assert.equal(count.textContent,'0');
+ assert.equal(state.textContent,'最終保存: なし');
+})().catch(error=>{console.error(error);process.exitCode=1});
+'''
+    prefix = f'const SCRIPT={json.dumps(script)},FAIL_INITIAL={json.dumps(fail_initial)};\n'
+    result = subprocess.run([node, '-e', prefix + harness], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
