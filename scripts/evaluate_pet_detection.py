@@ -173,6 +173,13 @@ def evaluate(
         object_tp += matched
         object_fp += len(predictions) - matched
         object_fn += len(truth) - matched
+    if (sha256(model), sha256(labels), sha256(manifest)) != (
+        model_hash, labels_hash, manifest_hash
+    ):
+        raise ValueError("Model, labels, or manifest changed during evaluation")
+    for image, expected_hash, _ in samples:
+        if sha256(image) != expected_hash:
+            raise ValueError(f"Image changed during evaluation: {image}")
     ordered = sorted(latencies_ms)
     p95_index = math.ceil(0.95 * len(ordered)) - 1
     return {
@@ -212,7 +219,8 @@ def main(argv: list[str] | None = None) -> int:
             class_id=args.class_id, threshold=args.threshold,
             iou_threshold=args.iou_threshold, num_threads=args.num_threads,
         )
-        args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        with args.output.open("x", encoding="utf-8") as output:
+            output.write(json.dumps(result, indent=2, sort_keys=True) + "\n")
     except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
         parser.error(str(exc))
     return 0

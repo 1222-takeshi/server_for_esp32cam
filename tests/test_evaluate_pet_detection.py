@@ -125,3 +125,35 @@ def test_changed_image_fails_before_inference(tmp_path):
     (tmp_path / "a.jpg").write_bytes(b"altered")
     with pytest.raises(ValueError, match="SHA-256 mismatch"):
         _evaluate(manifest, model, labels)
+
+@pytest.mark.parametrize("source", ["model.tflite", "labels.txt", "manifest.json", "a.jpg"])
+def test_source_changed_during_inference_rejected(tmp_path, source):
+    manifest, model, labels = _fixture(tmp_path, [("a.jpg", b"clear", [])])
+
+    class MutatingDetector(FakeDetector):
+        def detect(self, image_bytes):
+            target = tmp_path / source
+            target.write_bytes(target.read_bytes() + b"changed")
+            return super().detect(image_bytes)
+
+    with pytest.raises(ValueError, match="changed during evaluation"):
+        evaluate(
+            manifest, model, labels, label="cat", class_id=1,
+            detector_factory=MutatingDetector,
+        )
+
+
+def test_cli_refuses_existing_output_even_after_successful_evaluation(tmp_path, monkeypatch):
+    from scripts import evaluate_pet_detection as cli
+
+    manifest, model, labels = _fixture(tmp_path, [("a.jpg", b"clear", [])])
+    original = model.read_bytes()
+    monkeypatch.setattr(cli, "evaluate", lambda *args, **kwargs: {"ok": True})
+    with pytest.raises(SystemExit) as exc:
+        cli.main([
+            "--manifest", str(manifest), "--model", str(model),
+            "--labels", str(labels), "--label", "cat", "--class-id", "1",
+            "--output", str(model),
+        ])
+    assert exc.value.code == 2
+    assert model.read_bytes() == original
