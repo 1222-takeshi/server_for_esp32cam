@@ -113,6 +113,13 @@ def test_trickled_header_stops_at_monotonic_deadline():
                              read_timeout=1, clock=Clock(step=0.1))
 
 
+def test_header_line_limit_is_exact():
+    assert len(collector._line(Response(b"x" * 1022 + b"\r\n"),
+                               lambda: 0, 100, 1)) == 1024
+    with pytest.raises(collector.StreamError, match="header_too_large"):
+        collector._line(Response(b"x" * 1023 + b"\r\n"), lambda: 0, 100, 1)
+
+
 def test_collect_saves_unique_unlabeled_images_and_diagnostics(tmp_path):
     first, second = jpeg("red"), jpeg("blue")
     inventory = run_collect(tmp_path, part(first) + part(first) + part(second),
@@ -165,6 +172,26 @@ def test_disk_budget_stops_before_second_save(tmp_path, monkeypatch):
     assert len(inventory["samples"]) == 1
     assert inventory["counts"]["stream_error"] == 1
     assert inventory["image_bytes"] <= 2 * 1024 * 1024
+
+
+def test_failed_fsync_removes_only_attempted_file_then_retry_succeeds(tmp_path, monkeypatch):
+    real_fsync = collector.os.fsync
+    calls = 0
+
+    def fail_once(fd):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("simulated fsync failure")
+        real_fsync(fd)
+
+    monkeypatch.setattr(collector.os, "fsync", fail_once)
+    frame = jpeg("red")
+    inventory = run_collect(tmp_path, part(frame), duration=5, max_images=1)
+    assert len(inventory["samples"]) == 1
+    assert inventory["counts"]["stream_error"] == 1
+    assert [path.name for path in (tmp_path / "run/images").iterdir()] == ["frame-0001.jpg"]
+    assert (tmp_path / "run/images/frame-0001.jpg").read_bytes() == frame
 
 
 def test_local_http_mjpeg_integration(tmp_path):

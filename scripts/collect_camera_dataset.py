@@ -79,7 +79,7 @@ def _read1(response, size: int, clock, deadline: float, read_timeout: float) -> 
 
 def _line(response, clock, deadline: float, read_timeout: float) -> bytes:
     line = bytearray()
-    while len(line) <= MAX_HEADER_BYTES:
+    while len(line) < MAX_HEADER_BYTES:
         part = _read1(response, 1, clock, deadline, read_timeout)
         if not part:
             raise StreamError("incomplete_part")
@@ -148,11 +148,18 @@ def jpeg_diagnostic(data: bytes) -> dict[str, object]:
 
 
 def _save_frame(path: Path, frame: bytes) -> None:
-    with path.open("xb") as stream:
-        stream.write(frame)
-        stream.flush()
-        os.fsync(stream.fileno())
-    path.chmod(0o400)
+    created = False
+    try:
+        with path.open("xb") as stream:
+            created = True
+            stream.write(frame)
+            stream.flush()
+            os.fsync(stream.fileno())
+        path.chmod(0o400)
+    except OSError:
+        if created:
+            path.unlink(missing_ok=True)
+        raise
 
 
 def collect(url: str, camera_id: str, output: Path, *, duration: float = 600,
