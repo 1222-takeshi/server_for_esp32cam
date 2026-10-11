@@ -157,3 +157,40 @@ def test_cli_refuses_existing_output_even_after_successful_evaluation(tmp_path, 
         ])
     assert exc.value.code == 2
     assert model.read_bytes() == original
+
+
+def test_match_boxes_maximizes_object_true_positives():
+    # Greedy highest-IoU matching takes A-X and strands B. A-Y + B-X yields 2 TPs.
+    truth = [(0.0, 0.0, 0.6, 1.0), (0.4, 0.0, 1.0, 1.0)]
+    predictions = [(0.0, 0.0, 0.9, 1.0), (0.05, 0.0, 0.85, 1.0)]
+    assert match_boxes(truth, predictions, 0.5) == 2
+
+
+def test_manifest_hash_matches_bytes_parsed_even_if_file_changes(tmp_path, monkeypatch):
+    from scripts import evaluate_pet_detection as cli
+
+    manifest, model, labels = _fixture(tmp_path, [("a.jpg", b"clear", [])])
+    original_loader = cli.load_manifest
+
+    def changing_loader(path, *, source_bytes):
+        path.write_bytes(path.read_bytes() + b" ")
+        return original_loader(path, source_bytes=source_bytes)
+
+    monkeypatch.setattr(cli, "load_manifest", changing_loader)
+    with pytest.raises(ValueError, match="changed during detector initialization"):
+        _evaluate(manifest, model, labels)
+
+
+def test_label_file_change_during_detector_initialization_rejected(tmp_path):
+    manifest, model, labels = _fixture(tmp_path, [("a.jpg", b"clear", [])])
+
+    class ChangingDetector(FakeDetector):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            labels.write_text("person\ndog\ncat\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="changed during detector initialization"):
+        evaluate(
+            manifest, model, labels, label="cat", class_id=1,
+            detector_factory=ChangingDetector,
+        )

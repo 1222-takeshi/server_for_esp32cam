@@ -35,8 +35,10 @@ def _box(value: object) -> tuple[float, float, float, float]:
     return x1, y1, x2, y2
 
 
-def load_manifest(path: Path) -> list[tuple[Path, str, list[tuple[float, ...]]]]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
+def load_manifest(
+    path: Path, *, source_bytes: bytes | None = None
+) -> list[tuple[Path, str, list[tuple[float, ...]]]]:
+    payload = json.loads(source_bytes if source_bytes is not None else path.read_bytes())
     if not isinstance(payload, dict) or set(payload) != {"version", "samples"}:
         raise ValueError("Manifest must contain only version and samples")
     if type(payload["version"]) is not int or payload["version"] != 1:
@@ -72,8 +74,11 @@ def load_manifest(path: Path) -> list[tuple[Path, str, list[tuple[float, ...]]]]
     return samples
 
 
-def validate_label_mapping(labels_path: Path, label: str, class_id: int) -> None:
-    labels = [line.strip() for line in labels_path.read_text(encoding="utf-8").splitlines()]
+def validate_label_mapping(
+    labels_path: Path, label: str, class_id: int, *, source_bytes: bytes | None = None
+) -> None:
+    content = source_bytes if source_bytes is not None else labels_path.read_bytes()
+    labels = [line.strip() for line in content.decode("utf-8").splitlines()]
     labels = [entry for entry in labels if entry]
     if not label or class_id < 0 or class_id >= len(labels) or labels[class_id] != label:
         raise ValueError("Requested label and class ID do not match the labels file")
@@ -93,23 +98,30 @@ def _iou(first: tuple[float, ...], second: tuple[float, ...]) -> float:
 def match_boxes(
     truth: list[tuple[float, ...]], predictions: list[tuple[float, ...]], iou_threshold: float
 ) -> int:
-    candidates = sorted(
-        (
-            (_iou(expected, observed), truth_index, prediction_index)
-            for truth_index, expected in enumerate(truth)
-            for prediction_index, observed in enumerate(predictions)
-        ),
-        reverse=True,
-    )
-    used_truth: set[int] = set()
-    used_predictions: set[int] = set()
-    for iou, truth_index, prediction_index in candidates:
-        if iou < iou_threshold:
-            break
-        if truth_index not in used_truth and prediction_index not in used_predictions:
-            used_truth.add(truth_index)
-            used_predictions.add(prediction_index)
-    return len(used_truth)
+    # Augmenting paths maximize the number of matched objects. Taking the
+    # highest-IoU pair first can strand a second true object unnecessarily.
+    neighbors = [
+        sorted(
+            (prediction_index for prediction_index, observed in enumerate(predictions)
+             if _iou(expected, observed) >= iou_threshold),
+            key=lambda prediction_index: _iou(expected, predictions[prediction_index]),
+            reverse=True,
+        )
+        for expected in truth
+    ]
+    owner: dict[int, int] = {}
+
+    def augment(truth_index: int, visited: set[int]) -> bool:
+        for prediction_index in neighbors[truth_index]:
+            if prediction_index in visited:
+                continue
+            visited.add(prediction_index)
+            if prediction_index not in owner or augment(owner[prediction_index], visited):
+                owner[prediction_index] = truth_index
+                return True
+        return False
+
+    return sum(augment(truth_index, set()) for truth_index in range(len(truth)))
 
 
 def _metrics(tp: int, fp: int, fn: int) -> dict[str, int | float | None]:
@@ -138,9 +150,13 @@ def evaluate(
         raise ValueError("Detection threshold must be [0,1] and IoU threshold must be (0,1]")
     if num_threads is not None and num_threads < 1:
         raise ValueError("num_threads must be positive")
-    validate_label_mapping(labels, label, class_id)
-    samples = load_manifest(manifest)
-    model_hash, labels_hash, manifest_hash = sha256(model), sha256(labels), sha256(manifest)
+    labels_bytes = labels.read_bytes()
+    manifest_bytes = manifest.read_bytes()
+    validate_label_mapping(labels, label, class_id, source_bytes=labels_bytes)
+    samples = load_manifest(manifest, source_bytes=manifest_bytes)
+    model_hash = sha256(model)
+    labels_hash = hashlib.sha256(labels_bytes).hexdigest()
+    manifest_hash = hashlib.sha256(manifest_bytes).hexdigest()
     effective_threads = num_threads if num_threads is not None else (os.cpu_count() or 4)
     detector = detector_factory(
         model_path=model,
@@ -150,6 +166,10 @@ def evaluate(
         person_class_id=class_id,
         num_threads=effective_threads,
     )
+    if (sha256(model), sha256(labels), sha256(manifest)) != (
+        model_hash, labels_hash, manifest_hash
+    ):
+        raise ValueError("Model, labels, or manifest changed during detector initialization")
     image_tp = image_fp = image_fn = image_tn = 0
     object_tp = object_fp = object_fn = 0
     latencies_ms: list[float] = []
