@@ -153,6 +153,9 @@ curl http://127.0.0.1:8080/healthz/ready
 
 ### 2b. Deploy without Docker using user systemd
 
+For seven-day host observations after deployment, see the
+[Japanese operations runbook](ja/operations-runbook.md#1-日常確認).
+
 If Docker is not installed and sudo is not available in the automation session,
 run the service with a Python virtual environment under the `ubuntu` user:
 

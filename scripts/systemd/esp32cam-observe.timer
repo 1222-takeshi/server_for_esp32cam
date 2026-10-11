@@ -1,0 +1,10 @@
+[Unit]
+Description=Sample ESP32-CAM stability every five minutes
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+Unit=esp32cam-observe.service
+
+[Install]
+WantedBy=timers.target
