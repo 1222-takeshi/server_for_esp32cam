@@ -14,6 +14,7 @@ from pathlib import Path
 
 MAX_INPUT_BYTES = 8 * 1024 * 1024
 MAX_LINE_BYTES = 8192
+MAX_INPUT_LINES = 50000
 MIN_DURATION_SECONDS = 7 * 24 * 60 * 60
 JITTER_SECONDS = 60
 MIN_SAMPLE_RATIO = 0.99
@@ -50,7 +51,12 @@ def _read_sources(paths: list[Path]) -> tuple[list[bytes], list[dict[str, object
             data = stream.read(MAX_INPUT_BYTES + 1)
         if len(data) > MAX_INPUT_BYTES:
             raise ValueError("each input must be at most 8 MiB")
-        lines.extend(data.splitlines())
+        if data.count(b"\n") > MAX_INPUT_LINES:
+            raise ValueError("too many input lines")
+        file_lines = data.split(b"\n") if data else []
+        if data.endswith(b"\n"):
+            file_lines.pop()
+        lines.extend(file_lines)
         sources.append({"input_index": index, "sha256": hashlib.sha256(data).hexdigest(),
                         "bytes": len(data)})
     return lines, sources

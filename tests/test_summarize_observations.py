@@ -199,3 +199,10 @@ def test_oversized_input_is_rejected(tmp_path):
     path.write_bytes(b"x" * (summary.MAX_INPUT_BYTES + 1))
     with pytest.raises(ValueError, match="8 MiB"):
         summary.summarize([path], START, END, ["camera-a"], now=END)
+
+
+def test_excessive_line_count_is_rejected_before_splitting(tmp_path):
+    path = tmp_path / "many-lines.jsonl"
+    path.write_bytes(b"\n" * (summary.MAX_INPUT_LINES + 1))
+    with pytest.raises(ValueError, match="too many input lines"):
+        summary.summarize([path], START, END, ["camera-a"], now=END)
