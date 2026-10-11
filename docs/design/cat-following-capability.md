@@ -27,7 +27,7 @@
 ### Inputs, geometry, outputs
 
 - 観測入力の契約: `camera_id`, `frame_id`, 信頼できる `captured_at`, `received_at`, `inferred_at`, 画像の `width/height`, 向き/反転設定, `calibration_id`, `label`, `score`, 正規化 `bbox`, nullable `track_id`, 推論状態, 暗所品質指標。既存APIの検知値を活用しつつ、存在しない時刻・品質・校正フィールドは後続Issueで設計する。元画像と正解ラベルは不変として扱う。
-- `0 ≤ x1 < x2 ≤ 1`, `0 ≤ y1 < y2 ≤ 1` を満たす猫bbox一件だけを候補にする。中心は `u=(x1+x2)/2`, `v=(y1+y2)/2`。画像中心との差は `u−c_x/W`, `v−c_y/H`（`c_x,c_y` は校正済み主点、`W,H` は画像寸法）。既知の焦点距離 `f_x,f_y` を画素で表すと、カメラ座標の角度誤差は `atan((uW−c_x)/f_x)`, `atan((vH−c_y)/f_y)`。実測の水平FOVしかない初期シミュレーションでは `f_x≈W/(2tan(HFOV/2))` を暫定値にできるが、レンズ歪みや反転を含む校正と実測で確かめる。モータのpan/tiltの符号・ゼロ点への写像は機材設置後に決める。[OpenCVのpinhole model](https://docs.opencv.org/doc/doxygen/html/d4/d93/group__calib.html) に基づく近似であり、FOV値だけを推測してモータ角度に直結しない。
+- `0 ≤ x1 < x2 ≤ 1`, `0 ≤ y1 < y2 ≤ 1` を満たす猫bbox一件だけを候補にする。中心は `u=(x1+x2)/2`, `v=(y1+y2)/2`。画像中心との差は `u−c_x/W`, `v−c_y/H`（`c_x,c_y` は校正済み主点、`W,H` は画像寸法）。既知の焦点距離 `f_x,f_y` を画素で表すと、カメラ座標の角度誤差（度）は `pan_error_deg=atan((uW−c_x)/f_x)×180/π`, `tilt_error_deg=atan((vH−c_y)/f_y)×180/π`。実測の水平FOVしかない初期シミュレーションでは `f_x≈W/(2tan(HFOV_rad/2))`（`HFOV_rad` はラジアン）を暫定値にできるが、レンズ歪みや反転を含む校正と実測で確かめる。モータのpan/tiltの符号・ゼロ点への写像は機材設置後に決める。[OpenCVのpinhole model](https://docs.opencv.org/doc/doxygen/html/d4/d93/group__calib.html) に基づく近似であり、FOV値だけを推測してモータ角度に直結しない。
 - シミュレーション出力は `frame_id`, `candidate_id`, `pan_error_deg`, `tilt_error_deg`, `valid/hold_reason`, `calibration_id`, 計算時刻、使用したbbox/scoreを持つ。無効なbbox、NaN、寸法0、校正欠落、未来/古い時刻、猫以外、複数猫、低信頼度、暗所品質不足なら `hold` として角度指令を生成しない。候補選択のしきい値と複数猫の扱いは現場評価前に固定する。
 - 後続の実機指令は設定済みの角度範囲、最大速度/加速度、deadband、一回の最大移動量、更新間隔、停止スイッチを全て満たす場合だけ発行する。制限値は機材仕様と実測から決める。再送・順序逆転・古い `frame_id` で重複移動しないよう、指令IDとACK/timeout、停止時の電気的挙動を契約化する。
 
