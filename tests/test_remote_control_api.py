@@ -83,7 +83,7 @@ def test_admin_put_rejects_invalid_or_unknown_config_keys(app):
 
     invalid = client.put(
         "/api/cameras/living-room-cam/desired-config",
-        json={"config": _valid_config(capture_interval_seconds=10)},
+        json={"config": _valid_config(capture_interval_seconds=4)},
         headers=_admin_headers(),
     )
     unknown = client.put(
@@ -96,6 +96,26 @@ def test_admin_put_rejects_invalid_or_unknown_config_keys(app):
     assert "capture_interval_seconds" in invalid.get_json()["message"]
     assert unknown.status_code == 400
     assert "shell_command" in unknown.get_json()["message"]
+
+
+def test_capture_interval_boundary_and_type_contract(app):
+    _enable_remote_auth(app)
+    client = app.test_client()
+    for interval in (5, 86400):
+        response = client.put(
+            "/api/cameras/living-room-cam/desired-config",
+            json={"config": _valid_config(capture_interval_seconds=interval)},
+            headers=_admin_headers(),
+        )
+        assert response.status_code == 200
+        assert response.get_json()["config"]["capture_interval_seconds"] == interval
+    for interval in (4, 86401, True, 5.5, "5"):
+        response = client.put(
+            "/api/cameras/living-room-cam/desired-config",
+            json={"config": _valid_config(capture_interval_seconds=interval)},
+            headers=_admin_headers(),
+        )
+        assert response.status_code == 400
 
 
 def test_device_get_desired_config_requires_matching_device_key(app):
@@ -205,8 +225,8 @@ def test_device_ack_records_result_and_clears_one_shot_requests(app):
         "/api/devices/living-room-cam/desired-config/ack",
         json={
             "version": created["version"],
-            "applied": False,
-            "message": "ota timeout",
+            "applied": True,
+            "message": "applied",
             "firmware_version": "0.3.0",
             "free_heap": 123456,
         },
@@ -217,10 +237,32 @@ def test_device_ack_records_result_and_clears_one_shot_requests(app):
     assert ack.status_code == 200
     ack_body = ack.get_json()
     assert ack_body["last_acknowledged_version"] == created["version"]
-    assert ack_body["last_acknowledged_success"] is False
+    assert ack_body["last_acknowledged_success"] is True
     assert ack_body["config"]["restart_requested"] is False
     assert ack_body["config"]["ota_update_requested"] is False
-    assert admin_get.get_json()["last_acknowledged_message"] == "ota timeout"
+    assert admin_get.get_json()["last_acknowledged_message"] == "applied"
+
+
+def test_failed_device_ack_preserves_one_shot_requests(app):
+    _enable_remote_auth(app)
+    client = app.test_client()
+    created = client.put(
+        "/api/cameras/living-room-cam/desired-config",
+        json={"config": _valid_config(restart_requested=True, ota_update_requested=True)},
+        headers=_admin_headers(),
+    ).get_json()
+
+    ack = client.post(
+        "/api/devices/living-room-cam/desired-config/ack",
+        json={"version": created["version"], "applied": False, "message": "ota_setup_failed"},
+        headers=_device_headers("living-room-cam"),
+    )
+
+    assert ack.status_code == 200
+    body = ack.get_json()
+    assert body["last_acknowledged_success"] is False
+    assert body["config"]["restart_requested"] is True
+    assert body["config"]["ota_update_requested"] is True
 
 
 def test_device_ack_rejects_stale_version_without_clearing_one_shot_requests(app):

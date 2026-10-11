@@ -15,7 +15,7 @@
 
 | 項目 | キー | 型 | 範囲・候補 | 備考 |
 |------|-----|----|-----------|------|
-| 撮影間隔 | `capture_interval_seconds` | integer | 60〜86400 | deep sleepのsleep時間に利用する |
+| 撮影間隔 | `capture_interval_seconds` | integer | 5〜86400 | WebSocket連続送信ではフレーム間隔。deep sleep構成ではsleep時間に利用する |
 | 解像度 | `frame_size` | string | `QVGA`, `VGA`, `SVGA`, `XGA`, `SXGA`, `UXGA` | ESP32-CAM/OV2640で実装可能な値に限定する |
 | JPEG品質 | `jpeg_quality` | integer | 10〜63 | 小さいほど高品質。帯域・保存容量とのトレードオフ |
 | 垂直反転 | `vflip` | boolean | `true` / `false` | 設置向き補正用 |
@@ -40,6 +40,10 @@
 - デバイス向けAPIでは、`device_id` と `X-API-Key` の対応関係をサーバー側で検証し、別デバイスの desired config 取得・ack を拒否する。
 - OTA待受を有効化する場合は、API認証とは別に ArduinoOTA / PlatformIO OTA upload 側でも非空の `OTA_PASSWORD` を必須にする。パスワードなしOTAはMVPの遠隔更新フローでは禁止する。
 - 設定値はデバイスが安全に扱えるホワイトリスト制にする。自由形式のコマンド文字列は受け付けない。
+- desired config の既定は撮影間隔300秒・解像度SVGA。既存のWebSocketファームウェアは5秒・QVGAで送信するため、その条件を維持して更新するときはOTA前に管理者APIで明示的に `capture_interval_seconds=5` と `frame_size=QVGA` を保存する。デバイスは起動時と接続中の周期処理で設定を取得する。
+- HTTP `POST /upload` には既定で10回/分のレート制限がある。5秒間隔の連続撮影にはWebSocket uploadを使うか、管理者がHTTP側の制限を別途調整する。
+- WebSocketファームウェアの設定pollは既定60秒ごと。HTTPの接続・読込を各500msで打ち切り、通常のGET+ACKによる撮影停止を目安2秒以内にする。DNS解決や複数chunkの低速応答はこの目安外とする。
+- 一回限り要求のACK成功がサーバーに記録されても、その応答が失われた場合はデバイスが操作を実行しない可能性がある。厳密なexactly-onceではない。運用者は状態を確認し、不確実な場合は新しいversionで要求を再発行する。
 
 ## 4. 方式比較
 

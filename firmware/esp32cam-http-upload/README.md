@@ -365,7 +365,7 @@ alive: millis=... wifi=ok camera_init=ok jpeg_capture=ok http_upload=ok http_sta
 
 ## Desired config polling / ack
 
-`esp32cam_http_upload_smoke` と OTA 対応HTTP upload envでは、Wi-Fi接続後・撮影前にサーバーの device API から desired config を取得できます。
+HTTP upload envはWi-Fi接続後・撮影前に、WebSocket upload envは起動時と接続中の周期処理で、サーバーの device API から desired config を取得します。
 
 ローカルの `include/esp32cam_config.h` で次を設定します。
 
@@ -373,6 +373,8 @@ alive: millis=... wifi=ok camera_init=ok jpeg_capture=ok http_upload=ok http_sta
 #define DEVICE_API_BASE_URL "http://192.168.1.23:8080"
 #define DEVICE_API_KEY "per-device-api-key"  // ESP32CAM_DEVICE_API_KEYS 未使用なら空文字でも可
 #define DESIRED_CONFIG_POLL_TIMEOUT_MS 10000
+#define DESIRED_CONFIG_POLL_INTERVAL_MS 60000  // WebSocket接続中の再取得間隔
+#define DESIRED_CONFIG_WS_TIMEOUT_MS 500       // WebSocket用の接続・読込それぞれのtimeout
 #define DESIRED_CONFIG_FIRMWARE_VERSION "0.3.0"
 ```
 
@@ -383,6 +385,10 @@ alive: millis=... wifi=ok camera_init=ok jpeg_capture=ok http_upload=ok http_sta
 3. `POST /api/devices/<DEVICE_ID>/desired-config/ack` で `version`, `applied`, `message`, `firmware_version`, `free_heap` を送信します。
 4. `ota_update_requested=true` かつ `ENABLE_ARDUINO_OTA` と非空 `OTA_PASSWORD` が設定されている場合、`ota_window_seconds` の間だけ OTA window を開きます。
 5. `restart_requested=true` の場合、ack後に `ESP.restart()` します。
+
+WebSocket uploadでは `capture_interval_seconds` が撮影間隔を上書きします。既定desired configは300秒・SVGAなので、既存の5秒・QVGA送信を維持するにはファームウェア更新前に管理者APIで両方を明示的に設定してください。HTTP `/upload` は既定10回/分のレート制限があるため、5秒間隔の連続送信にはWebSocket uploadを使います。OTAは非空パスワードを要求し、要求されたwindow中だけ受け付けます。
+
+WebSocket側の設定取得は既定60秒ごとに行います。GETとACKの接続・読込はそれぞれ500msでtimeoutし、通常のGET+ACKによる送信停止を目安2秒以内に抑えます。DNS解決や低速な複数chunkの応答はこの目安外です。失敗時は次回pollで再試行します。成功ACKがサーバーに届いた後で応答だけが失われると、サーバーは一回限り要求を解除し、デバイスは安全のため再起動/OTAを実行しません。実行を確認できない場合、運用者が新しいversionとして要求を再発行してください。厳密な一回限りの実行保証はありません。
 
 `DEVICE_API_KEY` は `/upload` の `X-API-Key` にも付与されます。サーバー側で単一デバイス用の
 `ESP32CAM_DEVICE_API_KEY` を設定する場合は、`ESP32CAM_SHARED_KEY_DEVICE_ID` をこの

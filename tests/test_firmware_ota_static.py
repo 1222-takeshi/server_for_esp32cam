@@ -43,7 +43,9 @@ def test_http_upload_firmware_initializes_and_services_arduino_ota() -> None:
     text = read(MAIN_CPP)
 
     assert "#include <ArduinoOTA.h>" in text
-    assert "void setupArduinoOta()" in text
+    assert "bool setupArduinoOta()" in text
+    assert "if (WiFi.status() != WL_CONNECTED)" in text
+    assert "if (otaPrepared && !setupArduinoOta())" in text
     assert "ArduinoOTA.setHostname(OTA_HOSTNAME);" in text
     assert "ArduinoOTA.setPort(OTA_PORT);" in text
     assert "ArduinoOTA.setPassword(OTA_PASSWORD);" in text

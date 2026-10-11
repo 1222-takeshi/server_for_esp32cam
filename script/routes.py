@@ -376,8 +376,8 @@ def _validate_desired_config_payload(config: object) -> tuple[dict[str, object] 
     merged = {**_DESIRED_CONFIG_DEFAULT, **config}
 
     interval = merged["capture_interval_seconds"]
-    if not isinstance(interval, int) or isinstance(interval, bool) or not 60 <= interval <= 86400:
-        return None, "capture_interval_seconds must be an integer between 60 and 86400"
+    if not isinstance(interval, int) or isinstance(interval, bool) or not 5 <= interval <= 86400:
+        return None, "capture_interval_seconds must be an integer between 5 and 86400"
     frame_size = merged["frame_size"]
     if not isinstance(frame_size, str) or frame_size not in _ALLOWED_FRAME_SIZES:
         return None, f"frame_size must be one of {sorted(_ALLOWED_FRAME_SIZES)}"
