@@ -14,7 +14,7 @@
       <div class="stat-value">{{ camera_summaries | length }}</div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">Snapshots</div>
+      <div class="stat-label">Saved snapshots at page load</div>
       <div class="stat-value" id="stat-snapshots">{{ image_count }}</div>
     </div>
     <div class="stat-card">
@@ -132,13 +132,6 @@
     }
   }
 
-  function incrementStatSnapshotCount() {
-    const stat = document.getElementById('stat-snapshots');
-    if (!stat) return;
-    const current = Number.parseInt(stat.textContent, 10);
-    stat.textContent = String(Number.isFinite(current) ? current + 1 : 1);
-  }
-
   function incrementOnlineCountIfNeeded(badge) {
     if (!badge || badge.dataset.status === 'healthy') return;
     const stat = document.getElementById('stat-online');
@@ -222,26 +215,11 @@
 
     const cid = camId(data.camera_id || '');
     const snap = data.snapshot || {};
-    const img   = document.getElementById('cam-img-'   + cid);
-    const meta  = document.getElementById('cam-meta-'  + cid);
-    const flash = document.getElementById('cam-flash-' + cid);
-
-    incrementStatSnapshotCount();
+    // Upload events arrive before inference/retention. A URL in this event
+    // may be deleted; saved thumbnails and counts remain page-load values.
     markCameraHealthy(cid);
     updateCameraTiming(cid, snap);
     updateFrameSize(cid, snap);
-
-    if (img && (snap.thumbnail_url || snap.url)) {
-      img.src = snap.thumbnail_url || snap.url;
-    }
-    if (meta) {
-      const timestamp = formatTimestamp(snap.captured_at || snap.stored_at);
-      if (timestamp) meta.textContent = timestamp;
-    }
-    if (flash) {
-      flash.classList.add('flash');
-      setTimeout(() => flash.classList.remove('flash'), 300);
-    }
   }
 
   function connect() {
