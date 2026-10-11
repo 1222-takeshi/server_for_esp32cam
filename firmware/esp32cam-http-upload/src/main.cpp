@@ -9,7 +9,7 @@
 #include <ArduinoOTA.h>
 #endif
 
-#ifdef HTTP_UPLOAD_SMOKE_TEST
+#if defined(HTTP_UPLOAD_SMOKE_TEST) || defined(WEBSOCKET_UPLOAD_SMOKE_TEST)
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
 #include <time.h>
@@ -68,6 +68,9 @@
 #endif
 #ifndef DESIRED_CONFIG_POLL_TIMEOUT_MS
 #define DESIRED_CONFIG_POLL_TIMEOUT_MS 10000
+#endif
+#ifndef DESIRED_CONFIG_POLL_INTERVAL_MS
+#define DESIRED_CONFIG_POLL_INTERVAL_MS 60000
 #endif
 #ifndef DESIRED_CONFIG_FIRMWARE_VERSION
 #define DESIRED_CONFIG_FIRMWARE_VERSION "0.3.0"
@@ -133,7 +136,7 @@ constexpr uint32_t kLogIntervalMs = 5000;
 uint32_t lastLogMs = 0;
 uint32_t bootCount = 0;
 
-#ifdef HTTP_UPLOAD_SMOKE_TEST
+#if defined(HTTP_UPLOAD_SMOKE_TEST) || defined(WEBSOCKET_UPLOAD_SMOKE_TEST)
 struct DesiredConfig {
   uint32_t captureIntervalSeconds = 300;
   framesize_t frameSize = FRAMESIZE_QVGA;
@@ -146,11 +149,24 @@ struct DesiredConfig {
   uint32_t otaWindowSeconds = 120;
 };
 
-RTC_DATA_ATTR uint32_t desiredConfigVersion = 0;
+// Config is RAM-only, so always fetch it again after a reboot.
+uint32_t desiredConfigVersion = 0;
+RTC_DATA_ATTR uint32_t lastRestartHandledVersion = 0;
+RTC_DATA_ATTR uint32_t lastOtaHandledVersion = 0;
 DesiredConfig desiredConfig;
 bool desiredConfigPollSucceeded = false;
 bool desiredConfigAckSucceeded = false;
 String desiredConfigMessage = "not_polled";
+uint32_t lastDesiredConfigPollMs = 0;
+void runRequestedOtaWindow();
+#ifdef WEBSOCKET_UPLOAD_SMOKE_TEST
+bool desiredConfigLoaded = false;
+bool requestedOtaWindowActive = false;
+uint32_t requestedOtaWindowStartedMs = 0;
+uint32_t requestedOtaWindowDurationMs = 0;
+bool pendingRestart = false;
+uint32_t pendingRestartVersion = 0;
+#endif
 #ifdef ENABLE_ARDUINO_OTA
 void setupArduinoOta();
 #endif
@@ -197,6 +213,7 @@ bool websocketConnected = false;
 bool websocketUploadSucceeded = false;
 uint32_t lastCaptureMs = 0;
 uint32_t websocketFramesSent = 0;
+uint32_t lastWifiReconnectMs = 0;
 #endif
 
 void printHardwareInfo() {
@@ -318,8 +335,13 @@ camera_config_t buildAiThinkerCameraConfig() {
   config.pin_reset = kCameraPinReset;
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
-#ifdef HTTP_UPLOAD_SMOKE_TEST
+#if defined(HTTP_UPLOAD_SMOKE_TEST) || defined(WEBSOCKET_UPLOAD_SMOKE_TEST)
+#ifdef WEBSOCKET_UPLOAD_SMOKE_TEST
+  config.frame_size = desiredConfigLoaded ? desiredConfig.frameSize :
+                                          (psramFound() ? FRAMESIZE_QVGA : FRAMESIZE_QQVGA);
+#else
   config.frame_size = desiredConfig.frameSize;
+#endif
   config.jpeg_quality = desiredConfig.jpegQuality;
 #else
   config.frame_size = psramFound() ? FRAMESIZE_QVGA : FRAMESIZE_QQVGA;
@@ -372,7 +394,7 @@ bool initCamera(const char *testName, const char *frameSizeLabel, const char *ne
   cameraInitSucceeded = true;
   Serial.println("Camera init succeeded");
   printCameraSensorInfo();
-#ifdef HTTP_UPLOAD_SMOKE_TEST
+#if defined(HTTP_UPLOAD_SMOKE_TEST) || defined(WEBSOCKET_UPLOAD_SMOKE_TEST)
   sensor_t *sensor = esp_camera_sensor_get();
   if (sensor != nullptr) {
     sensor->set_vflip(sensor, desiredConfig.vflip ? 1 : 0);
@@ -520,7 +542,7 @@ bool connectWiFiForUpload(const char *testName, const bool requireHttpUploadUrl)
 }
 #endif
 
-#ifdef HTTP_UPLOAD_SMOKE_TEST
+#if defined(HTTP_UPLOAD_SMOKE_TEST) || defined(WEBSOCKET_UPLOAD_SMOKE_TEST)
 framesize_t parseDesiredFrameSize(const char *value, const framesize_t fallback, const char **label) {
   if (value == nullptr) {
     return fallback;
@@ -583,11 +605,11 @@ bool sendDesiredConfigAck(const uint32_t version, const bool applied, const Stri
   return desiredConfigAckSucceeded;
 }
 
-bool applyDesiredConfig(JsonObject config, String &message) {
+bool applyDesiredConfig(JsonObject config, const uint32_t version, String &message) {
   DesiredConfig next = desiredConfig;
   if (config["capture_interval_seconds"].is<uint32_t>()) {
     const uint32_t value = config["capture_interval_seconds"].as<uint32_t>();
-    if (value < 60 || value > 86400) { message = "invalid capture_interval_seconds"; return false; }
+    if (value < 5 || value > 86400) { message = "invalid capture_interval_seconds"; return false; }
     next.captureIntervalSeconds = value;
   }
   if (config["frame_size"].is<const char *>()) {
@@ -610,6 +632,40 @@ bool applyDesiredConfig(JsonObject config, String &message) {
     if (value < 30 || value > 600) { message = "invalid ota_window_seconds"; return false; }
     next.otaWindowSeconds = value;
   }
+  if (next.otaUpdateRequested && version != lastOtaHandledVersion) {
+#ifdef WEBSOCKET_UPLOAD_SMOKE_TEST
+    if (requestedOtaWindowActive) {
+      message = "ota_window_already_active";
+      return false;
+    }
+#endif
+#ifndef ENABLE_ARDUINO_OTA
+    message = "ota_requested_but_firmware_ota_disabled";
+    return false;
+#else
+    if (strlen(OTA_PASSWORD) == 0) {
+      message = "ota_requested_but_ota_password_empty";
+      return false;
+    }
+#endif
+  }
+#ifdef WEBSOCKET_UPLOAD_SMOKE_TEST
+  // Apply live camera changes before ACK; a failed sensor update must not be
+  // reported as successfully applied to the server.
+  sensor_t *sensor = esp_camera_sensor_get();
+  if (sensor != nullptr &&
+      (sensor->set_framesize(sensor, next.frameSize) != 0 ||
+       sensor->set_quality(sensor, next.jpegQuality) != 0 ||
+       sensor->set_vflip(sensor, next.vflip ? 1 : 0) != 0 ||
+       sensor->set_hmirror(sensor, next.hmirror ? 1 : 0) != 0)) {
+    sensor->set_framesize(sensor, desiredConfig.frameSize);
+    sensor->set_quality(sensor, desiredConfig.jpegQuality);
+    sensor->set_vflip(sensor, desiredConfig.vflip ? 1 : 0);
+    sensor->set_hmirror(sensor, desiredConfig.hmirror ? 1 : 0);
+    message = "camera_apply_failed";
+    return false;
+  }
+#endif
   desiredConfig = next;
   message = "applied";
   return true;
@@ -656,6 +712,10 @@ bool pollDesiredConfig() {
     desiredConfigMessage = "unchanged";
     return true;
   }
+  if (version == 0 || version < desiredConfigVersion) {
+    desiredConfigMessage = "invalid_version";
+    return false;
+  }
   JsonObject config = doc["config"].as<JsonObject>();
   if (config.isNull()) {
     desiredConfigMessage = "missing_config";
@@ -663,14 +723,25 @@ bool pollDesiredConfig() {
     return false;
   }
   String message;
-  const bool applied = applyDesiredConfig(config, message);
+  const bool applied = applyDesiredConfig(config, version, message);
   desiredConfigMessage = message;
-  sendDesiredConfigAck(version, applied, message);
   if (!applied) {
+    sendDesiredConfigAck(version, false, message);
+    return false;
+  }
+  if (!sendDesiredConfigAck(version, true, message)) {
+    desiredConfigMessage = "ack_failed";
     return false;
   }
   desiredConfigVersion = version;
   desiredConfigPollSucceeded = true;
+#ifdef WEBSOCKET_UPLOAD_SMOKE_TEST
+  desiredConfigLoaded = true;
+  if (desiredConfig.restartRequested && desiredConfigVersion != lastRestartHandledVersion) {
+    pendingRestart = true;
+    pendingRestartVersion = desiredConfigVersion;
+  }
+#endif
   Serial.printf("Desired config applied: version=%lu capture_interval_seconds=%lu frame_size=%s jpeg_quality=%d vflip=%s hmirror=%s restart_requested=%s ota_update_requested=%s ota_window_seconds=%lu\n",
                 static_cast<unsigned long>(desiredConfigVersion),
                 static_cast<unsigned long>(desiredConfig.captureIntervalSeconds),
@@ -681,6 +752,18 @@ bool pollDesiredConfig() {
                 desiredConfig.restartRequested ? "true" : "false",
                 desiredConfig.otaUpdateRequested ? "true" : "false",
                 static_cast<unsigned long>(desiredConfig.otaWindowSeconds));
+  if (desiredConfig.otaUpdateRequested && desiredConfigVersion != lastOtaHandledVersion) {
+    lastOtaHandledVersion = desiredConfigVersion;
+    runRequestedOtaWindow();
+  }
+#ifndef WEBSOCKET_UPLOAD_SMOKE_TEST
+  if (desiredConfig.restartRequested && desiredConfigVersion != lastRestartHandledVersion) {
+    lastRestartHandledVersion = desiredConfigVersion;
+    Serial.println("Desired config requested restart; restarting after ack.");
+    delay(500);
+    ESP.restart();
+  }
+#endif
   return true;
 }
 
@@ -701,12 +784,19 @@ void runRequestedOtaWindow() {
   const uint32_t windowMs = desiredConfig.otaWindowSeconds * 1000UL;
   const uint32_t startedAt = millis();
   Serial.printf("Desired config OTA window started: %lu seconds\n", static_cast<unsigned long>(desiredConfig.otaWindowSeconds));
+#ifdef WEBSOCKET_UPLOAD_SMOKE_TEST
+  requestedOtaWindowActive = true;
+  requestedOtaWindowStartedMs = startedAt;
+  requestedOtaWindowDurationMs = windowMs;
+#else
   while (millis() - startedAt < windowMs) {
     ArduinoOTA.handle();
     delay(10);
   }
+  ArduinoOTA.end();
   sendDesiredConfigAck(desiredConfigVersion, false, "ota_timeout");
   Serial.println("Desired config OTA window timed out; continuing normal upload cycle.");
+#endif
 #endif
 }
 
@@ -739,6 +829,7 @@ String capturedAtIso8601Utc() {
   return String(buffer);
 }
 
+#ifdef HTTP_UPLOAD_SMOKE_TEST
 void runHttpUploadSmokeTest() {
   Serial.println();
   Serial.println("========================================");
@@ -756,12 +847,6 @@ void runHttpUploadSmokeTest() {
   }
 
   pollDesiredConfig();
-  runRequestedOtaWindow();
-  if (desiredConfig.restartRequested) {
-    Serial.println("Desired config requested restart; restarting after ack.");
-    delay(500);
-    ESP.restart();
-  }
 
   const String capturedAt = capturedAtIso8601Utc();
   Serial.printf("Captured-At header: %s\n", capturedAt.c_str());
@@ -837,6 +922,7 @@ void runHttpUploadSmokeTest() {
   Serial.println("========================================");
 }
 #endif
+#endif
 
 #ifdef WEBSOCKET_UPLOAD_SMOKE_TEST
 void webSocketEvent(const WStype_t type, uint8_t *payload, const size_t length) {
@@ -870,14 +956,12 @@ void setupWebSocketUpload() {
                 static_cast<unsigned int>(WS_UPLOAD_PORT),
                 WS_UPLOAD_PATH);
   Serial.printf("Device ID: %s\n", DEVICE_ID);
-  Serial.printf("Capture interval: %lu ms\n", static_cast<unsigned long>(CAPTURE_INTERVAL_MS));
+  Serial.printf("Capture interval before desired config: %lu ms\n", static_cast<unsigned long>(CAPTURE_INTERVAL_MS));
   Serial.printf("Frame limit: %lu\n", static_cast<unsigned long>(CAPTURE_FRAME_LIMIT));
 
   wifiConnected = connectWiFiForUpload("WebSocket upload test", false);
   if (!wifiConnected) {
-    Serial.println("WebSocket upload skipped because Wi-Fi/configuration is not ready.");
-    Serial.println("========================================");
-    return;
+    Serial.println("Wi-Fi is unavailable; WebSocket upload will retry in loop.");
   }
   if (strlen(WS_UPLOAD_HOST) == 0 || strcmp(WS_UPLOAD_HOST, "YOUR_MAC_LAN_IP") == 0) {
     Serial.println("WebSocket upload skipped: WS_UPLOAD_HOST is not configured.");
@@ -1033,17 +1117,15 @@ void setup() {
   delay(1000);
 #if defined(HTTP_UPLOAD_SMOKE_TEST)
   runHttpUploadSmokeTest();
-#ifdef ENABLE_ARDUINO_OTA
-  setupArduinoOta();
-#endif
 #elif defined(WEBSOCKET_UPLOAD_SMOKE_TEST)
   setupWebSocketUpload();
 #if FLASH_LED_ENABLED
   setupFlashLed();
 #endif
-#ifdef ENABLE_ARDUINO_OTA
-  setupArduinoOta();
-#endif
+  if (wifiConnected) {
+    pollDesiredConfig();
+    lastDesiredConfigPollMs = millis();
+  }
 #elif defined(JPEG_CAPTURE_SMOKE_TEST)
   captureJpegSmokeTest();
 #elif defined(CAMERA_INIT_SMOKE_TEST)
@@ -1056,13 +1138,51 @@ void setup() {
 }
 
 void loop() {
-#ifdef ENABLE_ARDUINO_OTA
-  ArduinoOTA.handle();
-#endif
   const uint32_t now = millis();
 #ifdef WEBSOCKET_UPLOAD_SMOKE_TEST
+#ifdef ENABLE_ARDUINO_OTA
+  if (requestedOtaWindowActive) {
+    ArduinoOTA.handle();
+  }
+#endif
+  const bool wasWifiConnected = wifiConnected;
+  wifiConnected = (WiFi.status() == WL_CONNECTED);
+  if (!wifiConnected && strlen(WIFI_SSID) > 0 &&
+      strcmp(WIFI_SSID, "YOUR_WIFI_SSID") != 0 &&
+      now - lastWifiReconnectMs >= 10000UL) {
+    lastWifiReconnectMs = now;
+    WiFi.reconnect();
+  }
   webSocket.loop();
-  if (now - lastCaptureMs >= CAPTURE_INTERVAL_MS) {
+  const uint32_t pollIntervalMs = DESIRED_CONFIG_POLL_INTERVAL_MS < 5000UL
+                                      ? 5000UL : DESIRED_CONFIG_POLL_INTERVAL_MS;
+  if (wifiConnected && !wasWifiConnected) {
+    lastDesiredConfigPollMs = now - pollIntervalMs;
+  }
+  if (wifiConnected && now - lastDesiredConfigPollMs >= pollIntervalMs) {
+    lastDesiredConfigPollMs = now;
+    pollDesiredConfig();
+  }
+#ifdef ENABLE_ARDUINO_OTA
+  if (requestedOtaWindowActive &&
+      millis() - requestedOtaWindowStartedMs >= requestedOtaWindowDurationMs) {
+    requestedOtaWindowActive = false;
+    ArduinoOTA.end();
+    sendDesiredConfigAck(desiredConfigVersion, false, "ota_timeout");
+    Serial.println("Desired config OTA window timed out; continuing normal upload cycle.");
+  }
+#endif
+  if (pendingRestart && !requestedOtaWindowActive) {
+    lastRestartHandledVersion = pendingRestartVersion;
+    pendingRestart = false;
+    Serial.println("Desired config requested restart; restarting after ack.");
+    delay(500);
+    ESP.restart();
+  }
+  const uint32_t captureIntervalMs = desiredConfigLoaded
+                                         ? desiredConfig.captureIntervalSeconds * 1000UL
+                                         : CAPTURE_INTERVAL_MS;
+  if (now - lastCaptureMs >= captureIntervalMs) {
     lastCaptureMs = now;
     captureAndUploadWebSocketFrame();
   }

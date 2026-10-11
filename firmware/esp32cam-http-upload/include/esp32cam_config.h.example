@@ -27,6 +27,8 @@
 // ESP32CAM_DEVICE_API_KEYS instead of reusing one shared key.
 #define DEVICE_API_KEY ""
 #define DESIRED_CONFIG_POLL_TIMEOUT_MS 10000
+// WebSocket mode polls periodically while uploading. The HTTP smoke test polls once at boot.
+#define DESIRED_CONFIG_POLL_INTERVAL_MS 60000
 #define DESIRED_CONFIG_FIRMWARE_VERSION "0.3.0"
 
 // NTP is used to generate the X-Captured-At header required by the Flask server.
@@ -61,6 +63,9 @@
 
 // Continuous capture settings for WebSocket upload mode.
 // CAPTURE_INTERVAL_MS controls the time between frame attempts.
+// Once desired config is acknowledged, capture_interval_seconds overrides it.
+// The server defaults to 300 seconds; set an explicit 5-second desired config
+// before updating an existing 5-second WebSocket device if that cadence matters.
 // CAPTURE_FRAME_LIMIT = 0 means unlimited; set a positive value to capture a
 // video-like burst of exactly that many frames, then keep OTA/alive loop running.
 #define CAPTURE_INTERVAL_MS 5000

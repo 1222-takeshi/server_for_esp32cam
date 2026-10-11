@@ -1295,7 +1295,7 @@ components:
       properties:
         capture_interval_seconds:
           type: integer
-          minimum: 60
+          minimum: 5
           maximum: 86400
           default: 300
         frame_size:

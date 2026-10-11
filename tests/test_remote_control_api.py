@@ -83,7 +83,7 @@ def test_admin_put_rejects_invalid_or_unknown_config_keys(app):
 
     invalid = client.put(
         "/api/cameras/living-room-cam/desired-config",
-        json={"config": _valid_config(capture_interval_seconds=10)},
+        json={"config": _valid_config(capture_interval_seconds=4)},
         headers=_admin_headers(),
     )
     unknown = client.put(
@@ -96,6 +96,26 @@ def test_admin_put_rejects_invalid_or_unknown_config_keys(app):
     assert "capture_interval_seconds" in invalid.get_json()["message"]
     assert unknown.status_code == 400
     assert "shell_command" in unknown.get_json()["message"]
+
+
+def test_capture_interval_boundary_and_type_contract(app):
+    _enable_remote_auth(app)
+    client = app.test_client()
+    for interval in (5, 86400):
+        response = client.put(
+            "/api/cameras/living-room-cam/desired-config",
+            json={"config": _valid_config(capture_interval_seconds=interval)},
+            headers=_admin_headers(),
+        )
+        assert response.status_code == 200
+        assert response.get_json()["config"]["capture_interval_seconds"] == interval
+    for interval in (4, 86401, True, 5.5, "5"):
+        response = client.put(
+            "/api/cameras/living-room-cam/desired-config",
+            json={"config": _valid_config(capture_interval_seconds=interval)},
+            headers=_admin_headers(),
+        )
+        assert response.status_code == 400
 
 
 def test_device_get_desired_config_requires_matching_device_key(app):
