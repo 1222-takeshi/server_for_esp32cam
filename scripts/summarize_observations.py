@@ -130,20 +130,30 @@ def summarize(
         for camera_id, state in camera_states.items():
             counts["cameras"][camera_id][state] += 1
 
-    tolerance = interval_seconds + JITTER_SECONDS
-    spans = ([((ordered[0] - start).total_seconds())]
-             + [(right - left).total_seconds() for left, right in zip(ordered[:-1], ordered[1:], strict=True)]
-             + [(end - ordered[-1]).total_seconds()]) if ordered else [(end - start).total_seconds()]
-    counts["gap_count"] = sum(span > tolerance for span in spans)
-    counts["max_gap_seconds"] = round(max(spans))
-
     current = now or datetime.now(timezone.utc)
     if current.tzinfo is None or current.utcoffset() != timedelta(0):
         raise ValueError("evaluation time must be UTC")
-    elapsed = max(0, (min(current, end) - start).total_seconds())
+    measured_end = min(current, end)
+    elapsed_ordered = [timestamp for timestamp in ordered if timestamp <= measured_end]
+    tolerance = interval_seconds + JITTER_SECONDS
+    if measured_end <= start:
+        spans = []
+    elif elapsed_ordered:
+        spans = ([(elapsed_ordered[0] - start).total_seconds()]
+                 + [(right - left).total_seconds()
+                    for left, right in zip(elapsed_ordered[:-1], elapsed_ordered[1:], strict=True)]
+                 + [(measured_end - elapsed_ordered[-1]).total_seconds()])
+    else:
+        spans = [(measured_end - start).total_seconds()]
+    counts["gap_count"] = sum(span > tolerance for span in spans)
+    counts["max_gap_seconds"] = round(max(spans, default=0))
+
+    elapsed = max(0, (measured_end - start).total_seconds())
     sample_count = len(ordered)
     expected_samples = math.ceil((end - start).total_seconds() / interval_seconds)
     count_coverage = min(1.0, sample_count / expected_samples)
+    progress_expected = math.ceil(elapsed / interval_seconds)
+    progress_coverage = min(1.0, len(elapsed_ordered) / progress_expected) if progress_expected else 0
     readiness_ratio = counts["readiness"]["ready"] / sample_count if sample_count else 0
     camera_ratios = {camera_id: states["healthy"] / sample_count if sample_count else 0
                      for camera_id, states in counts["cameras"].items()}
@@ -178,8 +188,12 @@ def summarize(
         "sources": sources, "counts": counts, "sample_ratios": ratios,
         "sampling_coverage": {"expected_samples": expected_samples,
                               "observed_unique_samples": sample_count,
-                              "count_coverage_ratio": round(count_coverage, 6)},
+                              "count_coverage_ratio": round(count_coverage, 6),
+                              "elapsed_expected_samples": progress_expected,
+                              "elapsed_observed_unique_samples": len(elapsed_ordered),
+                              "progress_count_coverage_ratio": round(progress_coverage, 6)},
         "elapsed_seconds": round(elapsed), "status": status, "reasons": reasons,
+        "pending_future_tail_seconds": round(max(0, (end - current).total_seconds())),
         "interpretation": "Sample ratios are not time uptime.",
     }
 
