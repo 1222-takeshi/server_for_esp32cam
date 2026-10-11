@@ -89,6 +89,9 @@ python3 scripts/summarize_observations.py \
 前後の記録は `outside_before` / `outside_after` に分けて除外します。5分のカレンダー
 timer と開始時刻の位相差を許容するため、開始・終了境界と記録間の最大許容間隔は
 `interval_seconds + 60` 秒です。これを超えると `gap_count` に計上します。
+さらに期間長から `ceil(期間秒数 / interval_seconds)` の期待件数を計算し、
+一意の有効サンプル数が100%に達しない場合も不合格にします。ジッター許容を
+360秒周期への変更として扱わないためです。
 同じ timestamp の重複は分母に入れず、invalid 行とともに合格を防ぎます。
 監視側の問い合わせ失敗は `monitor_failure`、カメラの通信途絶は `offline` として
 別計数します。結果には評価設定・入力SHA-256・件数・理由を保存し、既存の出力

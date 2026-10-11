@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -18,6 +19,7 @@ MAX_INPUT_LINES = 50000
 MIN_DURATION_SECONDS = 7 * 24 * 60 * 60
 JITTER_SECONDS = 60
 MIN_SAMPLE_RATIO = 0.99
+MIN_COUNT_COVERAGE = 1.0
 ERROR_CODES = frozenset({"unreachable", "http_status", "invalid_response", "response_too_large"})
 
 
@@ -139,6 +141,8 @@ def summarize(
         raise ValueError("evaluation time must be UTC")
     elapsed = max(0, (min(current, end) - start).total_seconds())
     sample_count = len(ordered)
+    expected_samples = math.ceil((end - start).total_seconds() / interval_seconds)
+    count_coverage = min(1.0, sample_count / expected_samples)
     readiness_ratio = counts["readiness"]["ready"] / sample_count if sample_count else 0
     camera_ratios = {camera_id: states["healthy"] / sample_count if sample_count else 0
                      for camera_id, states in counts["cameras"].items()}
@@ -157,6 +161,8 @@ def summarize(
         reasons.append("readiness_sample_ratio_below_threshold")
     if any(ratio < MIN_SAMPLE_RATIO for ratio in camera_ratios.values()):
         reasons.append("camera_sample_ratio_below_threshold")
+    if count_coverage < MIN_COUNT_COVERAGE:
+        reasons.append("sample_count_below_expected")
     status = "pending" if current < end else "passed" if not reasons else "failed"
     return {
         "schema_version": 1,
@@ -165,9 +171,13 @@ def summarize(
             "start_utc": start.isoformat(), "end_utc": end.isoformat(),
             "window": "[start,end)", "interval_seconds": interval_seconds,
             "jitter_seconds": JITTER_SECONDS, "minimum_duration_seconds": MIN_DURATION_SECONDS,
-            "minimum_sample_ratio": MIN_SAMPLE_RATIO, "camera_ids": camera_ids,
+            "minimum_sample_ratio": MIN_SAMPLE_RATIO,
+            "minimum_count_coverage": MIN_COUNT_COVERAGE, "camera_ids": camera_ids,
         },
         "sources": sources, "counts": counts, "sample_ratios": ratios,
+        "sampling_coverage": {"expected_samples": expected_samples,
+                              "observed_unique_samples": sample_count,
+                              "count_coverage_ratio": round(count_coverage, 6)},
         "elapsed_seconds": round(elapsed), "status": status, "reasons": reasons,
         "interpretation": "Sample ratios are not time uptime.",
     }

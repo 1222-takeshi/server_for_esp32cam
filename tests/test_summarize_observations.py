@@ -78,6 +78,17 @@ def test_missing_sample_fails_even_when_ratios_are_perfect(tmp_path):
     assert result["sample_ratios"]["readiness_ready"] == 1
 
 
+def test_sixty_second_interval_drift_fails_count_coverage_without_gap(tmp_path):
+    records = [observation(START + timedelta(seconds=360 * index)) for index in range(1680)]
+    path = write_lines(tmp_path / "drift.jsonl", records)
+    result = summary.summarize([path], START, END, ["camera-a"], now=END)
+    assert result["counts"]["gap_count"] == 0
+    assert result["sampling_coverage"]["expected_samples"] == 2016
+    assert result["sampling_coverage"]["observed_unique_samples"] == 1680
+    assert result["status"] == "failed"
+    assert "sample_count_below_expected" in result["reasons"]
+
+
 def test_missing_start_boundary_fails(tmp_path):
     path = write_lines(tmp_path / "late.jsonl", full_window()[2:])
     result = summary.summarize([path], START, END, ["camera-a"], now=END)
