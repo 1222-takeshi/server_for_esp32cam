@@ -89,6 +89,10 @@ python3 scripts/summarize_observations.py \
 前後の記録は `outside_before` / `outside_after` に分けて除外します。5分のカレンダー
 timer と開始時刻の位相差を許容するため、開始・終了境界と記録間の最大許容間隔は
 `interval_seconds + 60` 秒です。これを超えると `gap_count` に計上します。
+終了時刻が未来の `pending` 評価では、gapを現在時刻までの経過区間だけで測り、
+未到来部分を `pending_future_tail_seconds` に分けます。全期間の期待件数と
+`count_coverage_ratio` は維持し、経過区間の進捗は
+`progress_count_coverage_ratio` で確認します。
 さらに期間長から `ceil(期間秒数 / interval_seconds)` の期待件数を計算し、
 一意の有効サンプル数が100%に達しない場合も不合格にします。ジッター許容を
 360秒周期への変更として扱わないためです。

@@ -150,6 +150,28 @@ def test_pending_and_short_window_never_pass(tmp_path):
     assert "window_shorter_than_seven_days" in short["reasons"]
 
 
+def test_pending_future_tail_is_not_a_missing_gap(tmp_path):
+    path = write_lines(tmp_path / "first-sample.jsonl", [observation(START)])
+    now = START + timedelta(minutes=2)
+    result = summary.summarize([path], START, END, ["camera-a"], now=now)
+    assert result["status"] == "pending"
+    assert result["counts"]["gap_count"] == 0
+    assert result["counts"]["max_gap_seconds"] == 120
+    assert result["pending_future_tail_seconds"] == (END - now).total_seconds()
+    assert result["sampling_coverage"]["expected_samples"] == 2016
+    assert result["sampling_coverage"]["progress_count_coverage_ratio"] == 1
+
+
+def test_pending_elapsed_gap_remains_visible(tmp_path):
+    path = write_lines(tmp_path / "stopped.jsonl", [observation(START)])
+    result = summary.summarize([path], START, END, ["camera-a"],
+                               now=START + timedelta(minutes=20))
+    assert result["status"] == "pending"
+    assert result["counts"]["gap_count"] == 1
+    assert result["counts"]["max_gap_seconds"] == 1200
+    assert result["sampling_coverage"]["progress_count_coverage_ratio"] == 0.25
+
+
 def test_invalid_line_and_unexpected_status_fail_closed(tmp_path):
     path = write_lines(tmp_path / "invalid.jsonl", full_window())
     with path.open("ab") as stream:
