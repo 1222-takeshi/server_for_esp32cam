@@ -8,6 +8,7 @@
   const keepOnlyDetected = list.dataset.keepOnlyDetected === 'true';
   const INTERVAL_MS = 10000;
   let pending = false;
+  let attempted = false;
   let latestSnapshot = null;
   let latestSignature = '';
 
@@ -184,7 +185,8 @@
 
   async function refresh() {
     if (pending) return;
-    if (document.hidden) { setTimeout(refresh, INTERVAL_MS); return; }
+    if (attempted && document.hidden) { setTimeout(refresh, INTERVAL_MS); return; }
+    attempted = true;
     pending = true;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 8000);
