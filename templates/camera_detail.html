@@ -79,9 +79,9 @@
           <span style="font-size:13px;font-weight:600;color:var(--text-1);">{{ 'Live Camera' if connection.keep_only_detected_snapshots else 'Latest Snapshot' }}</span>
           {% if not connection.keep_only_detected_snapshots %}<button id="stream-toggle-btn" class="btn" style="padding:4px 10px;font-size:12px;" onclick="toggleStream()">&#9654; Live Stream</button>{% endif %}
         </div>
-        {% if latest and not connection.keep_only_detected_snapshots %}
-        <span id="latest-badge" class="badge {{ latest.inference_status }}">
-          <span class="badge-dot"></span>{{ latest.inference_status }}
+        {% if not connection.keep_only_detected_snapshots %}
+        <span id="latest-badge" class="badge {% if latest %}{{ latest.inference_status }}{% endif %}" {% if not latest %}hidden{% endif %}>
+          <span class="badge-dot"></span><span id="latest-status">{% if latest %}{{ latest.inference_status }}{% endif %}</span>
         </span>
         {% endif %}
       </div>
@@ -93,26 +93,21 @@
                onerror="document.getElementById('live-image-state').textContent='ライブ画像を取得できません。再読み込みして接続診断を確認してください。'">
         </div>
         <p id="live-image-state" style="font-size:12px;color:var(--text-4);">ライブ画像の受信待ち…保存対象がなくても、受信した画像を表示します。</p>
-        {% elif latest %}
-        <div class="img-wrap" id="latest-img-wrap" style="max-width:100%;">
-          <img id="latest-img" src="{{ url_for('server.get_file', filename=latest.filename) }}" alt="{{ latest.filename }}" data-saved-filename="{{ latest.filename }}">
-          {% for d in latest.detections %}
+        {% else %}
+        <div class="img-wrap" id="latest-img-wrap" style="max-width:100%;{% if not latest %}display:none;{% endif %}">
+          <img id="latest-img" {% if latest %}src="{{ url_for('server.get_file', filename=latest.filename) }}" alt="{{ latest.filename }}" data-saved-filename="{{ latest.filename }}"{% endif %}>
+          {% if latest %}{% for d in latest.detections %}
           <div class="bbox" style="left:{{ d.x1*100 }}%;top:{{ d.y1*100 }}%;width:{{ (d.x2-d.x1)*100 }}%;height:{{ (d.y2-d.y1)*100 }}%;">
             <div class="bbox-label">{{ d.label }} {{ '%.0f'|format(d.score*100) }}%</div>
           </div>
-          {% endfor %}
+          {% endfor %}{% endif %}
         </div>
-        <div style="margin-top:12px;display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--text-4);">
-          <span class="mono" id="latest-filename">{{ latest.filename }}</span>
-          {% if latest.captured_at %}
-          <span id="latest-ts">{{ latest.captured_at | jst }}</span>
-          {% endif %}
-          {% if latest.inference_error %}
-          <span style="color:var(--red);">{{ latest.inference_error }}</span>
-          {% endif %}
+        <div id="latest-meta" style="margin-top:12px;display:{% if latest %}flex{% else %}none{% endif %};gap:16px;flex-wrap:wrap;font-size:12px;color:var(--text-4);">
+          <span class="mono" id="latest-filename">{% if latest %}{{ latest.filename }}{% endif %}</span>
+          <span id="latest-ts">{% if latest %}{{ (latest.captured_at or latest.stored_at) | jst }}{% endif %}</span>
+          <span id="latest-inference-error" style="color:var(--red);">{% if latest and latest.inference_error %}{{ latest.inference_error }}{% endif %}</span>
         </div>
-        {% else %}
-        <div class="empty" style="padding:40px 0;">
+        <div class="empty" id="saved-image-empty" style="padding:40px 0;{% if latest %}display:none;{% endif %}">
           <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
             <rect x="3" y="3" width="18" height="18" rx="3"/>
             <path d="M3 9l4-4 4 4 4-6 4 6"/>
@@ -333,10 +328,13 @@ function toggleStream() {
   if (img.src.includes('/stream/')) {
     img.src = img.dataset.snapshotSrc || '';
     btn.textContent = '▶ Live Stream';
+    window.SavedSnapshotView?.restore();
   } else {
     img.dataset.snapshotSrc = img.src;
     // Saved detections describe the saved frame, not the live stream.
     document.querySelectorAll('#latest-img-wrap .bbox').forEach(box => box.remove());
+    const badge = document.getElementById('latest-badge');
+    if (badge) { badge.hidden = true; badge.style.display = 'none'; }
     img.src = streamUrl;
     btn.textContent = '⏹ Stop Stream';
   }

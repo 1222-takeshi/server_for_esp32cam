@@ -8,6 +8,8 @@
   const keepOnlyDetected = list.dataset.keepOnlyDetected === 'true';
   const INTERVAL_MS = 10000;
   let pending = false;
+  let latestSnapshot = null;
+  let latestSignature = '';
 
   function fileUrl(template, filename) {
     return template.replace('__filename__', encodeURIComponent(filename));
@@ -31,23 +33,95 @@
     return reasons[snapshot.inference_status] || '保存理由を確認できません';
   }
 
-  function updateLatest(snapshot) {
+  function renderBoxes(snapshot) {
+    const wrap = document.getElementById('latest-img-wrap');
+    if (!wrap) return;
+    wrap.querySelectorAll('.bbox').forEach(box => box.remove());
+    snapshot.detections.forEach(detection => {
+      const bbox = detection.bbox;
+      if (!Array.isArray(bbox) || bbox.length !== 4 ||
+          !bbox.every(value => typeof value === 'number' && Number.isFinite(value)) ||
+          bbox.some(value => value < 0 || value > 1) ||
+          bbox[2] <= bbox[0] || bbox[3] <= bbox[1]) return;
+      const box = document.createElement('div');
+      box.className = 'bbox';
+      box.style.left = `${bbox[0] * 100}%`;
+      box.style.top = `${bbox[1] * 100}%`;
+      box.style.width = `${(bbox[2] - bbox[0]) * 100}%`;
+      box.style.height = `${(bbox[3] - bbox[1]) * 100}%`;
+      const label = document.createElement('div');
+      label.className = 'bbox-label';
+      const score = Number.isFinite(detection.score) ? `${Math.round(detection.score * 100)}%` : '';
+      label.textContent = `${detection.label || 'object'} ${score}`;
+      box.appendChild(label);
+      wrap.appendChild(box);
+    });
+  }
+
+  function showLatest(snapshot) {
     const img = document.getElementById('latest-img');
-    if (!img || img.dataset.savedFilename === snapshot.filename) return;
+    if (!img) return;
+    latestSnapshot = snapshot;
     const url = fileUrl(list.dataset.fileUrl, snapshot.filename);
+    const signature = JSON.stringify([
+      snapshot.filename, snapshot.inference_status, snapshot.inference_error, snapshot.detections,
+    ]);
+    const changed = latestSignature !== signature;
+    latestSignature = signature;
     img.dataset.savedFilename = snapshot.filename;
     img.dataset.snapshotSrc = url;
-    if (img.src.includes('/stream/')) return;
-    document.querySelectorAll('#latest-img-wrap .bbox').forEach(box => box.remove());
-    img.src = url;
-    img.alt = snapshot.filename;
+    const streaming = img.src.includes('/stream/');
+    document.getElementById('latest-img-wrap').style.display = 'inline-block';
+    document.getElementById('latest-meta').style.display = 'flex';
+    document.getElementById('saved-image-empty').style.display = 'none';
     const name = document.getElementById('latest-filename');
     const timestamp = document.getElementById('latest-ts');
+    const error = document.getElementById('latest-inference-error');
+    const badge = document.getElementById('latest-badge');
+    const status = document.getElementById('latest-status');
     if (name) name.textContent = snapshot.filename;
     if (timestamp) timestamp.textContent = window.CameraShared.formatTimestamp(
       snapshot.captured_at || snapshot.stored_at
     ) || '時刻不明';
+    if (error) error.textContent = snapshot.inference_error || '';
+    if (badge) {
+      const known = ['pending', 'processing', 'succeeded', 'failed', 'skipped'];
+      badge.className = `badge ${known.includes(snapshot.inference_status) ? snapshot.inference_status : ''}`;
+      badge.hidden = streaming;
+      badge.style.display = streaming ? 'none' : 'inline-flex';
+    }
+    if (status) status.textContent = snapshot.inference_status || 'unknown';
+    if (!streaming && changed) {
+      renderBoxes(snapshot);
+      img.src = url;
+      img.alt = snapshot.filename;
+    }
   }
+
+  function showEmpty() {
+    latestSnapshot = null;
+    latestSignature = '';
+    const img = document.getElementById('latest-img');
+    if (!img) return;
+    document.getElementById('latest-meta').style.display = 'none';
+    document.getElementById('latest-badge').hidden = true;
+    document.getElementById('latest-badge').style.display = 'none';
+    img.dataset.snapshotSrc = '';
+    if (img.src.includes('/stream/')) return;
+    img.removeAttribute('src');
+    img.dataset.savedFilename = '';
+    document.getElementById('latest-img-wrap').style.display = 'none';
+    document.getElementById('saved-image-empty').style.display = '';
+    document.getElementById('latest-img-wrap').querySelectorAll('.bbox').forEach(box => box.remove());
+  }
+
+  window.SavedSnapshotView = {
+    restore() {
+      if (!latestSnapshot) { showEmpty(); return; }
+      showLatest(latestSnapshot);
+      renderBoxes(latestSnapshot);
+    },
+  };
 
   function renderRow(snapshot) {
     const a = document.createElement('a');
@@ -85,7 +159,8 @@
     if (!body || !Number.isSafeInteger(body.total) || body.total < 0 ||
         !Array.isArray(body.snapshots) || body.snapshots.length > 20 ||
         body.snapshots.some(s => !s || typeof s.filename !== 'string' ||
-          !s.filename || typeof s.stored_at !== 'string' || !Array.isArray(s.detections))) {
+          !s.filename || typeof s.stored_at !== 'string' || !Array.isArray(s.detections) ||
+          s.detections.some(d => !d || typeof d !== 'object'))) {
       throw new Error('Invalid snapshots response');
     }
     const rows = document.createDocumentFragment();
@@ -103,7 +178,8 @@
       state.textContent = last ? `${latestLabel(last)} · ${savedReason(last)}` : '最終保存: なし';
       if (keepOnlyDetected) state.textContent += ' · 検知対象がない画像は保存しません';
     }
-    if (body.snapshots.length) updateLatest(body.snapshots[0]);
+    if (body.snapshots.length) showLatest(body.snapshots[0]);
+    else showEmpty();
   }
 
   async function refresh() {

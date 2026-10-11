@@ -86,35 +86,41 @@ def test_saved_snapshot_polling_uses_only_retained_api_rows(app, client):
     node = shutil.which('node')
     if not node:
         pytest.skip('Node is required for browser polling regression checks')
-    html = _detail(app, client, True)
+    html = _detail(app, client, False)
     assert 'id="snapshot-count">確認中' in html
     assert 'static/saved_snapshots.js' in html
+    assert 'id="latest-img"' in html
+    assert 'id="saved-image-empty"' in html
     script = (app.static_folder and __import__('pathlib').Path(app.static_folder)
               / 'saved_snapshots.js').read_text()
     harness = r'''
 const vm = require('vm'), assert = require('assert');
 function element() {
   return {dataset:{},children:[],style:{},textContent:'',src:'',
-    appendChild(child){this.children.push(child)},
-    append(...children){this.children.push(...children)},
+    appendChild(child){child.parent=this;this.children.push(child)},
+    append(...children){children.forEach(child=>this.appendChild(child))},
     replaceChildren(child){this.children = child.children},
-    remove(){this.removed=true}};
+    removeAttribute(attr){if(attr==='src')this.src=''},
+    querySelectorAll(selector){return this.children.filter(child=>selector==='.bbox'&&child.className==='bbox')},
+    remove(){this.removed=true;if(this.parent)this.parent.children=this.parent.children.filter(c=>c!==this)}};
 }
 const list = element();
 list.dataset={apiUrl:'/api/cameras/cam/snapshots?limit=20',
- fileUrl:'/files/__filename__',thumbnailUrl:'/files/__filename__/thumbnail',keepOnlyDetected:'true'};
+ fileUrl:'/files/__filename__',thumbnailUrl:'/files/__filename__/thumbnail',keepOnlyDetected:'false'};
 const count=element(), state=element(), img=element(), name=element(), ts=element();
-img.src='http://pi/stream/cameras/cam';
-const boxes=[element()];
+const wrap=element(), meta=element(), empty=element(), badge=element(), status=element(), error=element();
+wrap.style.display='none';empty.style.display='';badge.hidden=true;
 const elements={'snap-list':list,'snapshot-count':count,'saved-snapshot-state':state,
- 'latest-img':img,'latest-filename':name,'latest-ts':ts};
+ 'latest-img':img,'latest-filename':name,'latest-ts':ts,'latest-img-wrap':wrap,
+ 'latest-meta':meta,'saved-image-empty':empty,'latest-badge':badge,
+ 'latest-status':status,'latest-inference-error':error};
 let resolveFetch, rejectFetch, calls=0;
 const timers=[];
 const context={
   window:{CameraShared:{formatTimestamp:x=>x}},
   document:{hidden:false,getElementById:id=>elements[id]||null,
     createElement:element,createDocumentFragment:element,
-    querySelectorAll:()=>boxes},
+    querySelectorAll:()=>wrap.querySelectorAll('.bbox')},
   AbortController:class {constructor(){this.signal={}} abort(){}},
   setTimeout:fn=>{timers.push(fn);return timers.length},clearTimeout:()=>{},
   fetch:(url,opts)=>{calls++;assert.equal(url,list.dataset.apiUrl);
@@ -129,30 +135,51 @@ const row=(filename)=>({filename,stored_at:'2026-10-11T00:00:00Z',
   assert.equal(calls,1);
   // A slow fetch must not trigger a second concurrent request.
   assert.equal(timers.length,1); // abort timer only
-  const detected=row('a<.jpg');detected.detections=[{label:'person'}];
+  const detected=row('a<.jpg');detected.detections=[{label:'person',score:0.9,bbox:[0.1,0.2,0.5,0.7]}];
   resolveFetch({ok:true,json:async()=>({total:2,snapshots:[detected,row('b.jpg')]})});
   await tick();await tick();
   assert.equal(count.textContent,'2');
   assert.match(state.textContent,/最終保存/);
   assert.match(state.textContent,/検知 1件/);
-  assert.match(state.textContent,/検知対象がない画像は保存しません/);
   assert.equal(list.children.length,2);
   assert.equal(list.children[0].href,'/files/a%3C.jpg');
   assert.equal(list.children[0].children[1].children[0].textContent,'a<.jpg');
-  assert.equal(img.src,'http://pi/stream/cameras/cam');
+  assert.equal(img.src,'/files/a%3C.jpg');
   assert.equal(img.dataset.snapshotSrc,'/files/a%3C.jpg');
-  assert.equal(boxes[0].removed,undefined);
+  assert.equal(wrap.style.display,'inline-block');
+  assert.equal(empty.style.display,'none');
+  assert.equal(wrap.querySelectorAll('.bbox').length,1);
+  assert.equal(wrap.querySelectorAll('.bbox')[0].children[0].textContent,'person 90%');
+  assert.equal(status.textContent,'succeeded');
+  assert.equal(badge.hidden,false);
 
-  img.src='/files/old.jpg';
-  img.dataset.savedFilename='old.jpg';
+  img.src='http://pi/stream/cameras/cam';
   timers.pop()(); // next poll
-  resolveFetch({ok:true,json:async()=>({total:1,snapshots:[row('new.jpg')]})});
+  const failed=row('a<.jpg');failed.inference_status='failed';failed.inference_error='model unavailable';
+  resolveFetch({ok:true,json:async()=>({total:1,snapshots:[failed]})});
+  await tick();await tick();
+  assert.equal(img.src,'http://pi/stream/cameras/cam');
+  assert.equal(error.textContent,'model unavailable');
+  // toggleStream restores the saved URL before calling restore().
+  img.src=img.dataset.snapshotSrc;
+  context.window.SavedSnapshotView.restore();
+  assert.equal(wrap.querySelectorAll('.bbox').length,0);
+  assert.equal(badge.hidden,false);
+  assert.equal(status.textContent,'failed');
+
+  timers.pop()();
+  const next=row('new.jpg');next.detections=[{label:'dog',score:0.8,bbox:[0.2,0.3,0.6,0.9]}];
+  resolveFetch({ok:true,json:async()=>({total:1,snapshots:[next]})});
   await tick();await tick();
   assert.equal(img.src,'/files/new.jpg');
   assert.equal(img.alt,'new.jpg');
   assert.equal(name.textContent,'new.jpg');
-  assert.equal(boxes[0].removed,true);
+  assert.equal(error.textContent,'');
+  assert.equal(status.textContent,'succeeded');
+  assert.equal(wrap.querySelectorAll('.bbox').length,1);
+  assert.equal(wrap.querySelectorAll('.bbox')[0].children[0].textContent,'dog 80%');
 
+  img.src='http://pi/stream/cameras/cam';
   timers.pop()();
   resolveFetch({ok:true,json:async()=>({total:0,snapshots:[]})});
   await tick();await tick();
@@ -160,6 +187,12 @@ const row=(filename)=>({filename,stored_at:'2026-10-11T00:00:00Z',
   assert.equal(list.children.length,1);
   assert.equal(list.children[0].textContent,'保存済み画像はありません');
   assert.match(state.textContent,/最終保存: なし/);
+  assert.equal(img.src,'http://pi/stream/cameras/cam');
+  img.src='';context.window.SavedSnapshotView.restore();
+  assert.equal(img.src,'');
+  assert.equal(wrap.style.display,'none');
+  assert.equal(empty.style.display,'');
+  assert.equal(badge.hidden,true);
 
   timers.pop()();
   resolveFetch({ok:true,json:async()=>({total:'bad',snapshots:[]})});
@@ -173,7 +206,7 @@ const row=(filename)=>({filename,stored_at:'2026-10-11T00:00:00Z',
   await tick();await tick();
   assert.equal(count.textContent,'0');
   assert.match(state.textContent,/前回確認時点/);
-  assert.equal(calls,5);
+  assert.equal(calls,6);
 })().catch(error=>{console.error(error);process.exitCode=1});
 '''
     result = subprocess.run([node, '-e', f'const SCRIPT={json.dumps(script)};\n' + harness],
