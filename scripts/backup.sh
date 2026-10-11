@@ -16,6 +16,11 @@ DB_PATH="${DB_PATH:-./esp32cam.sqlite3}"
 BACKUP_DIR="${BACKUP_DIR:-./backups}"
 RETAIN_DAYS="${RETAIN_DAYS:-7}"
 
+if ! command -v sqlite3 >/dev/null 2>&1; then
+    echo "ERROR: sqlite3 CLI is required (install package sqlite3)" >&2
+    exit 1
+fi
+
 # Validate that RETAIN_DAYS is a positive integer to prevent find -mtime misuse.
 if ! [[ "$RETAIN_DAYS" =~ ^[1-9][0-9]*$ ]]; then
     echo "ERROR: RETAIN_DAYS must be a positive integer, got: '$RETAIN_DAYS'" >&2

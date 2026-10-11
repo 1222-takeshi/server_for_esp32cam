@@ -59,6 +59,14 @@ def test_assess_bad_database_and_wal_sidecar(tmp_path):
     assert check_backup.assess(db, uploads, 100)["error"] == "backup_input_missing_or_unsafe"
 
 
+def test_assess_detects_truncated_real_database(tmp_path):
+    db, uploads, _ = backup_fixture(tmp_path)
+    db.write_bytes(db.read_bytes()[:200])
+    result = check_backup.assess(db, uploads, 100)
+    assert result["status"] == "failed"
+    assert result.get("error") == "backup_read_failed" or result["db_integrity"] != "ok"
+
+
 @pytest.mark.parametrize("max_rows", [0, 1000001])
 def test_invalid_row_limit_is_rejected(tmp_path, max_rows):
     with pytest.raises(SystemExit) as exc:
@@ -105,3 +113,15 @@ def test_failed_backup_preserves_existing_daily_copy(tmp_path):
     assert completed.returncode != 0
     assert existing.read_bytes() == b"known-good-placeholder"
     assert not list(backup_dir.glob(".esp32cam_*"))
+
+
+def test_backup_reports_missing_sqlite_cli(tmp_path):
+    source = tmp_path / "live.sqlite3"
+    source.write_bytes(b"source")
+    completed = subprocess.run(
+        ["/bin/bash", "scripts/backup.sh"],
+        env={"PATH": str(tmp_path), "DB_PATH": str(source)},
+        capture_output=True, text=True, check=False,
+    )
+    assert completed.returncode != 0
+    assert "sqlite3 CLI is required" in completed.stderr

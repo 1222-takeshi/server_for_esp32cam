@@ -221,6 +221,11 @@ echo "バックアップ完了: $BACKUP_DIR"
 
 ### オンラインバックアップ (停止なし / DB のみ整合)
 
+ホストの `scripts/backup.sh` を使う場合は `sqlite3` CLI が必要です。
+Raspberry Pi の Ubuntu では最初に `sudo apt-get update && sudo apt-get install sqlite3`
+で導入し、`command -v sqlite3` で確認してください。このスクリプトは DB だけを
+取得します。画像を含む完全な対が必要なら停止バックアップを使用します。
+
 SQLite は WAL モードが有効になっているため、停止なしでもバックアップ可能です:
 
 ```bash
@@ -264,6 +269,9 @@ python3 scripts/check_backup.py --db "$BACKUP_DIR/esp32cam.sqlite3" \
 `status: passed` は SQLite quick_check と全 snapshot/video のファイル存在・
 サイズが一致したことを示します。`failed` のときは復元に使わず、JSON の
 `missing_files`、`size_mismatches`、`invalid_paths`、`incomplete` を確認します。
+`error: backup_read_failed` は破損DBや必要テーブル欠落などで読み取りに失敗した
+ことを示します。`error: backup_input_missing_or_unsafe` は DB/画像dir欠落、
+DB symlink、WAL sidecar存在を示します。正しいバックアップ一式を選び直してください。
 この検査はアプリ起動や画像表示の成功までは保証しません。
 
 ---
