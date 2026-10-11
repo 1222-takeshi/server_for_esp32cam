@@ -1,7 +1,9 @@
+import hashlib
 import json
 import re
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -12,6 +14,14 @@ def _detail(app, client, discard):
     app.config['KEEP_ONLY_DETECTED_SNAPSHOTS'] = discard
     app.extensions['metadata_store'].record_heartbeat('cam')
     return client.get('/cameras/cam').get_data(as_text=True)
+
+
+@pytest.mark.parametrize('discard', [False, True])
+def test_saved_snapshot_script_url_matches_content_version(app, client, discard):
+    script = Path(app.static_folder) / 'saved_snapshots.js'
+    version = hashlib.sha256(script.read_bytes()).hexdigest()[:12]
+    html = _detail(app, client, discard)
+    assert f'<script src="/static/saved_snapshots.js?v={version}" defer></script>' in html
 
 
 def test_discard_mode_shows_live_image_without_saved_snapshot(app, client):
