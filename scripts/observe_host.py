@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 from datetime import datetime, timezone
@@ -13,6 +14,17 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlsplit
 from urllib.request import urlopen
+
+
+_ERROR_CODES = frozenset({"http_status", "unreachable", "invalid_response", "response_too_large"})
+
+
+def _error_code(value: object) -> str | None:
+    return value if isinstance(value, str) and value in _ERROR_CODES else None
+
+
+def _http_status(value: object) -> int | None:
+    return value if type(value) is int and 100 <= value <= 599 else None
 
 
 def fetch_json(url: str) -> dict[str, object]:
@@ -53,23 +65,28 @@ def memory_available_mb() -> int | None:
 def observe(base_url: str, camera_ids: list[str], storage_path: Path) -> dict[str, object]:
     ready = fetch_json(f"{base_url}/healthz/ready")
     readiness = {
-        "status": ready.get("status") if ready.get("status") in {"ready", "degraded"} else None,
-        "error": ready.get("error"),
-        "http_status": ready.get("http_status"),
+        "status": ready.get("status") if ready.get("status") in ("ready", "degraded") else None,
+        "error": _error_code(ready.get("error")),
+        "http_status": _http_status(ready.get("http_status")),
     }
-    for field in ("db", "storage", "disk_free_mb", "inference_worker"):
-        if field in ready and type(ready[field]) in (str, int):
+    for field, allowed in (("db", ("ok", "error")), ("storage", ("ok", "error")),
+                           ("inference_worker", ("running", "stopped"))):
+        if ready.get(field) in allowed:
             readiness[field] = ready[field]
+    disk_free_mb = ready.get("disk_free_mb")
+    if type(disk_free_mb) is int and disk_free_mb >= -1:
+        readiness["disk_free_mb"] = disk_free_mb
 
     cameras = {}
     for camera_id in camera_ids:
         result = fetch_json(f"{base_url}/api/cameras/{quote(camera_id, safe='')}/connection")
         cameras[camera_id] = {
-            "status": result.get("status") if result.get("status") in {"healthy", "stale", "offline"} else None,
+            "status": result.get("status") if result.get("status") in ("healthy", "stale", "offline") else None,
             "seconds_since_contact": result.get("seconds_since_contact")
-            if type(result.get("seconds_since_contact")) is int else None,
-            "error": result.get("error"),
-            "http_status": result.get("http_status"),
+            if type(result.get("seconds_since_contact")) is int
+            and result["seconds_since_contact"] >= 0 else None,
+            "error": _error_code(result.get("error")),
+            "http_status": _http_status(result.get("http_status")),
         }
 
     try:
@@ -103,7 +120,6 @@ def append_bounded(path: Path, sample: dict[str, object], max_bytes: int) -> Non
     if len(line) > max_bytes:
         raise ValueError("sample exceeds file limit")
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(path.parent, 0o700)
     lock_path = path.with_suffix(path.suffix + ".lock")
     with open(lock_path, "a+b") as lock:
         os.chmod(lock_path, 0o600)
@@ -136,9 +152,9 @@ def main(argv: list[str] | None = None) -> int:
             or parsed.fragment):
         parser.error("--base-url must be a local HTTP origin with an explicit port")
     if not args.camera_id or len(args.camera_id) > 32 or any(
-        not c or len(c) > 64 or "/" in c for c in args.camera_id
+        re.fullmatch(r"[A-Za-z0-9_-]{1,128}", c) is None for c in args.camera_id
     ):
-        parser.error("provide 1-32 camera IDs, each 1-64 characters without slashes")
+        parser.error("provide 1-32 camera IDs matching [A-Za-z0-9_-]{1,128}")
     if args.max_bytes < 4096:
         parser.error("--max-bytes must be at least 4096")
     try:
