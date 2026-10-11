@@ -72,6 +72,36 @@ readiness の `error` と各 camera の `error` は独立して記録されま�
 `load_1m` は CPU 使用率ではなく、CPU 数と比較するための 1 分平均負荷です。
 観測が終わったら `systemctl --user disable --now esp32cam-observe.timer` で停止します。
 
+### 7 日間の記録を評価する
+
+評価対象の `.jsonl.1` と `.jsonl` を、収集停止後に別ディレクトリへコピーして
+入力を固定します。各入力は最大 8 MiB、合計 2 ファイルまでです。開始と終了は
+**UTC**で指定し、期間は半開区間 `[start,end)` とします。例えば開始が
+2026-10-11 12:02:49 JST なら UTC の `2026-10-11T03:02:49+00:00` です。
+
+```bash
+python3 scripts/summarize_observations.py \
+  --input observation-older.jsonl --input observation-current.jsonl \
+  --start 2026-10-11T03:02:49+00:00 --end 2026-10-18T03:02:49+00:00 \
+  --interval-seconds 300 --camera-id <対象ID> --output observation-summary.json
+```
+
+前後の記録は `outside_before` / `outside_after` に分けて除外します。5分のカレンダー
+timer と開始時刻の位相差を許容するため、開始・終了境界と記録間の最大許容間隔は
+`interval_seconds + 60` 秒です。これを超えると `gap_count` に計上します。
+さらに期間長から `ceil(期間秒数 / interval_seconds)` の期待件数を計算し、
+一意の有効サンプル数が100%に達しない場合も不合格にします。ジッター許容を
+360秒周期への変更として扱わないためです。
+同じ timestamp の重複は分母に入れず、invalid 行とともに合格を防ぎます。
+監視側の問い合わせ失敗は `monitor_failure`、カメラの通信途絶は `offline` として
+別計数します。結果には評価設定・入力SHA-256・件数・理由を保存し、既存の出力
+ファイルは上書きしません。終了時刻が未来なら `pending`（終了コード3）、期間が
+7日未満や欠測などがあれば `failed`（終了コード1）です。
+
+固定の99%基準は、取得できた有効サンプルにおける `ready` / `healthy` **比率**です。
+実時間の uptime 99% を証明する指標ではありません。7日経過・欠測なし・重複なし・
+invalidなしを満たした結果でも、別途サービスログと復旧記録を照合してください。
+
 ### コンテナ状態確認
 
 ```bash
