@@ -16,6 +16,7 @@ from PIL import Image
 REPO = Path(__file__).resolve().parent.parent
 SEED = 42
 SPLITS = ("train", "val", "test")
+PRETRAINED_CLASS_COUNT = 80
 
 
 def digest(path: Path) -> str:
@@ -42,6 +43,30 @@ def _box(value: object) -> tuple[float, float, float, float]:
     if not all(math.isfinite(v) for v in (x1, y1, x2, y2)) or not (0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1):
         raise ValueError("Cat box must be normalized xyxy")
     return x1, y1, x2, y2
+
+
+def load_pretrained_names(path: Path, cat_class_id: int) -> tuple[dict[str, str], str]:
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 16 * 1024:
+        raise ValueError("Pretrained names must be a regular JSON file of at most 16 KiB")
+
+    def unique_keys(pairs: list[tuple[str, object]]) -> dict:
+        names = dict(pairs)
+        if len(names) != len(pairs):
+            raise ValueError("Duplicate pretrained class index")
+        return names
+
+    names = json.loads(path.read_bytes(), object_pairs_hook=unique_keys)
+    expected = {str(index) for index in range(PRETRAINED_CLASS_COUNT)}
+    if (not isinstance(names, dict) or set(names) != expected
+            or any(not isinstance(name, str) or not name.strip() or name != name.strip()
+                   for name in names.values())
+            or len({name.casefold() for name in names.values()}) != PRETRAINED_CLASS_COUNT):
+        raise ValueError("Pretrained names must have 80 distinct indexed class names")
+    if type(cat_class_id) is not int or cat_class_id not in range(PRETRAINED_CLASS_COUNT):
+        raise ValueError("Cat class ID must be an integer from 0 to 79")
+    if names[str(cat_class_id)] != "cat":
+        raise ValueError("Cat class ID must match the Cat entry in pretrained names")
+    return names, digest(path)
 
 
 def load_inputs(manifest_path: Path, inventory_path: Path) -> tuple[list[dict], dict]:
@@ -171,7 +196,15 @@ def assign_splits(rows: list[dict], seed: int = SEED) -> tuple[dict[str, str], l
     return assignments, group_records
 
 
-def prepare(manifest: Path, inventory: Path, output: Path) -> dict:
+def prepare(manifest: Path, inventory: Path, output: Path,
+            pretrained_names_json: Path | None = None, cat_class_id: int | None = None) -> dict:
+    if (pretrained_names_json is None) != (cat_class_id is None):
+        raise ValueError("Pretrained names and Cat class ID must be supplied together")
+    names = {"0": "cat"}
+    names_sha256 = None
+    if pretrained_names_json is not None:
+        names, names_sha256 = load_pretrained_names(pretrained_names_json, cat_class_id)
+    label_class_id = 0 if cat_class_id is None else cat_class_id
     rows, source = load_inputs(manifest, inventory)
     target = _private_output(output, manifest.parent.resolve())
     assignments, groups = assign_splits(rows)
@@ -194,20 +227,26 @@ def prepare(manifest: Path, inventory: Path, output: Path) -> dict:
             label = target / "labels" / split / f"{row['id']}.txt"
             with label.open("x", encoding="utf-8") as stream:
                 for x1, y1, x2, y2 in row["boxes"]:
-                    stream.write(f"0 {(x1 + x2) / 2:.17g} {(y1 + y2) / 2:.17g} {x2 - x1:.17g} {y2 - y1:.17g}\n")
+                    stream.write(f"{label_class_id} {(x1 + x2) / 2:.17g} {(y1 + y2) / 2:.17g} {x2 - x1:.17g} {y2 - y1:.17g}\n")
             label.chmod(0o600)
             counts[split] += 1
             box_count += len(row["boxes"])
         if source["manifest_sha256"] != digest(manifest) or source["inventory_sha256"] != digest(inventory):
             raise ValueError("Source manifest or inventory changed during preparation")
+        if pretrained_names_json is not None and names_sha256 != digest(pretrained_names_json):
+            raise ValueError("Pretrained names changed during preparation")
         summary = {"version": 1, "seed": SEED, "source": source, "counts": counts,
                    "cat_boxes": box_count, "groups": groups,
                    "images": [{"image_id": row["id"], "sha256": row["sha256"],
                                "split": assignments[row["id"]]} for row in rows]}
+        if pretrained_names_json is not None:
+            summary["dataset_mode"] = "pretrained_classes"
+            summary["cat_class_id"] = label_class_id
+            summary["pretrained_names_sha256"] = names_sha256
         files = {"split-manifest.json": json.dumps(summary, indent=2, sort_keys=True) + "\n",
                  "dataset.yaml": json.dumps({"path": str(target), "train": "images/train",
                                                "val": "images/val", "test": "images/test",
-                                               "names": {"0": "cat"}}, indent=2) + "\n"}
+                                               "names": names}, indent=2) + "\n"}
         for name, content in files.items():
             path = target / name
             with path.open("x", encoding="utf-8") as stream:
@@ -223,9 +262,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--inventory", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--pretrained-names-json", type=Path)
+    parser.add_argument("--cat-class-id", type=int)
     args = parser.parse_args(argv)
     try:
-        result = prepare(args.manifest, args.inventory, args.output)
+        result = prepare(args.manifest, args.inventory, args.output,
+                         args.pretrained_names_json, args.cat_class_id)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         parser.exit(2, f"Preparation failed: {type(exc).__name__}\n")
     print(json.dumps({"output": str(args.output), "counts": result["counts"],
