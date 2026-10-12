@@ -157,3 +157,96 @@ def test_tiny_valid_box_keeps_positive_yolo_width(tmp_path):
     assert label[0] == "0"
     assert float(label[3]) == pytest.approx(tiny[2] - tiny[0])
     assert float(label[3]) > 0
+
+
+def pretrained_names(tmp_path: Path) -> Path:
+    names = {str(index): f"class-{index}" for index in range(80)}
+    names["15"] = "cat"
+    path = tmp_path / "pretrained-names.json"
+    path.write_text(json.dumps(names))
+    return path
+
+
+def test_preserves_pretrained_class_index_without_changing_splits(tmp_path):
+    manifest, inventory = source_fixture(tmp_path)
+    names_path = pretrained_names(tmp_path)
+    default = cli.prepare(manifest, inventory, tmp_path / "one-class")
+    preserved = cli.prepare(manifest, inventory, tmp_path / "pretrained", names_path, 15)
+    assert preserved["dataset_mode"] == "pretrained_classes"
+    assert preserved["cat_class_id"] == 15
+    assert preserved["pretrained_names_sha256"] == cli.digest(names_path)
+    assert preserved["images"] == default["images"]
+    assert preserved["groups"] == default["groups"]
+    assert preserved["counts"] == default["counts"]
+    assert "dataset_mode" not in default
+    assert json.loads((tmp_path / "one-class" / "dataset.yaml").read_text())["names"] == {"0": "cat"}
+    assert json.loads((tmp_path / "pretrained" / "dataset.yaml").read_text())["names"] == json.loads(names_path.read_text())
+    for row in preserved["images"]:
+        label = tmp_path / "pretrained" / "labels" / row["split"] / f"{row['image_id']}.txt"
+        assert all(line.startswith("15 ") for line in label.read_text().splitlines())
+        image = tmp_path / "pretrained" / "images" / row["split"] / f"{row['image_id']}.jpg"
+        assert cli.digest(image) == row["sha256"]
+
+
+@pytest.mark.parametrize("mutation", ["missing_id", "duplicate_name", "wrong_cat_id",
+                                      "wrong_cat_name", "empty_name", "extra_cat", "non_string"])
+def test_invalid_pretrained_names_fail_before_output(tmp_path, mutation):
+    manifest, inventory = source_fixture(tmp_path)
+    names_path = pretrained_names(tmp_path)
+    names = json.loads(names_path.read_text())
+    class_id = 15
+    if mutation == "missing_id":
+        del names["79"]
+    elif mutation == "duplicate_name":
+        names["79"] = names["78"]
+    elif mutation == "wrong_cat_id":
+        class_id = 14
+    elif mutation == "wrong_cat_name":
+        names["15"] = "lynx"
+    elif mutation == "empty_name":
+        names["2"] = " "
+    elif mutation == "extra_cat":
+        names["79"] = "CAT"
+    elif mutation == "non_string":
+        names["0"] = 0
+    names_path.write_text(json.dumps(names))
+    output = tmp_path / "pretrained"
+    with pytest.raises(ValueError):
+        cli.prepare(manifest, inventory, output, names_path, class_id)
+    assert not output.exists()
+
+
+def test_pretrained_options_are_paired_and_output_is_exclusive(tmp_path):
+    manifest, inventory = source_fixture(tmp_path)
+    names_path = pretrained_names(tmp_path)
+    output = tmp_path / "pretrained"
+    for names, class_id in ((None, 15), (names_path, None), (names_path, 80)):
+        with pytest.raises(ValueError):
+            cli.prepare(manifest, inventory, output, names, class_id)
+        assert not output.exists()
+    cli.prepare(manifest, inventory, output, names_path, 15)
+    with pytest.raises(ValueError, match="new directory"):
+        cli.prepare(manifest, inventory, output, names_path, 15)
+
+
+def test_pretrained_cli_writes_cat_class_15(tmp_path, capsys):
+    manifest, inventory = source_fixture(tmp_path)
+    names_path = pretrained_names(tmp_path)
+    output = tmp_path / "from-cli"
+    assert cli.main(["--manifest", str(manifest), "--inventory", str(inventory),
+                     "--pretrained-names-json", str(names_path), "--cat-class-id", "15",
+                     "--output", str(output)]) == 0
+    assert json.loads(capsys.readouterr().out)["cat_boxes"] == 9
+    summary = json.loads((output / "split-manifest.json").read_text())
+    assert summary["cat_class_id"] == 15
+    assert json.loads((output / "dataset.yaml").read_text())["names"]["15"] == "cat"
+
+
+def test_rejects_duplicate_json_index_before_output(tmp_path):
+    manifest, inventory = source_fixture(tmp_path)
+    names_path = pretrained_names(tmp_path)
+    names_path.write_text(names_path.read_text()[:-1] + ', "15": "cat"}')
+    output = tmp_path / "duplicate-index"
+    with pytest.raises(ValueError, match="Duplicate pretrained class index"):
+        cli.prepare(manifest, inventory, output, names_path, 15)
+    assert not output.exists()
