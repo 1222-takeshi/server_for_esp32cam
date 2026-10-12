@@ -194,7 +194,7 @@ def prepare(manifest: Path, inventory: Path, output: Path) -> dict:
             label = target / "labels" / split / f"{row['id']}.txt"
             with label.open("x", encoding="utf-8") as stream:
                 for x1, y1, x2, y2 in row["boxes"]:
-                    stream.write(f"0 {(x1 + x2) / 2:.9f} {(y1 + y2) / 2:.9f} {x2 - x1:.9f} {y2 - y1:.9f}\n")
+                    stream.write(f"0 {(x1 + x2) / 2:.17g} {(y1 + y2) / 2:.17g} {x2 - x1:.17g} {y2 - y1:.17g}\n")
             label.chmod(0o600)
             counts[split] += 1
             box_count += len(row["boxes"])

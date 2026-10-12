@@ -66,8 +66,8 @@ def test_prepares_immutable_yolo_splits_with_multi_cat_boxes(tmp_path):
         assert copied.stat().st_mode & 0o777 == 0o600
     first = next(row for row in result["images"] if row["image_id"] == "image00")
     labels = (output / "labels" / first["split"] / "image00.txt").read_text().splitlines()
-    assert labels == ["0 0.300000000 0.500000000 0.400000000 0.600000000",
-                      "0 0.750000000 0.250000000 0.300000000 0.300000000"]
+    assert [float(value) for value in labels[0].split()] == pytest.approx([0, 0.3, 0.5, 0.4, 0.6])
+    assert [float(value) for value in labels[1].split()] == pytest.approx([0, 0.75, 0.25, 0.3, 0.3])
     with pytest.raises(ValueError, match="new directory"):
         cli.prepare(manifest, inventory, output)
 
@@ -138,3 +138,22 @@ def test_too_few_independent_groups_rejected(tmp_path):
     rows, _ = cli.load_inputs(manifest, inventory)
     with pytest.raises(ValueError, match="three independent"):
         cli.assign_splits(rows)
+
+
+def test_tiny_valid_box_keeps_positive_yolo_width(tmp_path):
+    manifest, inventory = source_fixture(tmp_path)
+    m = json.loads(manifest.read_text())
+    i = json.loads(inventory.read_text())
+    tiny = [0.1, 0.2, 0.1000000001, 0.8]
+    m["samples"][0]["boxes"] = [tiny]
+    i["images"][0]["boxes"] = [tiny]
+    i["images"][0]["box_flags"] = [{}]
+    manifest.write_text(json.dumps(m))
+    inventory.write_text(json.dumps(i))
+    output = tmp_path / "derived"
+    result = cli.prepare(manifest, inventory, output)
+    first = next(row for row in result["images"] if row["image_id"] == "image00")
+    label = (output / "labels" / first["split"] / "image00.txt").read_text().split()
+    assert label[0] == "0"
+    assert float(label[3]) == pytest.approx(tiny[2] - tiny[0])
+    assert float(label[3]) > 0
