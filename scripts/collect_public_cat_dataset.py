@@ -359,6 +359,10 @@ def collect(
             "author_profile_url": info.get("AuthorProfileURL", ""),
             "original_url": info.get("OriginalURL", ""),
         })
+    if exclude_runs:
+        final_excluded, final_records = _excluded_runs(tuple(exclude_runs))
+        if final_records != exclusion_records or final_excluded != excluded:
+            raise ValueError("Exclusion run changed during collection")
     status = "complete" if len(samples) == max_images else "partial"
     result = {
         "schema_version": 1, "dataset": f"Open Images V7 {source_split} Cat public-development",

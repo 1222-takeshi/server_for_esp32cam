@@ -328,3 +328,23 @@ def test_duplicate_jpeg_in_new_run_is_counted_once(tmp_path, monkeypatch):
     result = collector.collect(out, source_split="test", max_images=2)
     assert result["collected"] == 1
     assert result["skipped"]["duplicate_image_sha256"] == 1
+
+
+def test_exclusion_run_changed_during_collection_has_no_final_manifest(tmp_path, monkeypatch):
+    prior = _prior_run(tmp_path)
+    stream = io.BytesIO()
+    Image.new("RGB", (8, 8), "blue").save(stream, format="JPEG")
+    _test_sources(monkeypatch, image_body=stream.getvalue())
+    original_fetch = collector._fetch
+
+    def mutate_prior_on_image(url, limit, timeout):
+        if url.endswith(f"/{ID_C}.jpg"):
+            (prior / "images" / f"{ID_A}.jpg").write_bytes(b"changed")
+        return original_fetch(url, limit, timeout)
+
+    monkeypatch.setattr(collector, "_fetch", mutate_prior_on_image)
+    out = tmp_path / "expanded"
+    with pytest.raises(ValueError, match="hash mismatch"):
+        collector.collect(out, source_split="test", exclude_runs=(prior,), max_images=2)
+    assert not (out / "manifest.json").exists()
+    assert not (out / "inventory.json").exists()
