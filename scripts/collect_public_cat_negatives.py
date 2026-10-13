@@ -11,6 +11,7 @@ import time
 from collections import Counter
 from pathlib import Path
 from urllib.error import URLError
+from urllib.parse import urlsplit
 
 from PIL import Image
 
@@ -126,10 +127,80 @@ def _positive_evidence(run: Path) -> tuple[dict, str, dict[str, bytes], set[str]
     return inventory, _digest(inventory_bytes), sources, positive_ids, positive_hashes, positive_urls, authors
 
 
+def _exclude_evidence(run: Path) -> tuple[dict[str, set[str]], dict[Path, str]]:
+    """Read a prior public collector run without assuming positive/negative shape."""
+    path = run / "inventory.json"
+    payload = path.read_bytes()
+    inventory = json.loads(payload)
+    if inventory.get("schema_version") != 1 or not isinstance(inventory.get("images"), list):
+        raise ValueError("Unsupported exclusion inventory")
+    watched = {path: _digest(payload)}
+    keys = {"ids": set(), "hashes": set(), "urls": set(), "authors": set()}
+    identities = {}
+    for entry in inventory["images"]:
+        if not isinstance(entry, dict) or not all(entry.get(key) for key in ("image_id", "sha256", "source_url")):
+            raise ValueError("Incomplete exclusion image")
+        digest = entry["sha256"]
+        if not isinstance(digest, str) or len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+            raise ValueError("Invalid exclusion SHA-256")
+        for field in ("source_url", "landing_url", "original_url"):
+            value = entry.get(field)
+            if value is not None and (not isinstance(value, str) or (value and
+                    (urlsplit(value).scheme not in {"http", "https"} or not urlsplit(value).netloc))):
+                raise ValueError(f"Invalid exclusion {field}")
+        if any(not isinstance(entry.get(field, ""), str) for field in ("author", "author_profile_url")):
+            raise ValueError("Invalid exclusion author identity")
+        image_id = _cat_id({"ImageID": entry["image_id"]})
+        keys["ids"].add(image_id)
+        keys["hashes"].add(digest)
+        keys["urls"].update(entry[key] for key in ("source_url", "landing_url", "original_url") if entry.get(key))
+        identities.setdefault(image_id, set()).update(_author_keys({
+            "Author": entry.get("author", ""), "AuthorProfileURL": entry.get("author_profile_url", "")
+        }))
+    # Older positive inventories omit OriginalURL and AuthorProfileURL. Their
+    # immutable official metadata supplies both and must match its recorded SHA.
+    source_info = inventory.get("source_files", {}).get("images")
+    source_path = run / "source" / "images.csv"
+    if source_info is not None:
+        source = source_path.read_bytes()
+        digest = _digest(source)
+        if digest != source_info["sha256"]:
+            raise ValueError("Exclusion metadata source hash changed")
+        watched[source_path] = digest
+        matched = set()
+        for row in _rows(source):
+            image_id = row["ImageID"].lower()
+            if image_id in keys["ids"]:
+                matched.add(image_id)
+                identities[image_id].update(_author_keys(row))
+                keys["urls"].update(row[key] for key in ("OriginalURL", "OriginalLandingURL") if row.get(key))
+        if matched != keys["ids"]:
+            raise ValueError("Exclusion metadata missing image IDs")
+    elif any(not entry.get("original_url") or not (entry.get("author") or entry.get("author_profile_url"))
+             for entry in inventory["images"]):
+        raise ValueError("Exclusion run lacks complete attribution metadata")
+    if any(not identity for identity in identities.values()):
+        raise ValueError("Exclusion run lacks author identity")
+    for identity in identities.values():
+        keys["authors"].update(identity)
+    return keys, watched
+
+
+def _role_quotas(max_images: int) -> dict[str, int]:
+    total = sum(ROLES.values())
+    quotas = {role: max_images * count // total for role, count in ROLES.items()}
+    remaining = max_images - sum(quotas.values())
+    order = {"val": 0, "test": 1, "train": 2}
+    for role in sorted(ROLES, key=lambda name: (-(max_images * ROLES[name] % total), order[name]))[:remaining]:
+        quotas[role] += 1
+    return quotas
+
+
 def collect(
     positive_run: Path,
     output_dir: Path,
     *,
+    exclude_runs: tuple[Path, ...] = (),
     max_images: int = 150,
     max_image_bytes: int = 2_000_000,
     max_total_bytes: int = 200_000_000,
@@ -142,9 +213,9 @@ def collect(
     if not max_image_bytes <= max_total_bytes <= 200_000_000 or timeout < 1 or not 0 <= retries <= 2:
         raise ValueError("Invalid byte, timeout, or retry limit")
     target = output_dir.resolve()
-    if (deadline_seconds < 1 or target.is_relative_to(positive_run.resolve())
+    if (deadline_seconds < 1 or any(target.is_relative_to(run.resolve()) for run in (positive_run, *exclude_runs))
             or any((parent / ".git").exists() for parent in (target, *target.parents))):
-        raise ValueError("Invalid deadline or output inside positive run or Git")
+        raise ValueError("Invalid deadline or output inside input run or Git")
     started = time.monotonic()
 
     def bounded_fetch(url: str, limit: int) -> bytes:
@@ -156,6 +227,17 @@ def collect(
     positive_inventory, initial_inventory_hash, positive_sources, positive_ids, positive_hashes, positive_urls, positive_authors = (
         _positive_evidence(positive_run)
     )
+    exclusions = []
+    watched = {}
+    for run in exclude_runs:
+        keys, source_hashes = _exclude_evidence(run)
+        exclusions.append({"run": str(run.resolve()), "inventory_sha256": source_hashes[run / "inventory.json"]})
+        watched.update(source_hashes)
+        positive_ids.update(keys["ids"])
+        positive_hashes.update(keys["hashes"])
+        positive_urls.update(keys["urls"])
+        positive_authors.update(keys["authors"])
+    role_quotas = _role_quotas(max_images)
     output_dir.mkdir(mode=0o700, parents=True, exist_ok=False)
     (output_dir / "images").mkdir(mode=0o700)
     (output_dir / "source").mkdir(mode=0o700)
@@ -205,7 +287,8 @@ def collect(
         if not info.get("OriginalURL"):
             skipped["attribution_missing"] += 1
             continue
-        urls = {info["OriginalURL"], info["OriginalLandingURL"]}
+        url = f"{IMAGE_BASE}/{split}/{image_id}.jpg"
+        urls = {info["OriginalURL"], info["OriginalLandingURL"], url}
         if not author_keys or author_keys & (positive_authors | used_authors):
             skipped["author_overlap"] += 1
             continue
@@ -216,7 +299,6 @@ def collect(
         if remaining < 1:
             skipped["total_byte_limit"] += 1
             break
-        url = f"{IMAGE_BASE}/{split}/{image_id}.jpg"
         payload = None
         for attempt in range(retries + 1):
             try:
@@ -236,7 +318,7 @@ def collect(
         if digest in positive_hashes | used_hashes:
             skipped["image_hash_overlap"] += 1
             continue
-        role = next((name for name, quota in ROLES.items() if counts[name] < quota), None)
+        role = next((name for name, quota in role_quotas.items() if counts[name] < quota), None)
         if role is None:
             break
         relative = f"images/{image_id}.jpg"
@@ -262,10 +344,13 @@ def collect(
     positive_inventory_hash = _digest((positive_run / "inventory.json").read_bytes())
     if positive_inventory_hash != initial_inventory_hash:
         raise ValueError("Positive inventory changed during collection")
+    if any(_digest(path.read_bytes()) != digest for path, digest in watched.items()):
+        raise ValueError("Exclusion run changed during collection")
     result = {
         "schema_version": 1, "dataset": "Open Images V7 human-verified Cat-negative public-development",
         "status": "complete" if len(samples) == max_images else "partial",
         "requested": max_images, "collected": len(samples), "role_counts": dict(counts),
+        "role_quotas": role_quotas, "excluded_runs": exclusions,
         "selection_seed": SELECTION_SEED,
         "image_bytes": used_bytes, "source_files": source_hashes,
         "positive_inventory_sha256": positive_inventory_hash,
@@ -281,6 +366,7 @@ def collect(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--positive-run", type=Path, required=True)
+    parser.add_argument("--exclude-run", type=Path, action="append", default=[], dest="exclude_runs")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--max-images", type=int, default=150)
     parser.add_argument("--max-image-bytes", type=int, default=2_000_000)

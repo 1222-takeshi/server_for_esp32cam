@@ -102,6 +102,141 @@ def test_roles_are_fixed_before_model_results(tmp_path, monkeypatch):
     assert [entry["role"] for entry in result["images"]] == ["train", "val"]
 
 
+@pytest.mark.parametrize(("requested", "expected"), [
+    (1, {"train": 1, "val": 0, "test": 0}),
+    (2, {"train": 1, "val": 1, "test": 0}),
+    (49, {"train": 33, "val": 8, "test": 8}),
+    (150, {"train": 100, "val": 25, "test": 25}),
+])
+def test_role_quotas_preserve_default_and_small_batch(requested, expected):
+    assert collector._role_quotas(requested) == expected
+
+
+def _exclude_run(tmp_path, name, **entry):
+    run = tmp_path / name
+    run.mkdir()
+    (run / "inventory.json").write_text(json.dumps({
+        "schema_version": 1,
+        "images": [{
+            "image_id": C, "sha256": "a" * 64,
+            "source_url": f"{collector.IMAGE_BASE}/validation/{C}.jpg",
+            "author": "other", "author_profile_url": "https://example.org/author/other",
+            "original_url": "https://example.org/raw/other", "landing_url": "https://example.org/other",
+            **entry,
+        }],
+    }))
+    return run
+
+
+@pytest.mark.parametrize(("field", "value", "blocked"), [
+    ("image_id", V, V),
+    ("sha256", hashlib.sha256(_jpeg("green")).hexdigest(), V),
+    ("author", "v", V),
+    ("author_profile_url", "https://example.org/author/v", V),
+    ("landing_url", f"https://example.org/{T}", T),
+    ("original_url", f"https://example.org/raw/{T}", T),
+    ("source_url", f"{collector.IMAGE_BASE}/test/{T}.jpg", T),
+])
+def test_exclude_run_blocks_each_identity_key(tmp_path, monkeypatch, field, value, blocked):
+    positive, calls, _ = _fixture(tmp_path, monkeypatch)
+    run = _exclude_run(tmp_path, "old", **{field: value})
+    result = collector.collect(positive, tmp_path / "new", exclude_runs=(run,), max_images=2)
+    assert result["collected"] == 1 and result["status"] == "partial"
+    if field != "sha256":
+        assert f"{collector.IMAGE_BASE}/{'test' if blocked == T else 'validation'}/{blocked}.jpg" not in calls
+    assert result["excluded_runs"][0]["inventory_sha256"] == hashlib.sha256(
+        (run / "inventory.json").read_bytes()
+    ).hexdigest()
+
+
+def test_multiple_exclude_runs_union_and_unmodified_source(tmp_path, monkeypatch):
+    positive, calls, _ = _fixture(tmp_path, monkeypatch)
+    first = _exclude_run(tmp_path, "first", image_id=V)
+    second = _exclude_run(tmp_path, "second", image_id=T)
+    originals = [(run / "inventory.json").read_bytes() for run in (first, second)]
+    result = collector.collect(positive, tmp_path / "new", exclude_runs=(first, second), max_images=2)
+    assert result["collected"] == 0 and result["status"] == "partial"
+    assert len(result["excluded_runs"]) == 2
+    assert all((run / "inventory.json").read_bytes() == payload
+               for run, payload in zip((first, second), originals, strict=True))
+    assert f"{collector.IMAGE_BASE}/validation/{V}.jpg" not in calls
+    assert f"{collector.IMAGE_BASE}/test/{T}.jpg" not in calls
+
+
+def test_invalid_or_changed_exclusion_run_rejected(tmp_path, monkeypatch):
+    positive, _, _ = _fixture(tmp_path, monkeypatch)
+    run = _exclude_run(tmp_path, "old")
+    data = json.loads((run / "inventory.json").read_text())
+    del data["images"][0]["author_profile_url"]
+    del data["images"][0]["author"]
+    (run / "inventory.json").write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="attribution"):
+        collector.collect(positive, tmp_path / "new", exclude_runs=(run,))
+    assert not (tmp_path / "new").exists()
+    data["images"][0]["author"] = "other"
+    data["images"][0]["author_profile_url"] = "https://example.org/author/other"
+    (run / "inventory.json").write_text(json.dumps(data))
+    original_fetch = collector._fetch
+
+    def mutate_on_download(url, limit, timeout):
+        if url == collector.SOURCES["test_labels"][0]:
+            (run / "inventory.json").write_text("changed")
+        return original_fetch(url, limit, timeout)
+
+    monkeypatch.setattr(collector, "_fetch", mutate_on_download)
+    with pytest.raises(ValueError, match="Exclusion run changed"):
+        collector.collect(positive, tmp_path / "changed", exclude_runs=(run,), max_images=1)
+
+
+def test_older_positive_exclusion_reads_verified_metadata(tmp_path, monkeypatch):
+    positive, _, _ = _fixture(tmp_path, monkeypatch)
+    keys, watched = collector._exclude_evidence(positive)
+    assert "AuthorProfileURL:https://example.org/author/shared" in keys["authors"]
+    assert f"https://example.org/raw/{P}" in keys["urls"]
+    assert positive / "source" / "images.csv" in watched
+    (positive / "source" / "images.csv").write_text("changed")
+    with pytest.raises(ValueError, match="metadata source hash changed"):
+        collector._exclude_evidence(positive)
+
+
+@pytest.mark.parametrize(("field", "value", "error"), [
+    ("sha256", "bad", "SHA-256"),
+    ("sha256", "G" * 64, "SHA-256"),
+    ("source_url", "file:///tmp/image.jpg", "source_url"),
+    ("source_url", 123, "source_url"),
+    ("author", 123, "author identity"),
+])
+def test_invalid_exclusion_identity_rejected_before_output(tmp_path, monkeypatch, field, value, error):
+    positive, _, _ = _fixture(tmp_path, monkeypatch)
+    run = _exclude_run(tmp_path, "bad", **{field: value})
+    with pytest.raises(ValueError, match=error):
+        collector.collect(positive, tmp_path / "new", exclude_runs=(run,))
+    assert not (tmp_path / "new").exists()
+
+
+def test_legacy_metadata_must_cover_inventory_ids(tmp_path, monkeypatch):
+    positive, _, _ = _fixture(tmp_path, monkeypatch)
+    inventory_path = positive / "inventory.json"
+    inventory = json.loads(inventory_path.read_text())
+    inventory["images"][0]["image_id"] = T
+    inventory_path.write_text(json.dumps(inventory))
+    with pytest.raises(ValueError, match="missing image IDs"):
+        collector._exclude_evidence(positive)
+
+
+def test_negative_exclusion_author_without_profile_is_valid(tmp_path):
+    run = _exclude_run(tmp_path, "old", author_profile_url="")
+    keys, _ = collector._exclude_evidence(run)
+    assert "Author:other" in keys["authors"]
+
+
+def test_output_inside_exclusion_run_rejected(tmp_path):
+    run = _exclude_run(tmp_path, "old")
+    with pytest.raises(ValueError, match="output inside"):
+        collector.collect(tmp_path / "positive", run / "new", exclude_runs=(run,))
+    assert not (run / "new").exists()
+
+
 def test_seeded_order_is_reproducible_and_mixes_source_splits():
     keys = {(split, f"{number:016x}"): None
             for split in ("validation", "test") for number in range(1, 9)}
