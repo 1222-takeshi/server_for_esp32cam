@@ -26,7 +26,7 @@ def digest(path: Path) -> str:
     return value.hexdigest()
 
 
-def _json_file(path: Path, limit: int) -> dict:
+def _json_file(path: Path, limit: int) -> tuple[dict, str]:
     if path.is_symlink() or not path.is_file() or path.stat().st_size > limit:
         raise ValueError("Input must be a bounded regular JSON file")
     def unique_pairs(pairs: list[tuple[str, object]]) -> dict:
@@ -35,10 +35,13 @@ def _json_file(path: Path, limit: int) -> dict:
             raise ValueError("Duplicate JSON key")
         return result
 
-    value = json.loads(path.read_bytes(), object_pairs_hook=unique_pairs)
+    payload = path.read_bytes()
+    if len(payload) > limit:
+        raise ValueError("Input JSON exceeds byte limit")
+    value = json.loads(payload, object_pairs_hook=unique_pairs)
     if not isinstance(value, dict):
         raise ValueError("Input JSON must be an object")
-    return value
+    return value, hashlib.sha256(payload).hexdigest()
 
 
 def _hex(value: object, length: int) -> bool:
@@ -78,11 +81,11 @@ def _yolo(boxes: list) -> bytes:
     return "".join(lines).encode()
 
 
-def _validate_source(source: Path) -> tuple[dict, dict, dict[str, dict]]:
+def _validate_source(source: Path) -> tuple[dict, dict, dict[str, dict], str, str]:
     if source.is_symlink() or not source.is_dir():
         raise ValueError("Source must be an existing dataset directory")
-    manifest = _json_file(source / "split-manifest.json", 8_000_000)
-    config = _json_file(source / "dataset.yaml", 32_000)
+    manifest, manifest_sha = _json_file(source / "split-manifest.json", 8_000_000)
+    config, config_sha = _json_file(source / "dataset.yaml", 32_000)
     if (manifest.get("version") != 1 or manifest.get("cat_class_id") != CAT_CLASS_ID
             or not isinstance(manifest.get("images"), list) or not manifest["images"]
             or not isinstance(manifest.get("label_hashes"), dict)
@@ -145,7 +148,7 @@ def _validate_source(source: Path) -> tuple[dict, dict, dict[str, dict]]:
             grouped.add(image_id)
     if grouped != {image_id for image_id, row in rows.items() if row["kind"] == "positive"}:
         raise ValueError("Source groups do not cover positive images")
-    return manifest, config, rows
+    return manifest, config, rows, manifest_sha, config_sha
 
 
 def _validate_ledger(ledger: dict, source_manifest_sha: str,
@@ -204,9 +207,8 @@ def apply(source: Path, ledger_path: Path, output: Path) -> dict:
     if ledger_path.resolve().is_relative_to(target):
         raise ValueError("Ledger cannot be inside output")
     source_manifest_path, source_config_path = source / "split-manifest.json", source / "dataset.yaml"
-    manifest, config, rows = _validate_source(source)
-    ledger = _json_file(ledger_path, 8_000_000)
-    manifest_sha, config_sha, ledger_sha = map(digest, (source_manifest_path, source_config_path, ledger_path))
+    manifest, config, rows, manifest_sha, config_sha = _validate_source(source)
+    ledger, ledger_sha = _json_file(ledger_path, 8_000_000)
     entries = _validate_ledger(ledger, manifest_sha, config_sha, rows, manifest["label_hashes"])
     old_umask = os.umask(0o077)
     try:
@@ -242,12 +244,17 @@ def apply(source: Path, ledger_path: Path, output: Path) -> dict:
                     with (source / label_relative).open("rb") as src, (target / label_relative).open("xb") as dst:
                         shutil.copyfileobj(src, dst)
                     derived_kind = row["kind"]
+                    expected_label_sha = before_label_sha
                 else:
+                    payload = _yolo(entry["boxes"])
                     with (target / label_relative).open("xb") as dst:
-                        dst.write(_yolo(entry["boxes"]))
+                        dst.write(payload)
                     derived_kind = "positive" if entry["boxes"] else "negative"
+                    expected_label_sha = hashlib.sha256(payload).hexdigest()
                 (target / label_relative).chmod(0o600)
                 after_label_sha = digest(target / label_relative)
+                if after_label_sha != expected_label_sha:
+                    raise ValueError("Derived label SHA mismatch")
                 if digest(source / image_relative) != row["sha256"] or digest(image_target) != row["sha256"]:
                     raise ValueError("Source or copied image changed")
                 if digest(source / label_relative) != before_label_sha:

@@ -156,3 +156,69 @@ def test_rejects_ambiguous_duplicate_json_keys(tmp_path):
     with pytest.raises(ValueError, match="Duplicate JSON key"):
         overlay.apply(source, path, tmp_path / "derived")
     assert not (tmp_path / "derived").exists()
+
+
+@pytest.mark.parametrize("changed", ["manifest", "ledger"])
+def test_parsed_json_and_recorded_hash_use_same_bytes(tmp_path, monkeypatch, changed):
+    source, ledger, _, _ = fixture(tmp_path)
+    changed_path = source / "split-manifest.json" if changed == "manifest" else ledger
+    original = overlay._json_file
+    altered = False
+
+    def read_then_replace(path, limit):
+        nonlocal altered
+        result = original(path, limit)
+        if path == changed_path and not altered:
+            changed_path.write_bytes(changed_path.read_bytes() + b" ")
+            altered = True
+        return result
+
+    monkeypatch.setattr(overlay, "_json_file", read_then_replace)
+    output = tmp_path / "derived"
+    with pytest.raises(ValueError, match="changed"):
+        overlay.apply(source, ledger, output)
+    assert not (output / "split-manifest.json").exists()
+    assert not (output / "review-delta.json").exists()
+
+
+@pytest.mark.parametrize("changed", ["image", "label", "manifest", "config", "ledger"])
+def test_copy_time_input_mutation_leaves_no_final_metadata(tmp_path, monkeypatch, changed):
+    source, ledger, _, rows = fixture(tmp_path)
+    targets = {"image": source / "images/train" / f"{rows[0]['image_id']}.jpg",
+               "label": source / "labels/train" / f"{rows[0]['image_id']}.txt",
+               "manifest": source / "split-manifest.json", "config": source / "dataset.yaml",
+               "ledger": ledger}
+    original = overlay.shutil.copyfileobj
+    mutated = False
+
+    def copy_then_mutate(src, dst):
+        nonlocal mutated
+        original(src, dst)
+        if not mutated:
+            with targets[changed].open("ab") as stream:
+                stream.write(b"changed")
+            mutated = True
+
+    monkeypatch.setattr(overlay.shutil, "copyfileobj", copy_then_mutate)
+    output = tmp_path / "derived"
+    with pytest.raises(ValueError, match="changed|mismatch"):
+        overlay.apply(source, ledger, output)
+    assert not (output / "split-manifest.json").exists()
+    assert not (output / "dataset.yaml").exists()
+
+
+def test_keep_rejects_corrupted_copied_label(tmp_path, monkeypatch):
+    source, ledger, _, _ = fixture(tmp_path)
+    original = overlay.shutil.copyfileobj
+
+    def corrupt_label_copy(src, dst):
+        original(src, dst)
+        if src.name.endswith(".txt"):
+            dst.write(b"corrupt")
+
+    monkeypatch.setattr(overlay.shutil, "copyfileobj", corrupt_label_copy)
+    output = tmp_path / "derived"
+    with pytest.raises(ValueError, match="Derived label SHA mismatch"):
+        overlay.apply(source, ledger, output)
+    assert not (output / "split-manifest.json").exists()
+    assert not (output / "review-delta.json").exists()
