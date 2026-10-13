@@ -11,6 +11,7 @@ import time
 from collections import Counter
 from pathlib import Path
 from urllib.error import URLError
+from urllib.parse import urlsplit
 
 from PIL import Image
 
@@ -135,14 +136,27 @@ def _exclude_evidence(run: Path) -> tuple[dict[str, set[str]], dict[Path, str]]:
         raise ValueError("Unsupported exclusion inventory")
     watched = {path: _digest(payload)}
     keys = {"ids": set(), "hashes": set(), "urls": set(), "authors": set()}
+    identities = {}
     for entry in inventory["images"]:
         if not isinstance(entry, dict) or not all(entry.get(key) for key in ("image_id", "sha256", "source_url")):
             raise ValueError("Incomplete exclusion image")
-        keys["ids"].add(_cat_id({"ImageID": entry["image_id"]}))
-        keys["hashes"].add(entry["sha256"])
+        digest = entry["sha256"]
+        if not isinstance(digest, str) or len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+            raise ValueError("Invalid exclusion SHA-256")
+        for field in ("source_url", "landing_url", "original_url"):
+            value = entry.get(field)
+            if value is not None and (not isinstance(value, str) or (value and
+                    (urlsplit(value).scheme not in {"http", "https"} or not urlsplit(value).netloc))):
+                raise ValueError(f"Invalid exclusion {field}")
+        if any(not isinstance(entry.get(field, ""), str) for field in ("author", "author_profile_url")):
+            raise ValueError("Invalid exclusion author identity")
+        image_id = _cat_id({"ImageID": entry["image_id"]})
+        keys["ids"].add(image_id)
+        keys["hashes"].add(digest)
         keys["urls"].update(entry[key] for key in ("source_url", "landing_url", "original_url") if entry.get(key))
-        keys["authors"].update(_author_keys({"Author": entry.get("author", ""),
-                                              "AuthorProfileURL": entry.get("author_profile_url", "")}))
+        identities.setdefault(image_id, set()).update(_author_keys({
+            "Author": entry.get("author", ""), "AuthorProfileURL": entry.get("author_profile_url", "")
+        }))
     # Older positive inventories omit OriginalURL and AuthorProfileURL. Their
     # immutable official metadata supplies both and must match its recorded SHA.
     source_info = inventory.get("source_files", {}).get("images")
@@ -153,13 +167,22 @@ def _exclude_evidence(run: Path) -> tuple[dict[str, set[str]], dict[Path, str]]:
         if digest != source_info["sha256"]:
             raise ValueError("Exclusion metadata source hash changed")
         watched[source_path] = digest
+        matched = set()
         for row in _rows(source):
-            if row["ImageID"].lower() in keys["ids"]:
-                keys["authors"].update(_author_keys(row))
+            image_id = row["ImageID"].lower()
+            if image_id in keys["ids"]:
+                matched.add(image_id)
+                identities[image_id].update(_author_keys(row))
                 keys["urls"].update(row[key] for key in ("OriginalURL", "OriginalLandingURL") if row.get(key))
-    elif any(not entry.get("original_url") or not entry.get("author_profile_url")
+        if matched != keys["ids"]:
+            raise ValueError("Exclusion metadata missing image IDs")
+    elif any(not entry.get("original_url") or not (entry.get("author") or entry.get("author_profile_url"))
              for entry in inventory["images"]):
         raise ValueError("Exclusion run lacks complete attribution metadata")
+    if any(not identity for identity in identities.values()):
+        raise ValueError("Exclusion run lacks author identity")
+    for identity in identities.values():
+        keys["authors"].update(identity)
     return keys, watched
 
 

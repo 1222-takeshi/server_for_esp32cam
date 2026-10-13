@@ -168,10 +168,12 @@ def test_invalid_or_changed_exclusion_run_rejected(tmp_path, monkeypatch):
     run = _exclude_run(tmp_path, "old")
     data = json.loads((run / "inventory.json").read_text())
     del data["images"][0]["author_profile_url"]
+    del data["images"][0]["author"]
     (run / "inventory.json").write_text(json.dumps(data))
     with pytest.raises(ValueError, match="attribution"):
         collector.collect(positive, tmp_path / "new", exclude_runs=(run,))
     assert not (tmp_path / "new").exists()
+    data["images"][0]["author"] = "other"
     data["images"][0]["author_profile_url"] = "https://example.org/author/other"
     (run / "inventory.json").write_text(json.dumps(data))
     original_fetch = collector._fetch
@@ -195,6 +197,37 @@ def test_older_positive_exclusion_reads_verified_metadata(tmp_path, monkeypatch)
     (positive / "source" / "images.csv").write_text("changed")
     with pytest.raises(ValueError, match="metadata source hash changed"):
         collector._exclude_evidence(positive)
+
+
+@pytest.mark.parametrize(("field", "value", "error"), [
+    ("sha256", "bad", "SHA-256"),
+    ("sha256", "G" * 64, "SHA-256"),
+    ("source_url", "file:///tmp/image.jpg", "source_url"),
+    ("source_url", 123, "source_url"),
+    ("author", 123, "author identity"),
+])
+def test_invalid_exclusion_identity_rejected_before_output(tmp_path, monkeypatch, field, value, error):
+    positive, _, _ = _fixture(tmp_path, monkeypatch)
+    run = _exclude_run(tmp_path, "bad", **{field: value})
+    with pytest.raises(ValueError, match=error):
+        collector.collect(positive, tmp_path / "new", exclude_runs=(run,))
+    assert not (tmp_path / "new").exists()
+
+
+def test_legacy_metadata_must_cover_inventory_ids(tmp_path, monkeypatch):
+    positive, _, _ = _fixture(tmp_path, monkeypatch)
+    inventory_path = positive / "inventory.json"
+    inventory = json.loads(inventory_path.read_text())
+    inventory["images"][0]["image_id"] = T
+    inventory_path.write_text(json.dumps(inventory))
+    with pytest.raises(ValueError, match="missing image IDs"):
+        collector._exclude_evidence(positive)
+
+
+def test_negative_exclusion_author_without_profile_is_valid(tmp_path):
+    run = _exclude_run(tmp_path, "old", author_profile_url="")
+    keys, _ = collector._exclude_evidence(run)
+    assert "Author:other" in keys["authors"]
 
 
 def test_output_inside_exclusion_run_rejected(tmp_path):
