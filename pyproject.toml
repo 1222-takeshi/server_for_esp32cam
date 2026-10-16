@@ -25,6 +25,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "websockets>=17,<18",  # Exercise the isolated receiver transport in CI.
   "numpy>=1.26,<3.0",  # Real numerical ONNX postprocessing tests run in CI.
   "pytest>=9.0.3,<10.0",
   "pytest-cov>=5.0,<8.0",
@@ -36,6 +37,9 @@ ml = [
   "numpy>=1.26,<3.0",
   "tflite-runtime>=2.14,<3.0; python_version < '3.12'",
   "ai-edge-litert>=1.0,<3.0; python_version >= '3.12'",
+]
+capture = [
+  "websockets>=17,<18",
 ]
 onnx = [
   "numpy>=1.26,<3.0",
