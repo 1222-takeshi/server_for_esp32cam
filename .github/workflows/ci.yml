@@ -105,7 +105,7 @@ jobs:
       - name: Install dependencies from lockfile
         run: |
           python -m pip install --upgrade pip setuptools
-          # Install the pinned, hashed dependency set (dev+server+ml extras,
+          # Install the pinned, hashed dependency set (dev+server+ml+onnx extras,
           # generated via `uv pip compile --generate-hashes`) instead of
           # re-resolving from pyproject.toml's version ranges. This makes
           # pip-audit's results reproducible across CI runs of the same

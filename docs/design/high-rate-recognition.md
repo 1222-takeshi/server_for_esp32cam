@@ -37,6 +37,8 @@ Hzは処理件数、撮影→認識結果の遅延は情報の古さを示す別
 
 最適化候補の根拠は[ONNX Runtime thread設定](https://onnxruntime.ai/docs/performance/tune-performance/threading.html)、[量子化](https://onnxruntime.ai/docs/performance/model-optimizations/quantization.html)、[ESP32 JPEG連続撮影](https://github.com/espressif/esp32-camera#important-to-remember)。いずれも本構成の達成保証ではなく、量子化が必ず速くなるとは限らない。
 
+`script.onnx_detector.OnnxYoloDetector` は公式 YOLO11n FP32 ONNX の 320px・80 COCO class export に対応する猫検出コンポーネント。利用時は `.[onnx]` をインストールし、モデルファイルを Git 外に置く。`OnnxYoloDetector(model_path, threshold=0.5, num_threads=4).detect(jpeg_bytes)` は EXIF を反映した原画像の正規化 xyxy を `Detection(label="cat")` で返す。モデルの metadata があれば class 15 が `cat` か確認する。前後処理の CPU 時間もあるため、サーバーから呼ぶ場合は `InferenceService` と同方式の専用 single-thread pool を通す。独立した公開training20枚の互換性比較では、検出器と参照NMSの両方をconfidence 0.5に固定した（参照ベンチ単体の既定は0.25）。IoU 0.7、NMS 最大300件は参照ベンチと同じ。この比較・速度測定はprivate環境のONNX Runtime 1.23.2を使用し、監査用lockの解決版1.31.0とは区別する。対象カメラでの精度・負荷を保証しない。
+
 ## 受入試験と記録
 
 試験開始前にモデル/labels/画像・GT/前後処理/runtime/依存関係のSHAまたはversion、入力寸法、threshold、thread数、機材・照明、ウォームアップ、30分の計測窓を固定する。許容する欠落率・短時間の周期低下・最大結果間隔・遅延P95・鮮度TTL・CPU/温度/RSS・既存API応答・精度の合格上限/下限も先に記録する。未決の条件があれば受入完了としない。画像・元GT・baselineは不変とし、結果を見てsilent tuningしない。

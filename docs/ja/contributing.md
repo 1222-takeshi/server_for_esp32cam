@@ -15,7 +15,7 @@
     機能またはバグ修正を実装します。
     *   コードが既存のスタイルと構造に従っていることを確認してください。
     *   新しい機能を追加する場合は、関連するドキュメントや例を追加することを検討してください。
-    *   `pyproject.toml` のPython依存関係を追加・変更した場合は、固定済みロックファイルを再生成してください: `uv pip compile pyproject.toml --extra dev --extra server --extra ml --generate-hashes --python-platform x86_64-unknown-linux-gnu -o requirements.lock.txt`（このplatform指定は、CIの`dependency-audit`ジョブが`ubuntu-latest`上でこのロックファイルをインストールする環境に合わせたものです。Linux以外のホストで指定を省略すると、実際にインストール可能なものと一致しないハッシュが生成される場合があります）。`pyproject.toml`で既に許容されている範囲内で新しいバージョンを取り込みたい場合は`--upgrade`を追加してください。
+    *   `pyproject.toml` のPython依存関係を追加・変更した場合は、固定済みロックファイルを再生成してください: `uv pip compile pyproject.toml --extra dev --extra server --extra ml --extra onnx --generate-hashes --python-platform x86_64-unknown-linux-gnu -o requirements.lock.txt`（このplatform指定は、CIの`dependency-audit`ジョブが`ubuntu-latest`上でこのロックファイルをインストールする環境に合わせたものです。Linux以外のホストで指定を省略すると、実際にインストール可能なものと一致しないハッシュが生成される場合があります）。`pyproject.toml`で既に許容されている範囲内で新しいバージョンを取り込みたい場合は`--upgrade`を追加してください。
 
 4.  **変更のテスト:**
     変更が期待どおりに機能し、新しい問題が発生しないことを確認するために、変更を徹底的にテストしてください。
