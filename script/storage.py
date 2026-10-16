@@ -13,6 +13,9 @@ from uuid import uuid4
 from script.validation import is_valid_camera_id
 
 _HASH_CHUNK_SIZE = 1024 * 1024
+# Checked before is_file() so non-JPEG entries (e.g. .json metadata sidecars)
+# cost no stat() during the rglob() walks.
+_JPEG_SUFFIXES = frozenset({".jpg", ".jpeg"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -280,7 +283,7 @@ class LocalFilesystemStorage:
         images = [
             StoredImage(*self._stored_image_fields(path, include_metadata=include_metadata))
             for path in self.upload_dir.rglob("*")
-            if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg"}
+            if path.suffix.lower() in _JPEG_SUFFIXES and path.is_file()
         ]
         return sorted(images, key=lambda image: image.created_at, reverse=True)
 
@@ -298,7 +301,7 @@ class LocalFilesystemStorage:
         return [
             (path.name, path.relative_to(self.upload_dir).as_posix())
             for path in self.upload_dir.rglob("*")
-            if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg"}
+            if path.suffix.lower() in _JPEG_SUFFIXES and path.is_file()
         ]
 
     def stat_images(
