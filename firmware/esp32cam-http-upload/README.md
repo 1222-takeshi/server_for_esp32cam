@@ -639,3 +639,33 @@ contract:
 2. derive target positions from image-based tracking,
 3. expose a command channel back to the ESP32-CAM,
 4. drive pan/tilt servos from tracking results.
+
+## 高頻度撮影の実験ターゲット（Issue #487）
+
+`esp32cam_high_rate_capture` は通常の `main.cpp` と独立した、QVGA JPEG の
+5/10 Hz 撮影実験用ターゲットです。既定は 100 ms（10 Hz）で、
+`HIGH_RATE_INTERVAL_MS` は 100 または 200 のみ指定できます。Wi-Fi 設定か
+`OTA_PASSWORD` がない場合は起動を停止します。PSRAM、カメラ、送信バッファが
+使えない場合は撮影だけを停止し、認証付き ArduinoOTA は稼働します。
+撮影時の LED 点灯や desired-config polling は行いません。実験後は
+通常ファームウェアへ OTA で戻せます。
+
+ローカルの Git 管理外 `include/esp32cam_config.h` に `WS_UPLOAD_HOST`（LAN IP）、
+`DEVICE_ID`、`DEVICE_API_KEY`、非空の `OTA_PASSWORD` を設定します。
+必要なら `HIGH_RATE_WS_PORT`（既定 8766）と `HIGH_RATE_WS_PATH`
+（既定 `/ws/cameras/<DEVICE_ID>/live`）を上書きします。サーバー側でも
+同じデバイスキーと専用 WebSocket エンドポイントを有効にしてください。
+
+```sh
+pio run -e esp32cam_high_rate_capture
+```
+
+バイナリメッセージは 40 バイトの big-endian ヘッダー
+`>4sQQQQI`（`ECF1`, boot_id, frame_seq, captured_us, sent_us, jpeg_length）と
+最大 128 KiB の JPEG で構成します。`captured_us` はカメラドライバーの
+framebuffer timestamp、`sent_us` は送信直前の `esp_timer_get_time()` です。
+同一または逆行した timestamp は破棄し、取得済みの新規フレームごとに
+`frame_seq` を進めます。サーバーの `clock.ping` には `clock.pong` で応答し、
+約 1 秒ごとに `capture.status` の取得・送信カウンターを送ります。
+5 Hz 以上の fresh frame と猫推論の実効速度は、実機と Raspberry Pi を
+組み合わせた計測で判定します。
