@@ -1,13 +1,13 @@
 # 高頻度撮影・猫認識の開発計画
 
-2026-10-16の目標と10月17日のユーザー訂正を記録する。**実行基盤はRaspberry Pi単体が必須**。Macでの推論は参考測定であり、最低5Hz・希望10Hzの受入対象外とする。計画[#484](https://github.com/1222-takeshi/server_for_esp32cam/issues/484)、全体受入[#486](https://github.com/1222-takeshi/server_for_esp32cam/issues/486)、Pi再検証[#502](https://github.com/1222-takeshi/server_for_esp32cam/issues/502)、全体管理[#451](https://github.com/1222-takeshi/server_for_esp32cam/issues/451)。[Mac参考記録](high-rate-recognition-results.md)は元データを保持して達成扱いを訂正する。通常運用は5秒設定。
+2026-10-16の目標と10月17日のユーザー訂正を記録する。**実行基盤はRaspberry Pi単体が必須**。Macでの推論は参考測定であり、最低5Hz・希望10Hzの受入対象外とする。計画[#484](https://github.com/1222-takeshi/server_for_esp32cam/issues/484)、全体受入[#486](https://github.com/1222-takeshi/server_for_esp32cam/issues/486)、Pi再検証[#502](https://github.com/1222-takeshi/server_for_esp32cam/issues/502)、全体管理[#451](https://github.com/1222-takeshi/server_for_esp32cam/issues/451)。[Mac参考記録](high-rate-recognition-results.md)は元データを保持して達成扱いを訂正する。通常運用は5秒設定。[Pi単体の測定記録](raspi-high-rate-recognition-results.md)で条件・速度・未評価範囲を管理する。
 
 ## 目標と計数
 
 | 段階 | 新規画像の撮影 | 新規画像に対する猫検知推論の完了 | 状態 |
 |---|---|---|---|
-| 最低要件 | 5Hz以上、200ms周期が目安 | 毎秒5件以上 | Piでの30分結合検証が必要。Mac参考値を達成に数えない |
-| 希望目標 | 10Hz以上、100ms周期が目安 | 毎秒10件以上 | Piで未受入。モデル・画質変更時は精度も別比較する |
+| 最低要件 | 5Hz以上、200ms周期が目安 | 毎秒5件以上 | Pi 4単体で30分5.262222Hz、各10秒窓5.1Hz以上の技術条件を通過。現場精度・常用統合は別受入 |
+| 希望目標 | 10Hz以上、100ms周期が目安 | 毎秒10件以上 | Piで未達。95ms撮影の120秒診断は撮影10.525Hz・認識6.908333Hz。モデル・画質変更時は精度も別比較する |
 
 最初の受入は1台を対象にする。カメラごとに撮影・受信・推論開始・推論完了の実測Hzを分ける。同じ画像の再推論、再送、追跡の位置補間、画面再描画は新規画像の認識へ加算しない。猫なしという正常な推論結果も1件と数え、推論失敗・意図的skipは成功数へ加算しない。撮影10Hz・認識5Hzは最低要件の候補であり、10Hz認識の達成ではない。
 
@@ -21,16 +21,16 @@ Hzは処理件数、撮影→認識結果の遅延は情報の古さを示す別
 - [2026-10-14の測定記録](https://github.com/1222-takeshi/server_for_esp32cam/issues/451#issuecomment-6171248121)はPi 4、1 CPU thread、各入力条件20画像×3回。SSD/LiteRT人物検知300入力はmedian/P95が137.1/137.5ms、公式YOLO11n ONNX 320は276.6/284.8ms、640は1118.7/1129.1msだった。137msは現在の4 thread本番構成の実測値ではない。本番runtimeはPython 3.12.3、ai-edge-litert 2.1.6、NumPy 2.5.1であり、今回の隔離ONNX環境とは別である。
 - [#489](https://github.com/1222-takeshi/server_for_esp32cam/issues/489)の追加offline測定では、公式YOLO11n ONNX 320・4 threadのPi 4はmedian/P95 136.46/198.29ms、Macは6.79/7.12ms。公開training 20枚の参照threshold 0.25による比較であり、実カメラの結合Hzを示さない。新adapterと参照をthreshold 0.5で合わせると両者9件の猫検出だった。SSDはperson-onlyでタスクも異なる。モデル単体の時間の逆数を運用Hzへ置き換えず、公開画像の比較を本人猫・消灯環境の受入に代用しない。
 
-隔離経路の[フレーム/時計protocol #492](https://github.com/1222-takeshi/server_for_esp32cam/pull/492)、[実験ファーム #493](https://github.com/1222-takeshi/server_for_esp32cam/pull/493)、[ONNX adapter #494](https://github.com/1222-takeshi/server_for_esp32cam/pull/494)、[受信器 #495](https://github.com/1222-takeshi/server_for_esp32cam/pull/495)、[撮影遅延改善 #498](https://github.com/1222-takeshi/server_for_esp32cam/pull/498)、[bounded CLI #499](https://github.com/1222-takeshi/server_for_esp32cam/pull/499)はmerge済み。短時間試験と中断runを保持し、採用30分runと合算していない。採用runは新規画像18,935枚、平均10.519Hz、遅延上限P95 95.491ms、drop・wire欠落・推論失敗0。これはMac参考試験で、Pi要件の達成対象外。Piでモデル/FP32/320入力/threshold0.5を固定し、撮影・転送と推論を並行させて再検証する。
+隔離経路の[フレーム/時計protocol #492](https://github.com/1222-takeshi/server_for_esp32cam/pull/492)、[実験ファーム #493](https://github.com/1222-takeshi/server_for_esp32cam/pull/493)、[ONNX adapter #494](https://github.com/1222-takeshi/server_for_esp32cam/pull/494)、[受信器 #495](https://github.com/1222-takeshi/server_for_esp32cam/pull/495)、[撮影遅延改善 #498](https://github.com/1222-takeshi/server_for_esp32cam/pull/498)、[bounded CLI #499](https://github.com/1222-takeshi/server_for_esp32cam/pull/499)はmerge済み。短時間試験と中断runを保持し、採用30分runと合算していない。Mac参考試験はPi要件の達成対象外として原記録を保持。Pi 4単体で同じモデル/FP32/320入力/threshold0.5、190ms撮影・3 threadの30分試験を行い、新規認識9,472件、5.262222Hz、遅延上限P95 231.765msで最低5Hz技術条件を通過した。95ms撮影の120秒診断では認識6.908333Hz、上書き等34.44%で10Hz未達。[Pi測定記録](raspi-high-rate-recognition-results.md)で条件と未評価範囲を分ける。
 
 ## 独立Issueへ分ける実装順序
 
 | 段階 / 所有領域 | 実装・検証 | 次へ進む条件 |
 |---|---|---|
-| 1 撮影・転送 / デバイス・受信計測 | 隔離ファーム/認証付き受信器・frame/boot IDと撮影時刻を実装 | Mac参考試験済み。190ms候補をPi受信器へ接続し、30分のHz・欠落と時計を再検証 |
-| 2 鮮度と処理経路 / サーバー | 最新待機1枚＋実行中1枚、上限付きメモリ上推論と結果時刻を実装。永続保存なし | Pi上で遅延・drop・CPU/RSS・温度・healthを固定条件で再検証。常用保存/通知との同時負荷は残件 |
-| 3 猫認識5Hz / 推論 | 同じ公式YOLO11n FP32 ONNX 320、公開画像の参照一致を維持しPiでthread数と処理経路を調整 | Piの30分速度基準は未受入。本人猫/昼夜GT精度・M4・追従も未完了 |
-| 4 猫認識10Hz / 推論・運用 | Piでの5Hz検証後に10Hz余力を測定。Macオフロードは受入対象外 | Piで平均・各10秒窓10Hzと最大間隔250msを満たす。モデル/runtime変更は精度比較も必要 |
+| 1 撮影・転送 / デバイス・受信計測 | 隔離ファーム/認証付き受信器・frame/boot IDと撮影時刻を実装 | Pi単体30分で撮影/受信各5.262778Hz、wire欠落0、時計200ppm仮定と整合 |
+| 2 鮮度と処理経路 / サーバー | 最新待機1枚＋実行中1枚、上限付きメモリ上推論と結果時刻を実装。永続保存なし | Pi上の遅延・drop・CPU/RSS・温度・healthは30分技術基準pass。常用保存/通知との同時負荷は残件 |
+| 3 猫認識5Hz / 推論 | 同じ公式YOLO11n FP32 ONNX 320、公開画像の参照一致を維持しPiでthread数と処理経路を調整 | Piの30分最低5Hz技術条件はpass。本人猫/昼夜GT精度・M4・追従は未完了 |
+| 4 猫認識10Hz / 推論・運用 | Piで95ms撮影を短時間診断し認識6.908333Hz。推論の追加最適化と精度比較が必要 | Piで平均・各10秒窓10Hzと最大間隔250msを満たす。モデル/runtime変更は精度比較も必要 |
 | 5 現場受入・角度推定 / 評価・制御 | 本人猫/猫なし・昼/消灯の別セッションGTと連続映像で評価。モータなしで角度推定・鮮度棄却・停止判断を検証 | [猫追従契約](cat-following-capability.md)の校正・機材・停止条件を含む受入を満たしてから別Issueで実機駆動へ進む |
 
 撮影試験は1→2、結合した猫認識は1/2→3→4を基本の依存順序とする。夜間撮像方式・現場GTの準備は並行でき、5の受入には3と既存追従契約を必要とする。10Hz未達でも5Hz受入を別に記録できる。複数カメラの台数別負荷とモータ指令周期は後続Issueで定義する。

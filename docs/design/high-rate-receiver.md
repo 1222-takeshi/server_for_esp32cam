@@ -75,12 +75,13 @@ holds one ASCII token, is owner-readable only (`chmod 600`), and stays out of ou
 python -m script.live_observer \
   --key-file /private/path/device-key.txt \
   --output-dir /private/path/new-run \
-  --host 192.168.1.210 --camera-id esp32cam-01 \
+  --host 192.168.1.221 --camera-id esp32cam-01 \
   --duration-seconds 120 --warmup-seconds 0
 ```
 
 For cat inference, add `--model /private/path/cat.onnx` (threshold 0.5).
-Use `--num-threads 2` to compare Pi CPU settings (1–256, default 4); the manifest
+The [Pi-only trial](raspi-high-rate-recognition-results.md) used `--num-threads 3`
+(1–256, default 4); the manifest
 records the value actually passed to the detector. Use `--clock-source raw` on
 Linux for a shared receiver/event/window/footer clock without NTP rate slewing;
 unsupported platforms fail before output creation. The default `monotonic`

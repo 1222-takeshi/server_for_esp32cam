@@ -1,6 +1,6 @@
 # Mac参考試験：高頻度撮影・猫認識の測定結果
 
-**要件訂正（2026-10-17）:** ユーザー要件はRaspberry Pi単体での最低5Hz・希望10Hzであり、Macへの推論移動は受入対象外。本書のMac測定は参考記録として保持し、Piのマイルストーン達成扱いを撤回する。Pi単体の再検証は[#502](https://github.com/1222-takeshi/server_for_esp32cam/issues/502)、全体受入は[#486](https://github.com/1222-takeshi/server_for_esp32cam/issues/486)で継続する。
+**要件訂正（2026-10-17）:** ユーザー要件はRaspberry Pi単体での最低5Hz・希望10Hzであり、Macへの推論移動は受入対象外。本書のMac測定は参考記録として保持し、Piのマイルストーン達成扱いを撤回する。Pi単体の[測定記録](raspi-high-rate-recognition-results.md)と再検証は[#502](https://github.com/1222-takeshi/server_for_esp32cam/issues/502)、全体受入は[#486](https://github.com/1222-takeshi/server_for_esp32cam/issues/486)で継続する。
 
 Issue [#500](https://github.com/1222-takeshi/server_for_esp32cam/issues/500)のMac参考記録。30分のMac実験では最低5Hzの速度・鮮度条件を満たした。希望10Hzは最大結果間隔条件に未達。固定条件・基準・原記録のSHA・集計値は[結果manifest](high-rate-recognition-results.json)に保存する。既存の `technical_acceptance=true` はMac実験内の判定を保持したもので、Pi要件を満たした意味ではない。本人猫の精度や追従の受入も未完了。
 
@@ -43,7 +43,7 @@ Issue [#500](https://github.com/1222-takeshi/server_for_esp32cam/issues/500)のM
 | 時計 | 同一bootで874 sample、200ppm仮定とoffset区間は整合。midpoint回帰の差は16.334ppmで、独立した物理校正の代わりにはしない |
 | Mac資源 | warmup後RSS増加0.5MiB、最大106.45MiB、平均process CPU 98.445%（1 core=100%、時間coverage 99.946%）。`pmset`にthermal/performance warning記録なし。実温度は不明 |
 | 同時Pi health観測 | 359 sample、health/ready計718回すべてHTTP 200・ready。遅延P95 10.907ms・最大44.063ms、温度最大49.66℃、throttled=0x0 |
-| Mac参考試験の最低5Hz / 希望10Hz | Mac実験内の固定速度・鮮度基準はpass。Pi要件は未受入。希望10Hzは最大間隔だけfail |
+| Mac参考試験の最低5Hz / 希望10Hz | Mac実験内の固定速度・鮮度基準はpass。本runはPi受入対象外（[Pi別試験](raspi-high-rate-recognition-results.md)を参照）。本runの希望10Hzは最大間隔だけfail |
 | 原記録整合性 | 41,575 events、25,341,710 bytes。閉じたJSONLのSHA、run/criteria SHA、最終窓/footer hash等の全guardが一致 |
 
 正常完了は推論終了時刻、受信/dropの分母は受信時刻で `[start,end)` に分類する。窓開始前に受信して窓内に完了した1件を含み、窓内に受信して終了後に完了した1件は成功数に含めない。終了時の実行中は1件。wire gapは同一boot/sequenceから一度だけ数え、boot/接続境界の不明な欠落を0と推定しない。このrunは同一bootでsequenceが連続し、clock timeoutを示す記録もないが、短時間の同一boot再接続回数は直接測定していない。

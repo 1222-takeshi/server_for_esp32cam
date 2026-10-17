@@ -1,0 +1,240 @@
+{
+  "schema_version": 1,
+  "issue": 502,
+  "pr": 503,
+  "required_platform": "Raspberry Pi 4 CPU only; Mac operation terminal only",
+  "runtime_commit": "01111551768f327a9561504166a6a770d8c57f28",
+  "source_archive_manifest_sha256": "1419d4a2e43ac22cf45c36b72b0326a7ec2a7c38c1d312576f85f485699463bd",
+  "criteria_sha256": "421236d1f80991b41adcaa0824fa400ce460bdbbafd2441ff764be90ec0964a1",
+  "conditions": {
+    "model": "official YOLO11n FP32 ONNX320",
+    "model_sha256": "ff1013da8734fe2b8ede5f34a2124855d447fbefd248d148e9f29e7f8e28c9c4",
+    "threads": 3,
+    "threshold": 0.5,
+    "frame_size": "QVGA",
+    "jpeg_quality": 12,
+    "clock_source": "CLOCK_MONOTONIC_RAW",
+    "conditions_note": "Lighting state unverified and not manipulated; existing camera automatic exposure. Own-cat/day-night precision/recall remains unverified."
+  },
+  "versions": {
+    "python": "3.12.3",
+    "onnxruntime": "1.23.2",
+    "numpy": "2.5.1",
+    "websockets": "17.2",
+    "Pillow": "12.2.0"
+  },
+  "minimum_5hz_trial": {
+    "run": "20261017T125927Z-f8512e62-onnx",
+    "duration_s": 1800,
+    "capture_interval_ms": 190,
+    "first_accepted_utc": "2026-10-17T13:00:16.319728+00:00",
+    "measurement_start_raw_ns": 626218686915836,
+    "measurement_end_raw_ns": 628018686915836,
+    "valid_30min_record": true,
+    "technical_5hz_acceptance": true,
+    "desired_10hz_acceptance": false,
+    "short_window_desired_checks": null,
+    "short_window_desired_conditions_satisfied": null,
+    "rates_hz": {
+      "capture_observed_hz": 5.262777777777778,
+      "receive_unique_hz": 5.262777777777778,
+      "accepted_unique_hz": 5.262777777777778,
+      "inferred_hz": 5.262222222222222,
+      "fresh_success_hz": 5.262222222222222
+    },
+    "fresh_success_count": 9472,
+    "ten_second_bins": {
+      "count": 180,
+      "min_hz": 5.1,
+      "max_hz": 5.3
+    },
+    "max_success_gap_ms_including_edges": 368.53,
+    "capture_to_result_upper_ms": {
+      "p50": 207.258,
+      "p95": 231.765,
+      "max": 471.638
+    },
+    "drop_unique": 2,
+    "drop_fraction": 0.00021112635912593687,
+    "drop_reasons": {
+      "cancelled": 1,
+      "overwritten": 1
+    },
+    "missing_wire_frames": 0,
+    "failed_inferences": 0,
+    "clock_200ppm_consistent": true,
+    "resources": {
+      "samples_after_warmup": 360,
+      "rss_baseline_kib": 93856,
+      "rss_max_kib": 96096,
+      "rss_growth_mib": 2.1875,
+      "average_process_cpu_pct": 250.0590813993318,
+      "cpu_coverage_fraction": 0.9983705508455556
+    },
+    "pi_health": {
+      "samples": 360,
+      "http_checks": 720,
+      "health_p95_ms": 19.897704,
+      "health_max_ms": 90.272685,
+      "temperature_max_c": 75.958,
+      "throttle_states": [
+        "throttled=0x0"
+      ],
+      "checks": {
+        "raw_clock": true,
+        "fresh_samples": true,
+        "max_sample_gap": true,
+        "pi_hardware": true,
+        "full_30min_window": true,
+        "sample_count": true,
+        "all_http_200": true,
+        "all_ready": true,
+        "latency": true,
+        "temperature": true,
+        "throttle": true
+      }
+    },
+    "integrity_checks_all_pass": true,
+    "minimum_checks": {
+      "fresh_success_rate_hz_whole_window": true,
+      "fresh_success_rate_hz_each_10s_bin": true,
+      "max_success_gap_ms": true,
+      "capture_to_result_upper_p95_ms": true,
+      "capture_to_result_upper_max_ms": true,
+      "drop_fraction_max": true,
+      "failed_inferences": true,
+      "clock_same_boot_offsets_consistent_with_200ppm": true,
+      "rss_growth_after_warmup_mib_max": true,
+      "average_process_cpu_pct_max": true,
+      "missing_wire_fraction_max": true
+    },
+    "restoration": {
+      "state": "restored",
+      "started_utc": "2026-10-17T12:59:26.990279+00:00",
+      "finished_utc": "2026-10-17T13:31:20.454192+00:00",
+      "ack_version": 15,
+      "ack_utc": "2026-10-17T13:31:08.999125+00:00",
+      "post_ack_frame_baseline": 100540,
+      "normal_images_restored": true,
+      "original_config_restored": true,
+      "rollback_flashed": true,
+      "flash_attempt": 1,
+      "normal_connection": {
+        "device_server_base_url": "http://raspi-server.local:8080",
+        "expected_interval_seconds": 5,
+        "keep_only_detected_snapshots": true,
+        "last_seen_at": "2026-10-17T13:31:16.041551+00:00",
+        "last_websocket_frame_at": "2026-10-17T13:31:16.049871+00:00",
+        "seconds_since_contact": 4,
+        "status": "healthy",
+        "websocket_frames_received": 100541
+      }
+    },
+    "firmware_sha256": "8c6c4ba6065ff546bd25dda91f7636c27bd7392960ae33221a01047f5e8fc4d2",
+    "raw_artifact_sha256": {
+      "criteria.json": "421236d1f80991b41adcaa0824fa400ce460bdbbafd2441ff764be90ec0964a1",
+      "manifest.json": "6c4579db24c47a539449a35699a95741985c0c97db203f3a9dba67f6d6b104ef",
+      "events.jsonl": "e1c5e417700a5e2421e9c24bdd0ea0ea874b5240e28761695c347be1ff5e4aae",
+      "footer.json": "3f4232d1150995995695f97c1383d91b6d25555d604b9876f4ca872ac772c6f1",
+      "analysis.json": "2652d0ce763647ee7556c7ba8a4e6f6cb004c92cf33ebe9fe9af1130c2a05419",
+      "completion-summary.json": "da9423241ad5832731c731558cc375fd53e0ae7630541bea47920c9bdfb71481"
+    },
+    "window_boundary": {
+      "accepted_inflight_at_end": 1,
+      "received_before_window_success_inside": 1,
+      "received_in_window_success_after_end": 0
+    }
+  },
+  "desired_10hz_120s_diagnostic": {
+    "run": "20261017T133240Z-90a715f3-onnx",
+    "duration_s": 120,
+    "capture_interval_ms": 95,
+    "technical_5hz_acceptance": false,
+    "desired_10hz_acceptance": false,
+    "short_window_desired_conditions_satisfied": false,
+    "rates_hz": {
+      "capture_observed_hz": 10.525,
+      "receive_unique_hz": 10.525,
+      "accepted_unique_hz": 10.525,
+      "inferred_hz": 6.908333333333333,
+      "fresh_success_hz": 6.908333333333333
+    },
+    "fresh_success_count": 829,
+    "ten_second_bins": {
+      "count": 12,
+      "min_hz": 6.9,
+      "max_hz": 7.0
+    },
+    "max_success_gap_ms_including_edges": 195.188,
+    "capture_to_result_upper_ms": {
+      "p50": 252.985,
+      "p95": 298.448,
+      "max": 323.131
+    },
+    "drop_unique": 435,
+    "drop_fraction": 0.34441805225653205,
+    "drop_reasons": {
+      "cancelled": 2,
+      "overwritten": 433
+    },
+    "missing_wire_frames": 0,
+    "failed_inferences": 0,
+    "clock_200ppm_consistent": true,
+    "restoration": {
+      "state": "restored",
+      "started_utc": "2026-10-17T13:32:40.061963+00:00",
+      "finished_utc": "2026-10-17T13:36:33.291907+00:00",
+      "ack_version": 17,
+      "ack_utc": "2026-10-17T13:36:21.944908+00:00",
+      "post_ack_frame_baseline": 100563,
+      "normal_images_restored": true,
+      "original_config_restored": true,
+      "rollback_flashed": true,
+      "flash_attempt": 1,
+      "normal_connection": {
+        "device_server_base_url": "http://raspi-server.local:8080",
+        "expected_interval_seconds": 5,
+        "keep_only_detected_snapshots": true,
+        "last_seen_at": "2026-10-17T13:36:28.814180+00:00",
+        "last_websocket_frame_at": "2026-10-17T13:36:28.822239+00:00",
+        "seconds_since_contact": 4,
+        "status": "healthy",
+        "websocket_frames_received": 100564
+      }
+    },
+    "raw_artifact_sha256": {
+      "criteria.json": "421236d1f80991b41adcaa0824fa400ce460bdbbafd2441ff764be90ec0964a1",
+      "manifest.json": "c955c5fcf4ed99db9adc39f6e13196de1483f6503543d00706ad35f3974cdacc",
+      "events.jsonl": "2718d054e93970b6fc2859027075b191fdabee9ef23ffb3dce0ed81c1c55e96a",
+      "footer.json": "3d7d213ceb6268332be0d71a0c9c9cf7f5730afb627dfe7209d705a32b29b51e",
+      "analysis.json": "3e70ac3eb75c665089c2349d8f760b188e6e97c66cfc3a5cb32d3ada210ab12b",
+      "completion-summary.json": "1a86170ed01d791447939a5525e5fe1485d010be9184ed15bec535d609afe226"
+    },
+    "window_boundary": {
+      "accepted_inflight_at_end": 2,
+      "received_before_window_success_inside": 1,
+      "received_in_window_success_after_end": 0
+    }
+  },
+  "thread_output_parity": {
+    "fixtures": 20,
+    "matching_cat_detections": 9,
+    "max_score_or_normalized_coord_difference": 6.556510925292969e-07,
+    "threshold": 0.5,
+    "scope": "Same FP32 model/thread parity on public training fixtures; not own-cat precision/recall."
+  },
+  "preflights": {
+    "20261017T124248Z-6d90c9d9-onnx": "120s,2threads,MONOTONIC; P95 259.163ms andclock200ppm failed; retained separately",
+    "20261017T125300Z-b290131b-onnx": "120s,3threads,RAW; short connectivity only, not30min acceptance"
+  },
+  "mac_reference_eligible_for_pi_acceptance": false,
+  "unverified": [
+    "own-cat/day/lights-off ground truth precision and recall",
+    "physical clock calibration; 200ppm is an assumption",
+    "simultaneous normal uploads/storage/notifications",
+    "permanent production integration",
+    "motor-free calibrated angle simulation"
+  ],
+  "baseline_policy": "Raw/source/GT and originalM2 seven-day observation are not changed or excluded. Recognition success includes no-cat results. Normal5s camera configuration and firmware restored aftereachrun.",
+  "desired_10hz_source_archive_manifest_sha256": "a7789f809001ca17a91abc37c70779ea6b683e01be45a8947a5f2cd6eae61fed"
+}
