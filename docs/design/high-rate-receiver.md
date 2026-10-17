@@ -64,3 +64,35 @@ receiver drops after decoding still advance ordering state.
 Clock records include the host receive time and device clock sample; device
 status records include host receive time so cumulative capture and failure
 counters can be converted into rates after the run.
+
+## Portable bounded observer CLI (#496)
+
+Install `.[capture]`; add `.[onnx]` for cat inference. Point firmware at the LAN
+listener and use `--host` on an isolated network (default loopback). The key file
+holds one ASCII token, is owner-readable only (`chmod 600`), and stays out of output/argv.
+
+```sh
+python -m script.live_observer \
+  --key-file /private/path/device-key.txt \
+  --output-dir /private/path/new-run \
+  --host 192.168.1.210 --camera-id esp32cam-01 \
+  --duration-seconds 120 --warmup-seconds 0
+```
+
+For cat inference, add `--model /private/path/cat.onnx` (threshold 0.5). The
+output directory must be new, outside the repository, and mode 0700; its files
+are mode 0600. No image or model bytes are stored. `manifest.json` records
+settings, source/model SHA256, dependency versions, and windows. `events.jsonl`
+stops at 100,000 records or 128 MiB; `footer.json` records the outcome, SHA256
+of the closed event file, the final window snapshot, and a canonical SHA256 of
+the footer (excluding its own hash). Use a trusted parent for `--output-dir`;
+parents must belong to the current user or root, and non-sticky
+group/world-writable parents are rejected. This check does not
+protect against an adversary that can replace an ancestor directory.
+
+The listener waits at most 180 seconds for the first **accepted** frame, outside
+the measurement duration. Warmup begins there; measurement starts after
+`--warmup-seconds` and lasts `--duration-seconds` (1–3600). `footer.json` records
+completion, timeout, interruption, or failure and event totals. A separate
+monitor closes `receiver` → `server` → writer, including on a JSONL cap. Validate
+actual capture and fresh inference rates from the records.
