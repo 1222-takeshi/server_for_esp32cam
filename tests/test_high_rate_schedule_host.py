@@ -19,6 +19,9 @@ def test_schedule_preserves_phase_without_catchup_bursts(tmp_path):
 #include <initializer_list>
 #include "high_rate_schedule.h"
 int main() {
+  static_assert(high_rate::supportedCaptureInterval(190), "5Hz headroom candidate");
+  static_assert(!high_rate::supportedCaptureInterval(0), "zero is invalid");
+  static_assert(!high_rate::supportedCaptureInterval(191), "unsupported interval");
   uint32_t last = 0;
   assert(!high_rate::captureDue(99, 100, last) && last == 0);
   assert(high_rate::captureDue(100, 100, last) && last == 100);
@@ -33,7 +36,8 @@ int main() {
   assert(!high_rate::captureDue(49, 100, last));
   assert(high_rate::captureDue(50, 100, last) && last == 50);
   assert(high_rate::captureDue(151, 100, last) && last == 150);
-  for (uint32_t period : {95u, 100u, 200u}) {
+  for (uint32_t period : {95u, 100u, 190u, 200u}) {
+    assert(high_rate::supportedCaptureInterval(period));
     last = 0;
     for (uint32_t n = 1; n <= 1000; ++n) {
       assert(high_rate::captureDue(n * period + 1, period, last));

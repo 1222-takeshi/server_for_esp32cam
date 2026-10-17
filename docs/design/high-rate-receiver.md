@@ -79,7 +79,14 @@ python -m script.live_observer \
   --duration-seconds 120 --warmup-seconds 0
 ```
 
-For cat inference, add `--model /private/path/cat.onnx` (threshold 0.5). The
+For cat inference, add `--model /private/path/cat.onnx` (threshold 0.5).
+Use `--num-threads 2` to compare Pi CPU settings (1–256, default 4); the manifest
+records the value actually passed to the detector. Use `--clock-source raw` on
+Linux for a shared receiver/event/window/footer clock without NTP rate slewing;
+unsupported platforms fail before output creation. The default `monotonic`
+remains available. See [Python clock constants](https://docs.python.org/3/library/time.html#time.CLOCK_MONOTONIC_RAW).
+Run the listener and model
+on the Raspberry Pi for Pi-only acceptance; a Mac listener is reference only. The
 output directory must be new, outside the repository, and mode 0700; its files
 are mode 0600. No image or model bytes are stored. `manifest.json` records
 settings, source/model SHA256, dependency versions, and windows. `events.jsonl`
