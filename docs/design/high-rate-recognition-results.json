@@ -252,5 +252,12 @@
     "permanent deployment",
     "calibrated motor-free angle simulation",
     "motor actuation"
-  ]
+  ],
+  "platform_acceptance": {
+    "required_platform": "Raspberry Pi",
+    "measured_platform": "Mac",
+    "eligible_for_user_milestone": false,
+    "correction": "2026-10-17 user requires Raspberry Pi-only. Preserve this run as reference; technical_acceptance is scoped to the Mac experiment, not the Pi requirement.",
+    "pi_followup_issue": 502
+  }
 }

@@ -34,9 +34,8 @@
 #ifndef HIGH_RATE_INTERVAL_MS
 #define HIGH_RATE_INTERVAL_MS 100
 #endif
-static_assert(HIGH_RATE_INTERVAL_MS == 95 || HIGH_RATE_INTERVAL_MS == 100 ||
-                  HIGH_RATE_INTERVAL_MS == 200,
-              "HIGH_RATE_INTERVAL_MS must be 95, 100 or 200");
+static_assert(high_rate::supportedCaptureInterval(HIGH_RATE_INTERVAL_MS),
+              "HIGH_RATE_INTERVAL_MS must be 95, 100, 190 or 200");
 
 namespace {
 WebSocketsClient webSocket;

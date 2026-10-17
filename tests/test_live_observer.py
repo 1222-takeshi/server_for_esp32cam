@@ -31,7 +31,8 @@ def test_private_key_and_invalid_arguments(tmp_path: Path) -> None:
     assert live_observer.read_key(parsed.key_file) == "private-token"
     assert "private-token" not in repr(parsed)
     for option, value in (("--duration-seconds", "0"), ("--duration-seconds", "3601"),
-                          ("--warmup-seconds", "61"), ("--port", "0")):
+                          ("--warmup-seconds", "61"), ("--port", "0"),
+                          ("--num-threads", "0"), ("--num-threads", "257")):
         with pytest.raises(SystemExit):
             args(tmp_path, option, value)
     with pytest.raises(SystemExit):
@@ -153,18 +154,26 @@ def test_existing_output_dir_is_rejected(tmp_path: Path) -> None:
         live_observer.run(parsed)
 
 
+@pytest.mark.parametrize("threads", [1, 2, 4])
 def test_model_mode_loads_adapter_and_records_sha(tmp_path: Path,
-                                                   monkeypatch: pytest.MonkeyPatch) -> None:
+                                                   monkeypatch: pytest.MonkeyPatch,
+                                                   threads: int) -> None:
     from script import onnx_detector
 
     model = tmp_path / "cat.onnx"
     model.write_bytes(b"model-fixture")
-    parsed = args(tmp_path, "--model", str(model))
+    parsed = args(tmp_path, "--model", str(model), "--num-threads", str(threads))
     order: list[str] = []
     detector = object()
     monkeypatch.setattr(live_observer, "CONNECTION_WAIT_SECONDS", 0.05)
     monkeypatch.setattr(live_observer.importlib.metadata, "version", lambda name: "test")
-    monkeypatch.setattr(onnx_detector, "OnnxYoloDetector", lambda *a, **kw: detector)
+    def make_detector(path, *, threshold, num_threads):
+        assert path == model
+        assert threshold == 0.5
+        assert num_threads == threads
+        return detector
+
+    monkeypatch.setattr(onnx_detector, "OnnxYoloDetector", make_detector)
 
     def make_receiver(**kwargs):
         assert kwargs["detector"] is detector
@@ -177,6 +186,7 @@ def test_model_mode_loads_adapter_and_records_sha(tmp_path: Path,
     manifest = json.loads((parsed.output_dir / "manifest.json").read_text())
     assert manifest["conditions"]["model_sha256"] == live_observer._sha(model)
     assert manifest["conditions"]["model_threshold"] == 0.5
+    assert manifest["conditions"]["model_num_threads"] == threads
 
 
 def test_footer_hashes_closed_events_and_final_window(tmp_path: Path,
@@ -213,6 +223,37 @@ def test_late_accepted_frame_does_not_start_measurement(monkeypatch: pytest.Monk
     assert live_observer._monitor(receiver, thread, writer, 1, 0, window) == "connection_timeout"
     assert window["measurement_end_monotonic_ns"] is None
     writer.close()
+
+
+def test_raw_clock_is_shared_by_receiver_writer_and_window(tmp_path, monkeypatch):
+    offset = 10**15
+    monkeypatch.setattr(live_observer.time, "CLOCK_MONOTONIC_RAW", 4, raising=False)
+    monkeypatch.setattr(live_observer.time, "clock_gettime_ns",
+                        lambda clock_id: live_observer.time.monotonic_ns() + offset)
+    parsed = args(tmp_path, "--clock-source", "raw")
+    order = []
+
+    def make_receiver(**kwargs):
+        assert kwargs["clock_us"]() > offset // 1000
+        return FakeReceiver(kwargs["event_sink"], order)
+
+    monkeypatch.setattr(live_observer, "create_receiver", make_receiver)
+    monkeypatch.setattr(live_observer, "serve_live",
+                        lambda receiver, host, port: FakeServer(receiver, order))
+    assert live_observer.run(parsed) == 0
+    manifest = json.loads((parsed.output_dir / "manifest.json").read_text())
+    footer = json.loads((parsed.output_dir / "footer.json").read_text())
+    assert manifest["conditions"]["clock_source"] == "raw"
+    assert manifest["window"]["first_accepted_monotonic_ns"] > offset
+    assert footer["finished_monotonic_ns"] > manifest["window"]["measurement_end_monotonic_ns"]
+
+
+def test_unavailable_raw_clock_fails_before_output_creation(tmp_path, monkeypatch):
+    parsed = args(tmp_path, "--clock-source", "raw")
+    monkeypatch.delattr(live_observer.time, "CLOCK_MONOTONIC_RAW", raising=False)
+    with pytest.raises(ValueError, match="raw clock"):
+        live_observer.run(parsed)
+    assert not parsed.output_dir.exists()
 
 
 def test_model_mutation_during_load_is_rejected(tmp_path: Path,

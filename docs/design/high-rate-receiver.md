@@ -75,11 +75,19 @@ holds one ASCII token, is owner-readable only (`chmod 600`), and stays out of ou
 python -m script.live_observer \
   --key-file /private/path/device-key.txt \
   --output-dir /private/path/new-run \
-  --host 192.168.1.210 --camera-id esp32cam-01 \
+  --host 192.168.1.221 --camera-id esp32cam-01 \
   --duration-seconds 120 --warmup-seconds 0
 ```
 
-For cat inference, add `--model /private/path/cat.onnx` (threshold 0.5). The
+For cat inference, add `--model /private/path/cat.onnx` (threshold 0.5).
+The [Pi-only trial](raspi-high-rate-recognition-results.md) used `--num-threads 3`
+(1–256, default 4); the manifest
+records the value actually passed to the detector. Use `--clock-source raw` on
+Linux for a shared receiver/event/window/footer clock without NTP rate slewing;
+unsupported platforms fail before output creation. The default `monotonic`
+remains available. See [Python clock constants](https://docs.python.org/3/library/time.html#time.CLOCK_MONOTONIC_RAW).
+Run the listener and model
+on the Raspberry Pi for Pi-only acceptance; a Mac listener is reference only. The
 output directory must be new, outside the repository, and mode 0700; its files
 are mode 0600. No image or model bytes are stored. `manifest.json` records
 settings, source/model SHA256, dependency versions, and windows. `events.jsonl`

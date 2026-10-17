@@ -50,10 +50,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--duration-seconds", type=_integer(1, 3600), required=True)
     parser.add_argument("--warmup-seconds", type=_integer(0, 60), default=0)
     parser.add_argument("--model", type=Path, help="optional 320px cat ONNX model")
+    parser.add_argument("--num-threads", type=_integer(1, 256), default=4,
+                        help="ONNX intra-op threads (default: 4)")
+    parser.add_argument("--clock-source", choices=("monotonic", "raw"), default="monotonic",
+                        help="use raw on Linux to exclude NTP rate adjustments")
     args = parser.parse_args(argv)
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", args.camera_id):
         parser.error("camera ID must be 1..64 ASCII letters, digits, '-' or '_'")
     return args
+
+
+def _select_clock_ns(source: str):
+    if source == "raw":
+        if not hasattr(time, "CLOCK_MONOTONIC_RAW"):
+            raise ValueError("raw clock is unavailable on this platform")
+        return lambda: time.clock_gettime_ns(time.CLOCK_MONOTONIC_RAW)
+    return time.monotonic_ns
 
 
 def read_key(path: Path) -> str:
@@ -110,7 +122,7 @@ def _private_json(path: Path, content: dict) -> None:
 
 
 class BoundedJsonl:
-    def __init__(self, path: Path, *, byte_limit: int = BYTE_LIMIT):
+    def __init__(self, path: Path, *, byte_limit: int = BYTE_LIMIT, clock_ns=None):
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
         fd = os.open(path, flags, 0o600)
         os.fchmod(fd, 0o600)
@@ -124,10 +136,11 @@ class BoundedJsonl:
         self.first_accepted = threading.Event()
         self.first_accepted_ns: int | None = None
         self.first_accepted_utc: str | None = None
+        self.clock_ns = clock_ns or time.monotonic_ns
 
     def event(self, payload: dict) -> None:
         # Receiver serializes sink calls. Never call receiver methods here.
-        observed_ns, observed_utc = time.monotonic_ns(), _utc()
+        observed_ns, observed_utc = self.clock_ns(), _utc()
         record = {"kind": "receiver", "observed_monotonic_ns": observed_ns,
                   "observed_utc": observed_utc, **payload}
         line = json.dumps(record, separators=(",", ":"), allow_nan=False) + "\n"
@@ -152,13 +165,14 @@ class BoundedJsonl:
 
 
 def _monitor(receiver, server_thread: threading.Thread, writer: BoundedJsonl,
-             duration_s: int, warmup_s: int, window: dict) -> str:
-    ready_ns = time.monotonic_ns()
+             duration_s: int, warmup_s: int, window: dict, clock_ns=None) -> str:
+    clock_ns = clock_ns or time.monotonic_ns
+    ready_ns = clock_ns()
     window["listener_ready_monotonic_ns"] = ready_ns
     deadline_ns = ready_ns + int(CONNECTION_WAIT_SECONDS * 1_000_000_000)
     window["connection_deadline_monotonic_ns"] = deadline_ns
     while True:
-        now = time.monotonic_ns()
+        now = clock_ns()
         if window["first_accepted_monotonic_ns"] is None and writer.first_accepted.is_set():
             first = writer.first_accepted_ns
             if first is None or first > deadline_ns:
@@ -184,6 +198,7 @@ def _monitor(receiver, server_thread: threading.Thread, writer: BoundedJsonl,
 
 
 def run(args: argparse.Namespace) -> int:
+    clock_ns = _select_clock_ns(args.clock_source)
     output = args.output_dir.resolve(strict=False)
     if output == REPO or REPO in output.parents:
         raise ValueError("output directory must be outside the repository")
@@ -212,7 +227,8 @@ def run(args: argparse.Namespace) -> int:
                   "event_limit": EVENT_LIMIT, "byte_limit": BYTE_LIMIT,
                   "max_age_ms": 500, "mode": "onnx" if args.model else "capture",
                   "model_sha256": model_hash, "model_threshold": 0.5 if args.model else None,
-                  "model_num_threads": 4 if args.model else None,
+                  "model_num_threads": args.num_threads if args.model else None,
+                  "clock_source": args.clock_source,
                   "credential_source": "private key file"}
     versions = {"python": sys.version.split()[0],
                 "websockets": importlib.metadata.version("websockets"),
@@ -255,16 +271,16 @@ def run(args: argparse.Namespace) -> int:
                 error_type = error_type or type(exc).__name__
 
     try:
-        writer = BoundedJsonl(output / "events.jsonl")
+        writer = BoundedJsonl(output / "events.jsonl", clock_ns=clock_ns)
         detector = None
         if args.model is not None:
             from script.onnx_detector import OnnxYoloDetector
-            detector = OnnxYoloDetector(args.model, threshold=0.5, num_threads=4)
+            detector = OnnxYoloDetector(args.model, threshold=0.5, num_threads=args.num_threads)
             if _sha(args.model) != model_hash:
                 raise ValueError("model changed during load")
         receiver = create_receiver(
             camera_id=args.camera_id, device_api_key=key, detector=detector,
-            event_sink=writer.event, max_age_ms=500,
+            event_sink=writer.event, max_age_ms=500, clock_us=lambda: clock_ns() // 1000,
             max_duration_s=CONNECTION_WAIT_SECONDS + args.warmup_seconds +
             args.duration_seconds + 10,
         )
@@ -283,7 +299,7 @@ def run(args: argparse.Namespace) -> int:
         with server:
             try:
                 outcome = _monitor(receiver, thread, writer, args.duration_seconds,
-                                   args.warmup_seconds, window)
+                                   args.warmup_seconds, window, clock_ns=clock_ns)
             finally:
                 stop_server()
     except KeyboardInterrupt:
@@ -301,7 +317,7 @@ def run(args: argparse.Namespace) -> int:
                 outcome = "teardown_failed"
                 error_type = error_type or type(exc).__name__
         footer = {"outcome": outcome, "error_type": error_type, "finished_utc": _utc(),
-                  "finished_monotonic_ns": time.monotonic_ns(),
+                  "finished_monotonic_ns": clock_ns(),
                   "receiver_failed": receiver.failed if receiver is not None else None,
                   "events_recorded": writer.count if writer is not None else 0,
                   "jsonl_bytes": writer.bytes if writer is not None else 0,
