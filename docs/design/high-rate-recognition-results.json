@@ -1,0 +1,256 @@
+{
+  "schema_version": 1,
+  "issue": 500,
+  "acceptance_issue": 486,
+  "run_id": "20261017T063151Z-9e15f03a-onnx",
+  "scope": "One-camera isolated Mac inference; technical rate/freshness acceptance only. Normal Pi deployment and cat accuracy are separate.",
+  "measurement_utc": {
+    "start": "2026-10-17T06:32:21.452727+00:00",
+    "end": "2026-10-17T07:02:21.452727+00:00"
+  },
+  "runtime_git_commit": "892119b751457eb9c962ff3ef9d4a979f08302bc",
+  "source_archive_manifest_sha256": "290e6eca1aaf3d32367f77727a3864b73182fe6a2491cc71d884398dc66e420a",
+  "frozen": {
+    "run_sha256": "f9ffb8a6dbc554dc581ceaa60dcc22ca544d8c901f2cd483e220a36f6bfe2865",
+    "criteria_sha256": "7c3691061dcd697057637efc0b94574a2223ede5aa08e08d85f52d2edd4b9118",
+    "firmware_binary_sha256": "5729768036dcfce2c7ef0e15124648883896dc0ea56e17a64658037e1e936142",
+    "source_sha256": {
+      "runner": "bb72d32ef92fbf27eabb55bee1f60d918186755225a6c7b8e84dce4708b14150",
+      "receiver": "8020cbce6081ce6fc7a2035c48bac5e57a3ff56ed0f7ca93741c80115f0cacbf",
+      "protocol": "3e4491d5540cea5252ae53e00083d9c4d76f6eb9ce67b89ecbab3060aabb3f85",
+      "onnx_adapter": "b37e2827562efe1c64ff96b686fe1832948dbe0796d59429f7af4bb11623c0b1"
+    },
+    "versions": {
+      "python": "3.12.15",
+      "onnxruntime": "1.23.2",
+      "numpy": "2.2.6",
+      "websockets": "17.2",
+      "Pillow": "12.3.0"
+    },
+    "footer_outcome": "duration_complete",
+    "events_sha256": "c7dcb444e6538fa494daf3f0f7c860a4f7ac1c3da67705618cd28204afd77e0e",
+    "finalized_sha256": "2bc3d22eee1b392322aea203b0c4ab330d7f6643a6012718d42d0b2364d9b8d9"
+  },
+  "conditions": {
+    "camera_id": "esp32cam-01",
+    "warmup_s": 30,
+    "measurement_s": 1800,
+    "max_age_ms": 500,
+    "firmware_capture_interval_ms": 95,
+    "wifi_power_save": "WIFI_PS_NONE",
+    "detector": {
+      "model_sha256": "ff1013da8734fe2b8ede5f34a2124855d447fbefd248d148e9f29e7f8e28c9c4",
+      "input_size": 320,
+      "threshold": 0.5,
+      "num_threads": 4,
+      "class_id": 15
+    }
+  },
+  "minimum_criteria": {
+    "fresh_success_rate_hz_whole_window": 5,
+    "fresh_success_rate_hz_each_10s_bin": 5,
+    "max_success_gap_ms": 500,
+    "capture_to_result_upper_p95_ms": 250,
+    "capture_to_result_upper_max_ms": 500,
+    "drop_fraction_max": 0.01,
+    "failed_inferences": 0,
+    "clock_same_boot_offsets_consistent_with_200ppm": true,
+    "rss_growth_after_warmup_mib_max": 32,
+    "average_process_cpu_pct_max": 300,
+    "missing_wire_fraction_max": 0.01
+  },
+  "desired_criteria": {
+    "fresh_success_rate_hz_whole_window": 10,
+    "fresh_success_rate_hz_each_10s_bin": 10,
+    "max_success_gap_ms": 250
+  },
+  "metrics": {
+    "rates": {
+      "capture_observed_hz": 10.519444444444444,
+      "receive_unique_hz": 10.519444444444444,
+      "accepted_unique_hz": 10.519444444444444,
+      "inferred_hz": 10.519444444444444,
+      "fresh_success_hz": 10.519444444444444
+    },
+    "fresh_success_count": 18935,
+    "success_duplicate_capture_timestamp_count": 0,
+    "success_duplicate_id_event_count": 0,
+    "max_success_gap_ms_including_edges": 409.891,
+    "capture_to_result_upper_ms": {
+      "p50": 78.617,
+      "p95": 95.491,
+      "max": 425.034
+    },
+    "ttl_violating_successes": 0,
+    "device_capture_interval_ms": {
+      "count": 18934,
+      "p50": 99.952,
+      "p95": 99.993,
+      "max": 339.864
+    },
+    "received_unique": 18935,
+    "accepted_unique": 18935,
+    "dropped_unique": 0,
+    "drop_reasons_unique": {},
+    "drop_fraction": 0.0,
+    "missing_wire_frames": 0,
+    "missing_wire_fraction": 0.0,
+    "failed_inferences_received_window": 0,
+    "expired_unique_by_reason": {
+      "expired_queue": 0,
+      "expired_result": 0
+    },
+    "accepted_inflight_at_end": 1,
+    "received_before_window_success_inside": 1,
+    "received_in_window_success_after_end": 1,
+    "boot_or_reconnect_boundary_wire_gap": "unknown; not estimated",
+    "device_status_samples": 1797,
+    "ten_second_windows": {
+      "count": 180,
+      "min_count": 103,
+      "max_count": 106,
+      "sum_count": 18935
+    },
+    "resources": {
+      "samples_after_warmup": 349,
+      "rss_baseline_kib": 108496,
+      "rss_max_kib": 109008,
+      "rss_growth_mib": 0.5,
+      "average_process_cpu_pct": 98.44471062290866,
+      "cpu_coverage_fraction": 0.9994577680555555,
+      "mac_temperature_c": null,
+      "temperature_verification": "unknown; pmset is warning/performance status, not a temperature sensor"
+    },
+    "clock": {
+      "boots": [
+        {
+          "boot_id": 10411757668397856346,
+          "samples": 874,
+          "interval_consistent_200ppm": true,
+          "clock_record_bounds_valid": true,
+          "max_interval_distance_us": 22391,
+          "max_interval_violation_us": 0,
+          "midpoint_fit_drift_ppm": 16.333695723480243,
+          "device_elapsed_s": 1797.682011
+        }
+      ],
+      "consistent_200ppm": true,
+      "boot_or_reconnect_end_gaps": "unknown; no sequence gaps inferred across session ends"
+    }
+  },
+  "integrity_checks": {
+    "closed_event_digest": true,
+    "final_window": true,
+    "finalized_sha": true,
+    "manifest_footer": true,
+    "run_sha": true,
+    "event_sha": true,
+    "criteria_sha": true,
+    "firmware_sha": true,
+    "versions_recorded": true,
+    "duration_complete": true,
+    "event_count": true,
+    "event_bytes": true,
+    "event_cap": true,
+    "criteria_mode": true,
+    "criteria_duration": true,
+    "model_verified": true,
+    "no_runner_error": true,
+    "window_duration": true,
+    "window_alignment": true,
+    "first_accepted_anchor": true
+  },
+  "verdict": {
+    "minimum": {
+      "fresh_success_rate_hz_whole_window": true,
+      "fresh_success_rate_hz_each_10s_bin": true,
+      "max_success_gap_ms": true,
+      "capture_to_result_upper_p95_ms": true,
+      "capture_to_result_upper_max_ms": true,
+      "drop_fraction_max": true,
+      "failed_inferences": true,
+      "clock_same_boot_offsets_consistent_with_200ppm": true,
+      "rss_growth_after_warmup_mib_max": true,
+      "average_process_cpu_pct_max": true,
+      "missing_wire_fraction_max": true
+    },
+    "desired": {
+      "fresh_success_rate_hz_whole_window": true,
+      "fresh_success_rate_hz_each_10s_bin": true,
+      "max_success_gap_ms": false
+    },
+    "technical_acceptance": true,
+    "guards": {
+      "integrity": true,
+      "ttl_successes": true,
+      "capture_timestamp_unique": true,
+      "full_10s_bins": true,
+      "cpu_coverage": true
+    },
+    "desired_10hz": false
+  },
+  "pi_health": {
+    "source_sha256": "20e5d420c361a4267b400264944ea1448691fb87d80825ff448cf56546041667",
+    "samples": 359,
+    "measurement_start_utc": "2026-10-17T06:32:21.452727+00:00",
+    "measurement_end_utc": "2026-10-17T07:02:21.452727+00:00",
+    "first_sample_utc": "2026-10-17T06:32:23.126589+00:00",
+    "last_sample_utc": "2026-10-17T07:02:20.451737+00:00",
+    "http_non200": 0,
+    "not_ready": 0,
+    "health_p95_ms": 10.906932,
+    "health_max_ms": 44.062881,
+    "temperature_max_c": 49.66,
+    "throttle_states": [
+      "throttled=0x0"
+    ],
+    "system_cpu_pct_max": 13.115577889447238,
+    "note": "Sample observations; not proof of real-time uptime or simultaneous normal image uploads.",
+    "criteria_pass": true
+  },
+  "pi_health_criteria": {
+    "purpose": "Read-only existing Pi service observation during Mac inference sidecar trial",
+    "sample_interval_seconds": 5,
+    "http_timeout_seconds": 2,
+    "health_routes": [
+      "/healthz",
+      "/healthz/ready"
+    ],
+    "all_http_status": 200,
+    "all_ready_status": "ready",
+    "health_elapsed_p95_ms_max": 250,
+    "health_elapsed_max_ms": 2000,
+    "temperature_c_max": 80,
+    "throttle_state": "throttled=0x0",
+    "limitations": "One camera runs the experimental path during this trial. Normal upload throughput under simultaneous high-rate upload is not measured; existing-service readiness and available live read traffic are observed. Mac temperature is unavailable; pmset warnings and performance state are recorded separately."
+  },
+  "restoration": {
+    "state": "restored",
+    "desired_config": "restored_original",
+    "expected_version": 9,
+    "flash_attempt": 2,
+    "ack_version": 9,
+    "ack_utc": "2026-10-17T07:19:37.082998+00:00",
+    "finished_utc": "2026-10-17T07:19:42.473052+00:00"
+  },
+  "raw_and_derived_artifact_sha256": {
+    "criteria.json": "7c3691061dcd697057637efc0b94574a2223ede5aa08e08d85f52d2edd4b9118",
+    "manifest.json": "e54cdb02631cf1a229a06995bad101ada37d133dc9e7fa67d7c4d521252cbe00",
+    "events.jsonl": "c7dcb444e6538fa494daf3f0f7c860a4f7ac1c3da67705618cd28204afd77e0e",
+    "footer.json": "b1b065a9eec8d38df0a8e3fc66de4206357dbb1e597ada1b6b1711829ada0fcb",
+    "analysis.json": "1be00aa83be9c5dadf22524ed7f7d80897466adba342b142ced333cb926cd59e",
+    "pi-health-snapshot.jsonl": "20e5d420c361a4267b400264944ea1448691fb87d80825ff448cf56546041667",
+    "pi-health-analysis.json": "ec9146a8c5c1879b743b9aa40e3c375c529ae5af9438bc6af45d9d24deeb76dd",
+    "restoration.json": "255551bf2558a22bdb988a6239363fd10fb01684ce4cabacd7fd08bca47ea976",
+    "normal-restoration-validation.json": "07c8902a4f0844677872d7fdb285b7e10f08333eccbc351f2b2a28639b11fb94"
+  },
+  "unverified": [
+    "own-cat/day/night precision and recall",
+    "Mac physical temperature",
+    "physical clock calibration and cross-host UTC synchronization",
+    "normal uploads/storage/notifications under concurrent high-rate inference",
+    "permanent deployment",
+    "calibrated motor-free angle simulation",
+    "motor actuation"
+  ]
+}

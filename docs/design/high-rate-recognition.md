@@ -1,13 +1,13 @@
 # 高頻度撮影・猫認識の開発計画
 
-2026-10-16のユーザー合意を記録する。計画Issueは[#484](https://github.com/1222-takeshi/server_for_esp32cam/issues/484)、全体管理は[#451](https://github.com/1222-takeshi/server_for_esp32cam/issues/451)。本書は未実装の計画で、本番・ファーム・モデル・モータの挙動を変更しない。
+2026-10-16のユーザー合意と10月17日の検証を記録する。計画Issueは[#484](https://github.com/1222-takeshi/server_for_esp32cam/issues/484)、実装・受入は[#486](https://github.com/1222-takeshi/server_for_esp32cam/issues/486)、全体管理は[#451](https://github.com/1222-takeshi/server_for_esp32cam/issues/451)。隔離した実験経路で30分の最低5Hz技術基準を達成した。希望10Hzは最大結果間隔の条件に未達。[結果と未評価項目](high-rate-recognition-results.md)を参照。通常運用は試験後に元の5秒設定へ戻した。
 
 ## 目標と計数
 
 | 段階 | 新規画像の撮影 | 新規画像に対する猫検知推論の完了 | 状態 |
 |---|---|---|---|
-| 最低要件 | 5Hz以上、200ms周期が目安 | 毎秒5件以上 | 未達 |
-| 希望目標 | 10Hz以上、100ms周期が目安 | 毎秒10件以上 | 未達 |
+| 最低要件 | 5Hz以上、200ms周期が目安 | 毎秒5件以上 | 隔離経路の30分技術基準を達成。平均10.519Hz、各10秒窓10.3Hz以上 |
+| 希望目標 | 10Hz以上、100ms周期が目安 | 毎秒10件以上 | 件数条件は達成、最大結果間隔409.891msが250ms上限に未達 |
 
 最初の受入は1台を対象にする。カメラごとに撮影・受信・推論開始・推論完了の実測Hzを分ける。同じ画像の再推論、再送、追跡の位置補間、画面再描画は新規画像の認識へ加算しない。猫なしという正常な推論結果も1件と数え、推論失敗・意図的skipは成功数へ加算しない。撮影10Hz・認識5Hzは最低要件の候補であり、10Hz認識の達成ではない。
 
@@ -15,20 +15,22 @@ Hzは処理件数、撮影→認識結果の遅延は情報の古さを示す別
 
 ## 現状と測定根拠
 
-- 運用は約5秒間隔。遠隔設定の`capture_interval_seconds`は整数5〜86400に限定され、サーバーとファーム双方の変更が必要（[API契約](remote-control-api.md)、[サーバー検証](../../script/routes.py)、[ファーム](../../firmware/esp32cam-http-upload/src/main.cpp)）。短周期設定を追加する際は既存秒単位設定との優先順位・互換性・ACKを定義する。
+- 通常運用はTFLite SSD MobileNet V1系の人物検知（300px uint8、class 0/person、threshold 0.5、現在4 thread）と約5秒間隔、約0.2Hzの撮影。正確なexport variantと学習元は未特定。遠隔設定の`capture_interval_seconds`は整数5〜86400に限定される（[API契約](remote-control-api.md)、[サーバー検証](../../script/routes.py)、[ファーム](../../firmware/esp32cam-http-upload/src/main.cpp)）。実験用の短周期ファーム・受信器はこの通常設定/ACK経路と隔離している。
 - [WebSocket受信](../../script/websocket_routes.py)の既定最小間隔は1秒。受信した画像をファイル保存・SQLite記録してから推論へ入れる。[推論サービス](../../script/inference.py)はプロセス内の単一detect呼び出しと上限なしFIFOを使う。単に撮影周期を下げると欠落・拒否・待ち行列増加があり得る。
-- ファームはJPEG・1フレームバッファで、撮影と送信を同じloopで行う。同期的な設定pollや、LED使用時の150msの既定warmupも短周期の制約になる。夜間は露光時間と画質を含めて実測する。
-- [2026-10-14の測定記録](https://github.com/1222-takeshi/server_for_esp32cam/issues/451#issuecomment-6171248121)はPi 4、1 CPU thread、各入力条件20画像×3回。SSD/LiteRT人物検知300入力はmedian/P95が137.1/137.5ms、公式YOLO11n ONNX 320は276.6/284.8ms、640は1118.7/1129.1msだった。
-- YOLOは公式baseのFP32 ONNXと独自前後処理による速度proxyで、007の正式な組込みや撮影/転送/保存/待ちを含む実運用測定ではない。SSDはperson-onlyでタスクも異なる。モデル単体の時間の逆数を運用Hzへ置き換えない。公開画像の精度比較も本人猫・消灯環境の受入を代替しない。
+- 通常ファームはJPEG・1フレームバッファで、撮影と送信を同じloopで行う。実験用ファームは別targetで2バッファ・最新フレーム取得・OTA復旧を維持する。夜間は露光時間と画質を含めて別途実測する。
+- [2026-10-14の測定記録](https://github.com/1222-takeshi/server_for_esp32cam/issues/451#issuecomment-6171248121)はPi 4、1 CPU thread、各入力条件20画像×3回。SSD/LiteRT人物検知300入力はmedian/P95が137.1/137.5ms、公式YOLO11n ONNX 320は276.6/284.8ms、640は1118.7/1129.1msだった。137msは現在の4 thread本番構成の実測値ではない。本番runtimeはPython 3.12.3、ai-edge-litert 2.1.6、NumPy 2.5.1であり、今回の隔離ONNX環境とは別である。
+- [#489](https://github.com/1222-takeshi/server_for_esp32cam/issues/489)の追加offline測定では、公式YOLO11n ONNX 320・4 threadのPi 4はmedian/P95 136.46/198.29ms、Macは6.79/7.12ms。公開training 20枚の参照threshold 0.25による比較であり、実カメラの結合Hzを示さない。新adapterと参照をthreshold 0.5で合わせると両者9件の猫検出だった。SSDはperson-onlyでタスクも異なる。モデル単体の時間の逆数を運用Hzへ置き換えず、公開画像の比較を本人猫・消灯環境の受入に代用しない。
+
+隔離経路の[フレーム/時計protocol #492](https://github.com/1222-takeshi/server_for_esp32cam/pull/492)、[実験ファーム #493](https://github.com/1222-takeshi/server_for_esp32cam/pull/493)、[ONNX adapter #494](https://github.com/1222-takeshi/server_for_esp32cam/pull/494)、[受信器 #495](https://github.com/1222-takeshi/server_for_esp32cam/pull/495)、[撮影遅延改善 #498](https://github.com/1222-takeshi/server_for_esp32cam/pull/498)、[bounded CLI #499](https://github.com/1222-takeshi/server_for_esp32cam/pull/499)はmerge済み。短時間試験と中断runを保持し、採用30分runと合算していない。採用runは新規画像18,935枚、平均10.519Hz、遅延上限P95 95.491ms、drop・wire欠落・推論失敗0。最大結果間隔409.891msにより、最低5Hz技術基準は達成、希望10Hz基準は未達だった。
 
 ## 独立Issueへ分ける実装順序
 
 | 段階 / 所有領域 | 実装・検証 | 次へ進む条件 |
 |---|---|---|
-| 1 撮影・転送 / デバイス・受信計測 | 200ms/100msの周期設定、JPEG連続撮影候補、撮影と設定取得の分離、frame IDとboot/session ID。5/10Hzを受けられるレート上限を明示した認証付き隔離受信器で、推論・永続保存を外した上限付き試験を行う。JPEG検証・サイズ/接続上限を維持し、本番の1秒制限を経由せず撮影/転送Hz・bytes・欠落を測る | 5/10Hzそれぞれの撮影・転送実績、Wi-Fi/露光/メモリの制約が分かる。未達は記録して構成を再検討 |
-| 2 鮮度と処理経路 / サーバー | WebSocket受信制限の短周期対応を明示し、信頼できる撮影時刻または遅延の上限評価、結果時刻を追加。メモリ上推論と非同期保存を分離し、カメラごとの最新待機1枚＋実行中1枚を基本案にする。認証・JPEG検証・サイズ/接続上限を維持する | 保存/通知の遅さで推論が滞留せず、drop・順序逆転・再接続・時計異常を観測できる |
-| 3 猫認識5Hz / 推論 | 基準と比較候補のruntime互換性・出力等価性を確認。CPU 1/2/4 thread、入力形状/サイズ、INT8量子化を同条件で比較。重いネイティブ処理はrequest greenlet外で行う | 事前固定した精度・遅延・負荷条件で30分の5Hz受入を満たす。量子化や解像度変更後も再評価 |
-| 4 猫認識10Hz / 推論・運用 | Pi 4最適化で不足する場合、既存Mac/DGX等への推論切り出しや別ハードウェアを比較候補にする | ネットワーク遅延・通信断・資源/運用負担を含めて30分の10Hz受入を別判定する。機材・購入は未決定 |
+| 1 撮影・転送 / デバイス・受信計測 | 隔離ファーム/認証付き受信器・frame/boot IDと撮影時刻を実装 | 30分で各10.519Hz、wire欠落・再接続0。時計は200ppm仮定との整合であり、物理校正は別評価 |
+| 2 鮮度と処理経路 / サーバー | 最新待機1枚＋実行中1枚、上限付きメモリ上推論と結果時刻を実装。永続保存なし | 30分のdrop0、遅延上限P95 95.491ms・最大425.034ms。常用保存/通知との同時負荷は残件 |
+| 3 猫認識5Hz / 推論 | 公式YOLO11n ONNX 320・4 thread、公開画像の参照一致、30分の技術基準を達成 | 現場の本人猫/昼夜GT精度は未評価で、M4・追従の完了ではない |
+| 4 猫認識10Hz / 推論・運用 | 95ms・Mac ONNXで平均・各10秒窓10Hz以上、最大間隔条件は未達 | 409.891msの間隔を250ms以内へ改善し同じ基準で再評価。常用配置・温度・同時負荷も別途評価 |
 | 5 現場受入・角度推定 / 評価・制御 | 本人猫/猫なし・昼/消灯の別セッションGTと連続映像で評価。モータなしで角度推定・鮮度棄却・停止判断を検証 | [猫追従契約](cat-following-capability.md)の校正・機材・停止条件を含む受入を満たしてから別Issueで実機駆動へ進む |
 
 撮影試験は1→2、結合した猫認識は1/2→3→4を基本の依存順序とする。夜間撮像方式・現場GTの準備は並行でき、5の受入には3と既存追従契約を必要とする。10Hz未達でも5Hz受入を別に記録できる。複数カメラの台数別負荷とモータ指令周期は後続Issueで定義する。
