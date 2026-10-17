@@ -643,8 +643,13 @@ contract:
 ## 高頻度撮影の実験ターゲット（Issue #487）
 
 `esp32cam_high_rate_capture` は通常の `main.cpp` と独立した、QVGA JPEG の
-5/10 Hz 撮影実験用ターゲットです。既定は 100 ms（10 Hz）で、
-`HIGH_RATE_INTERVAL_MS` は 100 または 200 のみ指定できます。Wi-Fi 設定か
+5/10 Hz 撮影実験用ターゲットです。既定は公称100 ms周期で、実効Hzは計測します。
+`HIGH_RATE_INTERVAL_MS` は95、100、200を指定できます。95 msは希望10 Hzへ
+余裕を持たせる任意の実験設定であり、実際の新規画像数だけを数えます。
+周期の位相はloop遅延でずらさず、過ぎたdeadlineはburst再送せずskipします。
+実験時はWi-Fi省電力を無効化し、設定を実機APIで確認できない場合は
+streamを停止してOTAだけを残します。省電力より通信遅延を優先するため、
+電流・温度・長時間安定性を含めて再試験します。Wi-Fi 設定か
 `OTA_PASSWORD` がない場合は起動を停止します。PSRAM、カメラ、送信バッファが
 使えない場合は撮影だけを停止し、認証付き ArduinoOTA は稼働します。
 撮影時の LED 点灯や desired-config polling は行いません。実験後は
@@ -669,3 +674,6 @@ framebuffer timestamp、`sent_us` は送信直前の `esp_timer_get_time()` で�
 約 1 秒ごとに `capture.status` の取得・送信カウンターを送ります。
 5 Hz 以上の fresh frame と猫推論の実効速度は、実機と Raspberry Pi を
 組み合わせた計測で判定します。
+
+通信遅延と省電力の関係: [Espressif Wi-Fi power save](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/wifi-driver/wifi-performance-and-power-save.html)。
+設定だけで遅延改善を保証せず、元runを残して新しいbinary SHAごとに受入を判定します（#497）。

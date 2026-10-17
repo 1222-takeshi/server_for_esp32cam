@@ -5,10 +5,12 @@
 #include <WiFi.h>
 #include <esp_camera.h>
 #include <esp_system.h>
+#include <esp_wifi.h>
 #include <esp_timer.h>
 #include <cstring>
 
 #include "high_rate_frame.h"
+#include "high_rate_schedule.h"
 
 #if __has_include("esp32cam_config.h")
 #include "esp32cam_config.h"
@@ -32,8 +34,9 @@
 #ifndef HIGH_RATE_INTERVAL_MS
 #define HIGH_RATE_INTERVAL_MS 100
 #endif
-static_assert(HIGH_RATE_INTERVAL_MS == 100 || HIGH_RATE_INTERVAL_MS == 200,
-              "HIGH_RATE_INTERVAL_MS must be 100 or 200");
+static_assert(HIGH_RATE_INTERVAL_MS == 95 || HIGH_RATE_INTERVAL_MS == 100 ||
+                  HIGH_RATE_INTERVAL_MS == 200,
+              "HIGH_RATE_INTERVAL_MS must be 95, 100 or 200");
 
 namespace {
 WebSocketsClient webSocket;
@@ -163,8 +166,16 @@ void setup() {
     return;
   }
   WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  wifi_ps_type_t sleepMode;
+  const bool lowLatencyWiFi = esp_wifi_get_ps(&sleepMode) == ESP_OK &&
+                             sleepMode == WIFI_PS_NONE;
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   ready = true;  // The OTA recovery loop remains active if capture setup fails.
+  if (!lowLatencyWiFi) {
+    Serial.println("High-rate capture disabled: Wi-Fi power-save remains enabled; OTA remains available.");
+    return;
+  }
   if (!psramFound()) {
     Serial.println("High-rate capture disabled: PSRAM is required; OTA remains available.");
     return;
@@ -212,8 +223,7 @@ void loop() {
   }
   ArduinoOTA.handle();
   if (websocketEnabled) webSocket.loop();
-  if (connected && now - lastAttemptMs >= HIGH_RATE_INTERVAL_MS) {
-    lastAttemptMs = now;
+  if (connected && high_rate::captureDue(millis(), HIGH_RATE_INTERVAL_MS, lastAttemptMs)) {
     captureAndSend();
   }
   if (connected && now - lastStatusMs >= 1000) {
