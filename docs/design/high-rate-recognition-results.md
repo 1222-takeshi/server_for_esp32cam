@@ -36,14 +36,15 @@ Issue [#500](https://github.com/1222-takeshi/server_for_esp32cam/issues/500)の�
 | 各10秒窓 | 180窓、103〜106件、最低10.3Hz・最高10.6Hz。合計18,935件 |
 | 最大正常完了間隔（窓端を含む） | 409.891ms。最低の500ms以内、希望の250ms超過 |
 | 撮影→結果の保守的な遅延上限 | P50 78.617ms、P95 95.491ms、最大425.034ms。TTL超過成功0 |
-| drop / wire欠落 / 推論失敗 / 再接続 | 計測窓では各0。warmup前のclock未確定フレームは成功数へ含めない |
+| drop / wire欠落 / 推論失敗 | 計測窓では各0。warmup前のclock未確定フレームは成功数へ含めない |
+| 再接続 | 再接続を示す記録なし。接続開始/終了を直接記録していないため回数は未計測 |
 | 時計 | 同一bootで874 sample、200ppm仮定とoffset区間は整合。midpoint回帰の差は16.334ppmで、独立した物理校正の代わりにはしない |
 | Mac資源 | warmup後RSS増加0.5MiB、最大106.45MiB、平均process CPU 98.445%（1 core=100%、時間coverage 99.946%）。`pmset`にthermal/performance warning記録なし。実温度は不明 |
 | 同時Pi health観測 | 359 sample、health/ready計718回すべてHTTP 200・ready。遅延P95 10.907ms・最大44.063ms、温度最大49.66℃、throttled=0x0 |
 | 最低5Hz / 希望10Hz | 固定した最低技術基準はすべてpass。希望10Hzは最大間隔だけfail |
 | 原記録整合性 | 41,575 events、25,341,710 bytes。閉じたJSONLのSHA、run/criteria SHA、最終窓/footer hash等の全guardが一致 |
 
-正常完了は推論終了時刻、受信/dropの分母は受信時刻で `[start,end)` に分類する。窓開始前に受信して窓内に完了した1件を含み、窓内に受信して終了後に完了した1件は成功数に含めない。終了時の実行中は1件。wire gapは同一boot/sequenceから一度だけ数え、boot/接続境界の不明な欠落を0と推定しない。このrunの計測中はboot変更・再接続がない。
+正常完了は推論終了時刻、受信/dropの分母は受信時刻で `[start,end)` に分類する。窓開始前に受信して窓内に完了した1件を含み、窓内に受信して終了後に完了した1件は成功数に含めない。終了時の実行中は1件。wire gapは同一boot/sequenceから一度だけ数え、boot/接続境界の不明な欠落を0と推定しない。このrunは同一bootでsequenceが連続し、clock timeoutを示す記録もないが、短時間の同一boot再接続回数は直接測定していない。
 
 時計誤差を含む遅延は200ppmという事前仮定付きの上限で、時刻校正そのものの保証ではない。推論成功は猫0件の正常結果も含み、18,935件の猫検出を意味しない。現場GTがないので猫のprecision/recallは評価していない。Piのhealthは定期sampleであり、連続uptimeや通常画像uploadとの同時処理を証明しない。Pi観測との窓合わせはUTCによるもので、ホスト間UTC誤差は独立測定していない。Macでは同じ試験中にローカルCIも動作したが、制御した負荷試験ではなく、最大間隔の原因は特定していない。
 
