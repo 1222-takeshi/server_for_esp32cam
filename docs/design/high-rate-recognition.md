@@ -41,6 +41,12 @@ Hzは処理件数、撮影→認識結果の遅延は情報の古さを示す別
 
 `script.onnx_detector.OnnxYoloDetector` は公式 YOLO11n FP32 ONNX の 320px・80 COCO class export に対応する猫検出コンポーネント。利用時は `.[onnx]` をインストールし、モデルファイルを Git 外に置く。`OnnxYoloDetector(model_path, threshold=0.5, num_threads=4).detect(jpeg_bytes)` は EXIF を反映した原画像の正規化 xyxy を `Detection(label="cat")` で返す。モデルの metadata があれば class 15 が `cat` か確認する。前後処理の CPU 時間もあるため、サーバーから呼ぶ場合は `InferenceService` と同方式の専用 single-thread pool を通す。独立した公開training20枚の互換性比較では、検出器と参照NMSの両方をconfidence 0.5に固定した（参照ベンチ単体の既定は0.25）。IoU 0.7、NMS 最大300件は参照ベンチと同じ。この比較・速度測定はprivate環境のONNX Runtime 1.23.2を使用し、監査用lockの解決版1.31.0とは区別する。対象カメラでの精度・負荷を保証しない。
 
+## 常用化の資源上限と運転モード
+
+[容量制限付き運転モード設計](operating-modes.md)で、同じモデル/画質を使う手動eco（初期候補5秒）とtracking（190ms・最低5Hz、当面motor停止）を分ける。設計段階であり、本番切替は未実装。認識5Hzと画像保存・ログ書込みの頻度を分離し、低頻度時の時間方向の見逃しと実消費電力も評価する。
+
+常用統合より先に[#505](https://github.com/1222-takeshi/server_for_esp32cam/issues/505)でログ/画像writer/DB/WAL/待ち行列・低容量時の上限と書込み量を検証し、[#506](https://github.com/1222-takeshi/server_for_esp32cam/issues/506)で共通firmware・管理UI/API・ACK/新frame確認付きの手動modeを実装する。次にPi単体の保存/通知/閲覧同時30分・24時間生成量・往復切替を受け入れ、自動切替や実motorへは別条件で進める。試験rawとM2元観測は自動削除・除外しない。
+
 ## 受入試験と記録
 
 試験開始前にモデル/labels/画像・GT/前後処理/runtime/依存関係のSHAまたはversion、入力寸法、threshold、thread数、機材・照明、ウォームアップ、30分の計測窓を固定する。許容する欠落率・短時間の周期低下・最大結果間隔・遅延P95・鮮度TTL・CPU/温度/RSS・既存API応答・精度の合格上限/下限も先に記録する。未決の条件があれば受入完了としない。画像・元GT・baselineは不変とし、結果を見てsilent tuningしない。
