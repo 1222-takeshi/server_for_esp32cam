@@ -8,6 +8,8 @@ from dataclasses import dataclass
 
 
 HEADER = struct.Struct(">4sQQQQI")
+PROFILE_HEADER = struct.Struct(">4sQQQQQI")
+MAX_GENERATION = 2**53 - 1
 MAX_JPEG_BYTES = 128 * 1024
 UINT64_MAX = 2**64 - 1
 
@@ -23,9 +25,11 @@ class CameraFrame:
     captured_us: int
     sent_us: int
     jpeg: bytes
+    mode_generation: int | None = None
 
 
-def decode_frame(payload: bytes, *, max_jpeg_bytes: int = MAX_JPEG_BYTES) -> CameraFrame:
+def decode_frame(payload: bytes, *, max_jpeg_bytes: int = MAX_JPEG_BYTES,
+                 allow_profiles: bool = False) -> CameraFrame:
     """Validate the envelope before copying its bounded JPEG payload.
 
     JPEG format/dimensions and authentication belong to the receiver. Timestamps
@@ -33,16 +37,24 @@ def decode_frame(payload: bytes, *, max_jpeg_bytes: int = MAX_JPEG_BYTES) -> Cam
     """
     if not _positive_int(max_jpeg_bytes) or max_jpeg_bytes > 2**32 - 1:
         raise ValueError("Invalid JPEG size limit")
-    if not isinstance(payload, bytes) or not HEADER.size < len(payload) <= (
-        HEADER.size + max_jpeg_bytes
-    ):
+    if not isinstance(payload, bytes):
         raise ValueError("Invalid frame size")
-    magic, boot_id, sequence, captured_us, sent_us, length = HEADER.unpack_from(payload)
-    if magic != b"ECF1" or not boot_id or not sequence or not captured_us:
+    profile = payload[:4] == b"ECF2" and allow_profiles
+    header = PROFILE_HEADER if profile else HEADER
+    if not header.size < len(payload) <= header.size + max_jpeg_bytes:
+        raise ValueError("Invalid frame size")
+    if profile:
+        magic, boot_id, sequence, captured_us, sent_us, generation, length = header.unpack_from(payload)
+        if not 0 < generation <= MAX_GENERATION:
+            raise ValueError("Invalid mode generation")
+    else:
+        magic, boot_id, sequence, captured_us, sent_us, length = header.unpack_from(payload)
+        generation = None
+    if magic != (b"ECF2" if profile else b"ECF1") or not boot_id or not sequence or not captured_us:
         raise ValueError("Invalid frame identity or timestamp")
-    if length != len(payload) - HEADER.size or sent_us < captured_us:
+    if length != len(payload) - header.size or sent_us < captured_us:
         raise ValueError("Invalid frame length or timestamp order")
-    return CameraFrame(boot_id, sequence, captured_us, sent_us, payload[HEADER.size:])
+    return CameraFrame(boot_id, sequence, captured_us, sent_us, payload[header.size:], generation)
 
 
 class FrameOrder:

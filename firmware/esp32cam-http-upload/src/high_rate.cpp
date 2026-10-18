@@ -11,6 +11,7 @@
 
 #include "high_rate_frame.h"
 #include "high_rate_schedule.h"
+#include "operating_profile.h"
 
 #if __has_include("esp32cam_config.h")
 #include "esp32cam_config.h"
@@ -38,6 +39,15 @@ static_assert(high_rate::supportedCaptureInterval(HIGH_RATE_INTERVAL_MS),
               "HIGH_RATE_INTERVAL_MS must be 95, 100, 190 or 200");
 
 namespace {
+constexpr bool profilesEnabled =
+#ifdef OPERATING_PROFILES
+    true;
+#else
+    false;
+#endif
+constexpr size_t headerSize = profilesEnabled ? operating::kHeaderSize : high_rate::kHeaderSize;
+operating::Profile profile;
+uint32_t lastServerMs = 0;
 WebSocketsClient webSocket;
 uint8_t *packet = nullptr;
 uint64_t bootId = 0;
@@ -79,12 +89,43 @@ camera_config_t cameraConfig() {
 void onWebSocketEvent(WStype_t type, uint8_t *payload, size_t length) {
   if (type == WStype_CONNECTED) {
     connected = true;
+    lastServerMs = millis();
+    if (profilesEnabled) {
+      profile.reset(esp_timer_get_time());
+      char hello[220];
+      snprintf(hello, sizeof(hello),
+          "{\"type\":\"profile.hello\",\"schema\":2,\"boot_id\":%llu,\"generation_floor\":%llu,\"profiles\":[\"eco\",\"tracking\"]}",
+          static_cast<unsigned long long>(bootId), static_cast<unsigned long long>(profile.highWater));
+      webSocket.sendTXT(hello);
+    }
   } else if (type == WStype_DISCONNECTED || type == WStype_ERROR) {
     connected = false;
+    if (profilesEnabled) profile.reset(esp_timer_get_time());
   } else if (type == WStype_TEXT && length <= 256) {
     JsonDocument doc;
     if (deserializeJson(doc, payload, length) != DeserializationError::Ok ||
-        !doc["type"].is<const char *>() ||
+        !doc["type"].is<const char *>()) return;
+    if (profilesEnabled && strcmp(doc["type"].as<const char *>(), "profile.set") == 0) {
+      if (doc.size() != 4 || !doc["boot_id"].is<uint64_t>() ||
+          doc["boot_id"].as<uint64_t>() != bootId || !doc["generation"].is<uint64_t>() ||
+          !doc["mode"].is<const char *>()) return;
+      const JsonString mode = doc["mode"].as<JsonString>();
+      const bool track = mode == "tracking";
+      const bool changed = doc["generation"].as<uint64_t>() != profile.generation;
+      if ((!track && mode != "eco") ||
+          !profile.apply(doc["generation"].as<uint64_t>(), track, esp_timer_get_time())) return;
+      lastServerMs = millis();
+      if (changed) lastAttemptMs = millis();
+      char ack[220];
+      snprintf(ack, sizeof(ack),
+          "{\"type\":\"profile.ack\",\"boot_id\":%llu,\"generation\":%llu,\"mode\":\"%s\",\"applied_us\":%llu}",
+          static_cast<unsigned long long>(bootId),
+          static_cast<unsigned long long>(profile.generation), track ? "tracking" : "eco",
+          static_cast<unsigned long long>(profile.appliedUs));
+      webSocket.sendTXT(ack);
+      return;
+    }
+    if (
         strcmp(doc["type"].as<const char *>(), "clock.ping") != 0 ||
         !doc["id"].is<const char *>()) {
       return;
@@ -99,6 +140,7 @@ void onWebSocketEvent(WStype_t type, uint8_t *payload, size_t length) {
             (c >= 'A' && c <= 'F'))) return;
     }
     if (strlen(id) != idLength) return;
+    lastServerMs = millis();
     char response[160];
     const int n = snprintf(response, sizeof(response),
                            "{\"type\":\"clock.pong\",\"id\":\"%s\",\"boot_id\":%llu,\"device_us\":%llu}",
@@ -129,7 +171,8 @@ void captureAndSend() {
   }
   const uint64_t capturedUs = static_cast<uint64_t>(fb->timestamp.tv_sec) * 1000000ULL +
                               static_cast<uint64_t>(fb->timestamp.tv_usec);
-  if (!high_rate::isFresh(capturedUs, lastAcquiredUs)) {
+  if (!high_rate::isFresh(capturedUs, lastAcquiredUs) ||
+      (profilesEnabled && !profile.accepts(capturedUs))) {
     ++stale;
     esp_camera_fb_return(fb);
     return;
@@ -143,14 +186,17 @@ void captureAndSend() {
     return;
   }
   const size_t jpegLength = fb->len;
-  memcpy(packet + high_rate::kHeaderSize, fb->buf, jpegLength);
+  memcpy(packet + headerSize, fb->buf, jpegLength);
   esp_camera_fb_return(fb);
   const uint64_t sentUs = static_cast<uint64_t>(esp_timer_get_time());
-  if (!high_rate::encodeHeader(packet, bootId, frameSeq, capturedUs, sentUs, jpegLength)) {
+  const bool encoded = profilesEnabled ?
+      operating::encodeHeader(packet, bootId, frameSeq, capturedUs, sentUs, jpegLength, profile.generation) :
+      high_rate::encodeHeader(packet, bootId, frameSeq, capturedUs, sentUs, jpegLength);
+  if (!encoded) {
     ++sendFailures;
     return;
   }
-  if (webSocket.sendBIN(packet, high_rate::kHeaderSize + jpegLength)) ++sent;
+  if (webSocket.sendBIN(packet, headerSize + jpegLength)) ++sent;
   else ++sendFailures;
 }
 }  // namespace
@@ -184,7 +230,7 @@ void setup() {
     Serial.println("High-rate camera initialization failed; OTA remains available.");
     return;
   }
-  packet = static_cast<uint8_t *>(ps_malloc(high_rate::kHeaderSize + high_rate::kMaxJpegBytes));
+  packet = static_cast<uint8_t *>(ps_malloc(headerSize + high_rate::kMaxJpegBytes));
   if (packet == nullptr) {
     Serial.println("High-rate packet allocation failed; OTA remains available.");
     esp_camera_deinit();
@@ -222,7 +268,13 @@ void loop() {
   }
   ArduinoOTA.handle();
   if (websocketEnabled) webSocket.loop();
-  if (connected && high_rate::captureDue(millis(), HIGH_RATE_INTERVAL_MS, lastAttemptMs)) {
+  if (profilesEnabled && connected && static_cast<uint32_t>(millis() - lastServerMs) >= 5000) {
+    profile.reset(esp_timer_get_time());
+    connected = false;
+    webSocket.disconnect();
+  }
+  const uint32_t interval = profilesEnabled ? profile.intervalMs() : HIGH_RATE_INTERVAL_MS;
+  if (connected && high_rate::captureDue(millis(), interval, lastAttemptMs)) {
     captureAndSend();
   }
   if (connected && now - lastStatusMs >= 1000) {

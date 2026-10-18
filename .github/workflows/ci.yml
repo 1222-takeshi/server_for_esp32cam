@@ -38,6 +38,7 @@ jobs:
       pull-requests: read
     outputs:
       esp32_example: ${{ steps.filter.outputs.esp32_example }}
+      operating_firmware: ${{ steps.filter.outputs.operating_firmware }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -47,6 +48,28 @@ jobs:
             esp32_example:
               - 'examples/esp32cam_snapshot_upload/**'
               - '.github/workflows/ci.yml'
+            operating_firmware:
+              - 'firmware/esp32cam-http-upload/**'
+              - '.github/workflows/ci.yml'
+
+  compile-operating-firmware:
+    needs: changes
+    if: needs.changes.outputs.operating_firmware == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: platformio-operating-${{ hashFiles('firmware/esp32cam-http-upload/platformio.ini') }}
+      - run: pip install platformio==6.1.19
+      - name: Compile legacy experiment and common profiles without credentials
+        working-directory: firmware/esp32cam-http-upload
+        run: pio run -e esp32cam_high_rate_capture -e esp32cam_operating_profiles
 
   test:
     runs-on: ubuntu-latest
