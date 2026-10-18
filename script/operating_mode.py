@@ -68,6 +68,9 @@ class OperatingMode:
 
     def disconnect(self):
         with self.lock:
+            if not self.connected and self.requested == "eco" and self.ack is None:
+                self.state = "unknown"
+                return
             self.connected = False
             if self.version < MAX_VERSION:
                 self._change("eco", reason="disconnected")
