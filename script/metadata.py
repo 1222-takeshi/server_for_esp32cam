@@ -175,7 +175,17 @@ class SQLiteMetadataStore:
     # device wake/retry cycle) instead of a few milliseconds of wait.
     _BUSY_TIMEOUT_MS = 5000
 
-    def __init__(self, db_path: str | Path, *, default_expected_interval_seconds: int = 300):
+    def __init__(self, db_path: str | Path, *, default_expected_interval_seconds: int = 300,
+                 device_log_max_rows: int = 0, device_log_max_age_seconds: int = 0):
+        for value in (device_log_max_rows, device_log_max_age_seconds):
+            if type(value) is not int or not 0 <= value <= 2**63 - 1:
+                raise ValueError("Device log budgets must be nonnegative integers")
+        try:
+            datetime.now(timezone.utc) - timedelta(seconds=device_log_max_age_seconds)
+        except OverflowError as exc:
+            raise ValueError("Device log age budget is too large") from exc
+        self._device_log_max_rows = device_log_max_rows
+        self._device_log_max_age_seconds = device_log_max_age_seconds
         if sqlite3.sqlite_version_info < _MIN_RETURNING_SQLITE_VERSION:
             detected_version = ".".join(str(part) for part in sqlite3.sqlite_version_info)
             raise RuntimeError(
@@ -397,6 +407,8 @@ class SQLiteMetadataStore:
 
                 CREATE INDEX IF NOT EXISTS idx_device_logs_camera_logged_at
                     ON device_logs(camera_id, logged_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_device_logs_logged_at
+                    ON device_logs(logged_at);
 
                 CREATE INDEX IF NOT EXISTS idx_device_logs_level_logged_at
                     ON device_logs(level, logged_at DESC, camera_id);
@@ -1820,6 +1832,9 @@ class SQLiteMetadataStore:
                 """,
                 (camera_id, level, message, effective_logged_at.isoformat()),
             ).fetchone()
+            # INSERT and pruning share the write transaction: concurrent writers
+            # cannot commit a state above the configured all-camera row cap.
+            self._prune_device_logs(conn)
         return DeviceLogRecord(
             id=row["id"],
             camera_id=row["camera_id"],
@@ -1827,6 +1842,29 @@ class SQLiteMetadataStore:
             message=row["message"],
             logged_at=_parse_datetime(row["logged_at"]) or effective_logged_at,
         )
+
+    def _prune_device_logs(self, conn: sqlite3.Connection) -> int:
+        deleted = 0
+        if self._device_log_max_age_seconds:
+            cutoff = datetime.now(timezone.utc) - timedelta(seconds=self._device_log_max_age_seconds)
+            deleted += conn.execute("DELETE FROM device_logs WHERE logged_at < ?",
+                                    (cutoff.isoformat(),)).rowcount
+        if self._device_log_max_rows:
+            # Receipt ID, rather than a potentially skewed logged_at timestamp,
+            # determines the newest N records across all cameras. PK lookup
+            # avoids materializing every retained ID in Python or a NOT IN list.
+            deleted += conn.execute(
+                "DELETE FROM device_logs WHERE id <= "
+                "(SELECT id FROM device_logs ORDER BY id DESC LIMIT 1 OFFSET ?)",
+                (self._device_log_max_rows,),
+            ).rowcount
+        return deleted
+
+    def prune_device_logs(self) -> int:
+        """Apply the opted-in startup policy without waiting for another log."""
+        conn = self._get_connection()
+        with conn:
+            return self._prune_device_logs(conn)
 
     def camera_ids_with_recent_errors(self, *, since: datetime) -> set[str]:
         conn = self._get_connection()

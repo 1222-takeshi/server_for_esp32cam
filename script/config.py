@@ -179,14 +179,14 @@ class Config:
     VIDEO_RETENTION_SCAN_INTERVAL_UPLOADS = int(
         os.getenv("ESP32CAM_VIDEO_RETENTION_SCAN_INTERVAL_UPLOADS", "1")
     )
-    # Unlike snapshots/videos, device_logs has no on-disk file and no byte
-    # budget -- only an age cutoff. Default disabled (0) like video
-    # retention: this prunes existing rows for every deployment the moment
-    # it is enabled, so it opts in rather than silently starting to delete
-    # data on upgrade. See #357.
+    # Device logs have independent age/all-camera row budgets. Both opt in:
+    # enabling them prunes existing history, so upgrading alone must not
+    # silently start deleting rows (#357, #510). Physical DB/WAL size is a
+    # separate budget; deleting rows does not shrink the database file.
     DEVICE_LOG_RETENTION_MAX_AGE_SECONDS = int(
         os.getenv("ESP32CAM_DEVICE_LOG_RETENTION_MAX_AGE_SECONDS", "0")
     )
+    DEVICE_LOG_RETENTION_MAX_ROWS = int(os.getenv("ESP32CAM_DEVICE_LOG_RETENTION_MAX_ROWS", "0"))
     MAX_MJPEG_STREAMS = int(os.getenv("ESP32CAM_MAX_MJPEG_STREAMS", "10"))
     # Default disabled (0) like the retention settings above: the single
     # detect-at-a-time inference pipeline (script/inference.py) has no
