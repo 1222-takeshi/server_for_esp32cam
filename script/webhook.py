@@ -19,6 +19,11 @@ from script.metadata import SnapshotRecord
 _logger = logging.getLogger(__name__)
 MAX_WEBHOOK_ATTEMPTS = 10
 MAX_WEBHOOK_RETRY_BACKOFF_SECONDS = 60.0
+MAX_RESPONSE_BYTES = 64 * 1024
+
+
+class _ResponseTooLarge(Exception):
+    pass
 
 
 class _WebhookHTTPError(Exception):
@@ -36,7 +41,14 @@ class WebhookNotifier:
         max_workers: int = 3,
         max_attempts: int = 3,
         retry_backoff_seconds: float = 1.0,
+        max_pending: int = 16,
+        max_pending_bytes: int = 64 * 1024,
+        max_payload_bytes: int = 4096,
     ) -> None:
+        for value, upper in ((max_pending, 1024), (max_pending_bytes, 16 * 1024**2),
+                             (max_payload_bytes, 64 * 1024)):
+            if type(value) is not int or not 1 <= value <= upper:
+                raise ValueError("Invalid webhook resource budget")
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
             raise ValueError("ESP32CAM_WEBHOOK_URL must use http or https and include a host")
@@ -71,7 +83,33 @@ class WebhookNotifier:
         if parsed.query:
             self._request_target += f"?{parsed.query}"
         self._connection_local = threading.local()
+        self._budget_lock = threading.Lock()
+        self._max_pending, self._max_pending_bytes = max_pending, max_pending_bytes
+        self._max_payload_bytes = max_payload_bytes
+        self._closed = False
+        self._counts = {"pending": 0, "pending_bytes": 0, "dropped_full": 0,
+                        "dropped_oversize": 0, "dropped_closed": 0}
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
+
+    def budget_status(self) -> dict[str, int]:
+        with self._budget_lock:
+            return dict(self._counts)
+
+    def _reserve(self, size: int) -> str | None:
+        with self._budget_lock:
+            if self._closed:
+                reason = "closed"
+            elif size > self._max_payload_bytes:
+                reason = "oversize"
+            elif (self._counts["pending"] >= self._max_pending
+                  or self._counts["pending_bytes"] + size > self._max_pending_bytes):
+                reason = "full"
+            else:
+                self._counts["pending"] += 1
+                self._counts["pending_bytes"] += size
+                return None
+            self._counts[f"dropped_{reason}"] += 1
+            return reason
 
     def _connection(self):
         connection = getattr(self._connection_local, "connection", None)
@@ -132,7 +170,22 @@ class WebhookNotifier:
             method="POST",
         )
 
-        def _send() -> None:
+        rejection = self._reserve(len(payload))
+        if rejection is not None:
+            if rejection == "closed":
+                _logger.warning("Webhook executor is shut down; dropping notification")
+            return None
+        payload_size, released = len(payload), False
+
+        def release(_done=None):
+            nonlocal released
+            with self._budget_lock:
+                if not released:
+                    released = True
+                    self._counts["pending"] -= 1
+                    self._counts["pending_bytes"] -= payload_size
+
+        def _deliver() -> None:
             for attempt in range(1, self._max_attempts + 1):
                 try:
                     connection = self._connection()
@@ -143,7 +196,8 @@ class WebhookNotifier:
                         headers=dict(req.header_items()),
                     )
                     response = connection.getresponse()
-                    response.read()
+                    if len(response.read(MAX_RESPONSE_BYTES + 1)) > MAX_RESPONSE_BYTES:
+                        raise _ResponseTooLarge
                     if response.status >= 300:
                         raise _WebhookHTTPError(response.status)
                     return
@@ -183,11 +237,25 @@ class WebhookNotifier:
                 if delay > 0:
                     time.sleep(delay)
 
+        def _send():
+            try:
+                _deliver()
+            finally:
+                release()  # Release before the returned Future becomes complete.
+
         try:
-            return self._executor.submit(_send)
+            future = self._executor.submit(_send)
         except RuntimeError:
+            release()
+            with self._budget_lock:
+                self._counts["dropped_closed"] += 1
             _logger.warning("Webhook executor is shut down; dropping notification")
             return None
+        except BaseException:
+            release()
+            raise
+        future.add_done_callback(release)  # Cancelled queued jobs never run _send.
+        return future
 
     def close(self, wait: bool = True) -> None:
         """Shut down the notifier's thread pool.
@@ -195,10 +263,16 @@ class WebhookNotifier:
         Without this, every `WebhookNotifier` instance leaks its worker
         threads for the life of the process once it goes out of scope.
         """
-        self._executor.shutdown(wait=wait)
+        with self._budget_lock:
+            self._closed = True
+        self._executor.shutdown(wait=wait, cancel_futures=not wait)
 
 
 class _DisabledNotifier:
+    def budget_status(self) -> dict[str, int]:
+        return {"pending": 0, "pending_bytes": 0, "dropped_full": 0,
+                "dropped_oversize": 0, "dropped_closed": 0}
+
     def notify(self, _snapshot: SnapshotRecord, _detections: list[Detection]) -> None:
         pass
 
