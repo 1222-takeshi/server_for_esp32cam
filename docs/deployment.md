@@ -391,6 +391,16 @@ All variables are optional unless marked **required for production**.
 | `ESP32CAM_UPLOAD_WS_MIN_FRAME_INTERVAL_SECONDS` | `1.0` | Minimum seconds between WebSocket frames per connection. |
 | `ESP32CAM_LOG_FORMAT` | `text` | Log output format: `text` (human-readable) or `json` (structured, via python-json-logger). |
 
+Each webhook notifier has a budget shared by all cameras: by default, at most
+16 running/queued jobs and 64 KiB of total payload, with 4 KiB per payload.
+Each Gunicorn worker owns its own notifier; these are per-process bounds.
+Saturation drops the new notification without waiting or logging every drop;
+`budget_status()` reports pending count/bytes and drops by reason. Completion,
+cancellation and submit failure release reservations. `close(wait=False)` also
+cancels queued jobs. Responses are read up to 64 KiB plus one overflow-detection
+byte; oversized bodies close the connection and are not retried. HTTP operation
+timeouts/retries still apply; the payload budget is not a total delivery deadline.
+
 When Gunicorn is configured with more than one worker while this setting remains
 `memory://`, the application emits a startup warning because rate-limit counters
 are independent per process. Use a shared backend such as Redis before scaling

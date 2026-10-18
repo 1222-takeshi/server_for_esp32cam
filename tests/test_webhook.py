@@ -7,7 +7,9 @@ import math
 import threading
 import time
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from dataclasses import replace
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -426,3 +428,135 @@ def test_close_shuts_down_executor_and_drops_further_notifications(caplog):
     assert result is None
     mock_open.assert_not_called()
     assert any("executor is shut down" in r.message for r in caplog.records)
+
+
+@pytest.mark.parametrize("budgets", [{"max_pending": 1},
+                                    {"max_pending": 10, "max_payload_bytes": 512,
+                                     "max_pending_bytes": 512}])
+def test_saturation_bounds_count_and_bytes_without_waiting(budgets):
+    notifier = WebhookNotifier("http://example.com/hook", max_workers=1, max_attempts=1,
+                               **budgets)
+    release = threading.Event()
+    connection = MagicMock()
+    connection.request.side_effect = lambda *a, **kw: release.wait(timeout=10)
+    connection.getresponse.return_value = _successful_response()
+    futures = []
+    try:
+        with patch("script.webhook.http_client.HTTPConnection", return_value=connection):
+            start = time.monotonic()
+            for _ in range(20):
+                future = notifier.notify(_snapshot(), [_detection(.9)])
+                if future is not None:
+                    futures.append(future)
+            assert time.monotonic() - start < 1
+            status = notifier.budget_status()
+            assert 0 < status["pending"] <= budgets["max_pending"]
+            assert 0 < status["pending_bytes"] <= budgets.get("max_pending_bytes", 65536)
+            assert status["dropped_full"] == 20 - len(futures) > 0
+            release.set()
+            for future in futures:
+                future.result(timeout=5)
+        assert notifier.budget_status()["pending"] == 0
+        assert notifier.budget_status()["pending_bytes"] == 0
+    finally:
+        release.set()
+        notifier.close()
+
+
+def test_oversized_payload_does_not_enter_executor(notifier):
+    snapshot = replace(_snapshot(), relative_path="猫" * 2000)
+    with patch.object(notifier._executor, "submit") as submit:
+        assert notifier.notify(snapshot, [_detection(.9)]) is None
+        submit.assert_not_called()
+    assert notifier.budget_status()["dropped_oversize"] == 1
+
+
+@pytest.mark.parametrize("body_size,closed", [(65536, False), (65537, True)])
+def test_response_body_is_bounded_and_oversize_is_not_retried(body_size, closed):
+    notifier = WebhookNotifier("http://example.com/hook", max_attempts=3)
+    connection = MagicMock()
+    response = _successful_response(200)
+    response.read.return_value = b"x" * body_size
+    connection.getresponse.return_value = response
+    try:
+        with patch("script.webhook.http_client.HTTPConnection", return_value=connection):
+            future = notifier.notify(_snapshot(), [_detection(.9)])
+            future.result(timeout=5)
+        response.read.assert_called_once_with(65537)
+        assert connection.request.call_count == 1
+        assert connection.close.called == closed
+        assert notifier.budget_status()["pending_bytes"] == 0
+    finally:
+        notifier.close()
+
+
+def test_cancellation_shutdown_and_completion_release_reservations():
+    notifier = WebhookNotifier("http://example.com/hook", max_workers=1, max_pending=2,
+                               max_attempts=1)
+    started, release = threading.Event(), threading.Event()
+    def blocked(*args, **kwargs):
+        started.set()
+        release.wait(timeout=10)
+    connection = MagicMock()
+    connection.request.side_effect = blocked
+    connection.getresponse.return_value = _successful_response()
+    try:
+        with patch("script.webhook.http_client.HTTPConnection", return_value=connection):
+            first = notifier.notify(_snapshot(), [_detection(.9)])
+            assert started.wait(timeout=1)
+            second = notifier.notify(_snapshot(), [_detection(.9)])
+            assert second.cancel()
+            assert notifier.budget_status()["pending"] == 1
+            third = notifier.notify(_snapshot(), [_detection(.9)])
+            notifier.close(wait=False)
+            assert third.cancelled()
+            assert notifier.budget_status()["pending"] == 1
+            release.set()
+            first.result(timeout=5)
+        assert notifier.budget_status()["pending"] == 0
+        assert notifier.budget_status()["pending_bytes"] == 0
+    finally:
+        release.set()
+        notifier.close()
+
+
+def test_submit_failure_releases_reserved_bytes(notifier):
+    with patch.object(notifier._executor, "submit", side_effect=RuntimeError("shutdown")):
+        assert notifier.notify(_snapshot(), [_detection(.9)]) is None
+    assert notifier.budget_status()["pending_bytes"] == 0
+    assert notifier.budget_status()["pending"] == 0
+    assert notifier.budget_status()["dropped_closed"] == 1
+
+
+def test_concurrent_producers_cannot_overbook_the_global_queue():
+    notifier = WebhookNotifier("http://example.com/hook", max_workers=1, max_pending=3,
+                               max_attempts=1)
+    release = threading.Event()
+    connection = MagicMock()
+    connection.request.side_effect = lambda *a, **kw: release.wait(timeout=10)
+    connection.getresponse.return_value = _successful_response()
+    try:
+        with patch("script.webhook.http_client.HTTPConnection", return_value=connection):
+            with ThreadPoolExecutor(max_workers=8) as producers:
+                results = list(producers.map(lambda _: notifier.notify(_snapshot(), [_detection(.9)]),
+                                             range(80)))
+            admitted = [future for future in results if future is not None]
+            assert len(admitted) == notifier.budget_status()["pending"] == 3
+            assert notifier.budget_status()["dropped_full"] == 77
+            release.set()
+            for future in admitted:
+                future.result(timeout=5)
+        assert notifier.budget_status()["pending_bytes"] == 0
+        assert notifier.budget_status()["pending"] == 0
+    finally:
+        release.set()
+        notifier.close()
+
+
+@pytest.mark.parametrize("budget", ["max_pending", "max_pending_bytes", "max_payload_bytes"])
+@pytest.mark.parametrize("value", [0, -1, True, 1.5])
+def test_invalid_notification_budgets_fail_before_executor_creation(budget, value):
+    with patch("script.webhook.ThreadPoolExecutor") as executor:
+        with pytest.raises(ValueError):
+            WebhookNotifier("http://example.com/hook", **{budget: value})
+        executor.assert_not_called()
