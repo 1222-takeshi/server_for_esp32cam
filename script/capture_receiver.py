@@ -18,7 +18,9 @@ from websockets.exceptions import ConnectionClosed
 from websockets.sync.server import serve
 
 from script.detector import Detection
-from script.frame_protocol import ClockSample, FrameOrder, HEADER, MAX_JPEG_BYTES, decode_frame
+from script.frame_protocol import (
+    ClockSample, FrameOrder, HEADER, MAX_GENERATION, MAX_JPEG_BYTES, PROFILE_HEADER, decode_frame,
+)
 
 
 TEXT_LIMIT = 512
@@ -47,7 +49,7 @@ def _jpeg_header(jpeg):
         return False
 
 
-def _text_message(raw):
+def _text_message(raw, *, profiles=False):
     if len(raw.encode("utf-8")) > TEXT_LIMIT:
         raise ValueError("text_size")
     try:
@@ -70,6 +72,20 @@ def _text_message(raw):
             raise ValueError("invalid_status")
         if any(not _uint(item[field], zero=True) for field in fields - {"type", "boot_id"}):
             raise ValueError("invalid_status")
+    elif profiles and kind == "profile.hello":
+        if (set(item) != {"type", "schema", "boot_id", "generation_floor", "profiles"}
+                or type(item["schema"]) is not int or item["schema"] != 2
+                or not _uint(item["boot_id"])
+                or not _uint(item["generation_floor"], zero=True)
+                or item["generation_floor"] > MAX_GENERATION
+                or item["profiles"] != ["eco", "tracking"]):
+            raise ValueError("invalid_profile_hello")
+    elif profiles and kind == "profile.ack":
+        if (set(item) != {"type", "boot_id", "generation", "mode", "applied_us"}
+                or not _uint(item["boot_id"]) or not _uint(item["applied_us"])
+                or not _uint(item["generation"]) or item["generation"] > MAX_GENERATION
+                or type(item["mode"]) is not str or item["mode"] not in {"eco", "tracking"}):
+            raise ValueError("invalid_profile_ack")
     else:
         raise ValueError("unknown_type")
     return item
@@ -103,7 +119,8 @@ def _detections(value):
 class CaptureReceiver:
     def __init__(self, *, camera_id, device_api_key, detector=None, event_sink=None,
                  clock_us=None, max_age_ms=500, max_duration_s=3600,
-                 max_frames=100_000, max_messages=200_000):
+                 max_frames=100_000, max_messages=200_000, profile=None,
+                 result_sink=None, continuous=False):
         key = device_api_key.encode("utf-8") if isinstance(device_api_key, str) else device_api_key
         if not isinstance(key, bytes) or not key:
             raise ValueError("A nonempty device API key is required")
@@ -112,10 +129,13 @@ class CaptureReceiver:
         if not all(isinstance(v, int) and not isinstance(v, bool) and v > 0 for v in
                    (max_age_ms, max_duration_s, max_frames, max_messages)):
             raise ValueError("Invalid receiver limit")
+        if type(continuous) is not bool or continuous and profile is None:
+            raise ValueError("Continuous capture requires an acknowledged profile")
         self.camera_id = camera_id
         self._key = key
         self.detector = detector
         self.sink = event_sink or (lambda event: None)
+        self.result_sink, self.profile, self.continuous = result_sink, profile, continuous
         self.clock_us = clock_us or (lambda: time.monotonic_ns() // 1000)
         self.max_age_us = max_age_ms * 1000
         self.max_duration_us = max_duration_s * 1_000_000
@@ -143,6 +163,8 @@ class CaptureReceiver:
             cancel = self._current_cancel
             websocket = self._current_websocket
             worker = self._current_worker
+        if self.profile is not None:
+            self.profile.disconnect()  # Hold synchronously, even if recv/teardown is delayed.
         if cancel is not None:
             cancel()
         # Fence any sink call that started before cancellation. A sink must be
@@ -154,7 +176,7 @@ class CaptureReceiver:
         if worker is not None and worker.ident is not None and worker is not current_thread():
             worker.join(timeout=0.2)
 
-    def _emit(self, *, _counter=None, **fields):
+    def _emit(self, *, _counter=None, _frame=None, **fields):
         with self._event_lock:
             if (self._session_stopping is not None
                     and self._session_stopping.is_set()
@@ -166,7 +188,10 @@ class CaptureReceiver:
             try:
                 if _counter is not None:
                     fields["counters"] = _counter()
-                self.sink({"camera_id": self.camera_id, **fields})
+                event = {"camera_id": self.camera_id, **fields}
+                self.sink(event)
+                if _frame is not None and self.result_sink is not None:
+                    self.result_sink(_frame, event)
             except Exception as exc:
                 self._sink_failed.set()
                 raise SinkFailure() from exc
@@ -188,6 +213,8 @@ class CaptureReceiver:
             return
         wake = Event()
         stopping = Event()
+        worker_done = Event()
+        session_closed = Event()
         slot_lock = Lock()
         counter_lock = Lock()
         waiting = None
@@ -223,6 +250,18 @@ class CaptureReceiver:
                                          **metadata)
             wake.set()
 
+        def release_session():
+            # Both transport/profile teardown AND native inference must finish
+            # before another connection can use the detector or profile state.
+            with self._session_lock:
+                if (session_closed.is_set() and (worker is None or worker_done.is_set())
+                        and self._session_stopping is stopping):
+                    self.active = False
+                    self._current_cancel = None
+                    self._current_websocket = None
+                    self._current_worker = None
+                    self._session_stopping = None
+
         def inference_worker():
             nonlocal waiting, running
             try:
@@ -242,6 +281,10 @@ class CaptureReceiver:
                     with slot_lock:
                         if stopping.is_set():
                             break
+                        if self.profile is not None and not self.profile.allows(frame):
+                            running = None
+                            emit_counted("dropped", status="dropped", reason="profile_changed", **metadata)
+                            continue
                         if age_high_now(metadata, started) > self.max_age_us:
                             running = None
                             emit_counted("dropped", status="dropped", reason="expired_queue",
@@ -267,17 +310,22 @@ class CaptureReceiver:
                                          reason="expired_result", infer_started_us=started,
                                          infer_finished_us=finished, **metadata)
                         else:
-                            emit_counted("inferred", "fresh_success", status="success",
-                                         infer_started_us=started, infer_finished_us=finished,
-                                         detections=detections, **metadata)
+                            def publish(frame=frame, started=started, finished=finished,
+                                        detections=detections, metadata=metadata):
+                                emit_counted("inferred", "fresh_success", _frame=frame, status="success",
+                                             infer_started_us=started, infer_finished_us=finished,
+                                             detections=detections, **metadata)
+
+                            if self.profile is None:
+                                publish()
+                            elif not self.profile.publish_result(frame, publish):
+                                emit_counted("inferred", "dropped", status="dropped", reason="profile_changed",
+                                             infer_started_us=started, infer_finished_us=finished, **metadata)
             except SinkFailure:
                 stopping.set()
             finally:
-                with self._session_lock:
-                    self.active = False
-                    self._current_cancel = None
-                    self._current_websocket = None
-                    self._current_worker = None
+                worker_done.set()
+                release_session()
 
         worker = Thread(target=inference_worker, daemon=True) if self.detector is not None else None
         with self._session_lock:
@@ -310,8 +358,19 @@ class CaptureReceiver:
                 if self.failed or self._stop_requested.is_set() or stopping.is_set():
                     break
                 now = self.clock_us()
-                if now - begun >= self.max_duration_us or messages >= self.max_messages:
+                if not self.continuous and (now - begun >= self.max_duration_us or messages >= self.max_messages):
                     break
+                if self.profile is not None:
+                    command = self.profile.command()  # Watchdog at each <=0.1s receive iteration.
+                    if command is not None:
+                        websocket.send(json.dumps(command))
+                    if not self.profile.connected and now - begun >= 5_000_000:
+                        self._emit(status="closed", reason="profile_hello_timeout")
+                        break
+                    with slot_lock:
+                        if waiting is not None and not self.profile.allows(waiting[0]):
+                            previous, waiting = waiting, None
+                            emit_counted("dropped", status="dropped", reason="profile_changed", **previous[1])
                 if pending is not None and now - pending[1] > 1_000_000:
                     self._emit(status="closed", reason="clock_timeout")
                     break
@@ -331,8 +390,16 @@ class CaptureReceiver:
                 received = self.clock_us()
                 if isinstance(raw, str):
                     try:
-                        item = _text_message(raw)
-                        if item["type"] == "clock.pong":
+                        item = _text_message(raw, profiles=self.profile is not None)
+                        if item["type"].startswith("profile."):
+                            if boot is not None and item["boot_id"] != boot:
+                                raise ValueError("boot_mismatch")
+                            boot = item["boot_id"]
+                            if item["type"] == "profile.hello":
+                                self.profile.hello(boot, item["generation_floor"])
+                            else:
+                                self.profile.acknowledge(boot, item["generation"], item["mode"], item["applied_us"])
+                        elif item["type"] == "clock.pong":
                             if pending is None or item["id"] != pending[0]:
                                 raise ValueError("clock_nonce")
                             if boot is not None and item["boot_id"] != boot:
@@ -363,16 +430,18 @@ class CaptureReceiver:
                 if not isinstance(raw, bytes):
                     self._emit(status="closed", reason="invalid_message")
                     break
-                if bump("frames")["frames"] > self.max_frames:
+                if bump("frames")["frames"] > self.max_frames and not self.continuous:
                     break
                 try:
-                    frame = decode_frame(raw)
+                    frame = decode_frame(raw, allow_profiles=self.profile is not None)
                 except ValueError:
                     self._emit(status="closed", reason="invalid_frame")
                     break
                 metadata = {"boot_id": frame.boot_id, "sequence": frame.sequence,
                             "captured_us": frame.captured_us, "sent_us": frame.sent_us,
                             "host_received_us": received, "payload_bytes": len(raw)}
+                if self.profile is not None:
+                    metadata["mode_generation"] = frame.mode_generation
                 if boot is not None and frame.boot_id != boot:
                     self._emit(status="closed", reason="boot_mismatch", **metadata)
                     break
@@ -385,6 +454,8 @@ class CaptureReceiver:
                     reason = None
                 if reason is None and not _jpeg_header(frame.jpeg):
                     reason = "invalid_jpeg"
+                elif reason is None and self.profile is not None and not self.profile.allows(frame):
+                    reason = "profile_unconfirmed"
                 elif reason is None and sample is None:
                     reason = "clock_unknown"
                 elif reason is None:
@@ -417,26 +488,23 @@ class CaptureReceiver:
             cancel_session()
             if worker is not None:
                 worker.join(timeout=0.2)
-            else:
-                with self._session_lock:
-                    self.active = False
-                    self._current_cancel = None
-                    self._current_websocket = None
-                    self._current_worker = None
             self._close(websocket)
-            with self._session_lock:
-                if self._session_stopping is stopping:
-                    self._session_stopping = None
+            if self.profile is not None:
+                self.profile.disconnect()
+            session_closed.set()
+            release_session()
 
 
 def create_receiver(*, camera_id="esp32cam-01", device_api_key, detector=None,
                     event_sink=None, clock_us=None, max_age_ms=500,
-                    max_duration_s=3600, max_frames=100_000, max_messages=200_000):
+                    max_duration_s=3600, max_frames=100_000, max_messages=200_000,
+                    profile=None, result_sink=None, continuous=False):
     """Build an isolated receiver; caller supplies a private key."""
     return CaptureReceiver(camera_id=camera_id, device_api_key=device_api_key,
                            detector=detector, event_sink=event_sink, clock_us=clock_us,
                            max_age_ms=max_age_ms, max_duration_s=max_duration_s,
-                           max_frames=max_frames, max_messages=max_messages)
+                           max_frames=max_frames, max_messages=max_messages,
+                           profile=profile, result_sink=result_sink, continuous=continuous)
 
 
 class _SocketAdapter:
@@ -458,7 +526,7 @@ def serve_live(receiver, host="127.0.0.1", port=8765):
 
     Use as ``with serve_live(receiver, host, port) as server: server.serve_forever()``.
     The (2, 1) high/low watermarks pause socket reads, with bounded read-buffer
-    overshoot. Each message is at most one ECF1 envelope in size. Disable
+    overshoot. Each message is at most one ECF1/opt-in ECF2 envelope. Disable
     compression to avoid expansion and CPU spikes.
     """
     path = f"/ws/cameras/{receiver.camera_id}/live"
@@ -486,5 +554,6 @@ def serve_live(receiver, host="127.0.0.1", port=8765):
                         request_key(connection.request))
 
     return serve(handler, host, port, process_request=process_request,
-                 max_size=HEADER.size + MAX_JPEG_BYTES, max_queue=(2, 1),
+                 max_size=(PROFILE_HEADER.size if receiver.profile is not None else HEADER.size) + MAX_JPEG_BYTES,
+                 max_queue=(2, 1), open_timeout=3 if receiver.profile is not None else 10,
                  compression=None, ping_interval=20, close_timeout=1)
