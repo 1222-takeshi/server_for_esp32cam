@@ -545,3 +545,16 @@ Key endpoints for diagnostics:
 | `GET /healthz/ready` | Readiness check (DB, storage, disk, inference worker) |
 | `GET /metrics` | Prometheus metrics (requires `ADMIN_TOKEN`) |
 | `GET /api/docs` | Interactive API documentation (Swagger UI) |
+# 高頻度worker用の代表画像保存部品
+
+`script.representative_writer` はnative process用で、本番経路への接続は別途必要です。
+カメラ全体10秒/枚、最大4camera、実行中込み2枚、各JPEG128KiB/Detection300件に制限します。
+無検出はkeep-only設定時に書込み前に除外し、通知は代表画像の保存後に限定できます。
+検出メタデータも符号化サイズの保守的見積り64KiBで制限します。新規保存はJPEG＋64KiBを失敗時も
+予約し、直近1時間128MiBまでです（境界の1分は保守的に残します）。この予約は論理的な割当であり、
+SQLiteのpage/index/WALやretentionによる実書込み量の上限とは異なります。
+`ResourceGuard` は空きmax(1GiB,10%)以下、DB256MiB/WAL8MiB以上、workerの実write_bytes
+128MiB/時以上、監視故障/3秒超で任意の新規書込みを止めます。Linuxの`/proc/self/io`を使い、
+監視のdisk/DB statは認識・requestの外で実行します。復帰には空きmax(1.5GiB,15%)超など全条件正常を
+60秒維持し、手動resumeが必要です。これは停止判定であり、実行中書込み・OS・他processを含む
+物理hard quotaではありません。自動VACUUMやraw/GT/baselineの削除は行いません。
