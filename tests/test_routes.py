@@ -208,6 +208,16 @@ def test_upload_accepts_jpeg_and_returns_metadata(client):
     assert datetime.fromisoformat(body["stored_at"]).tzinfo is not None
 
 
+def test_upload_success_is_debug_only(client, caplog):
+    with caplog.at_level(logging.INFO, logger="script.app"):
+        assert client.post("/upload", data=MINIMAL_JPEG, headers=UPLOAD_HEADERS).status_code == 200
+    assert not any("File uploaded successfully:" in record.message for record in caplog.records)
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG, logger="script.app"):
+        assert client.post("/upload", data=MINIMAL_JPEG, headers=UPLOAD_HEADERS).status_code == 200
+    assert any("File uploaded successfully:" in record.message for record in caplog.records)
+
+
 def test_upload_rejects_empty_payload(client):
     response = client.post("/upload", data=b"", headers=UPLOAD_HEADERS)
 

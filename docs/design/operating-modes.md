@@ -1,7 +1,7 @@
 # 容量と負荷を制限する運転モード
 
 - Source: 2026-10-18の利用者提案「容量が少ないのでログを抑え、モータトラッキングと省エネを分ける」。設計Issue [#504](https://github.com/1222-takeshi/server_for_esp32cam/issues/504)、常用統合 [#486](https://github.com/1222-takeshi/server_for_esp32cam/issues/486)、既存ログ最適化 [#417](https://github.com/1222-takeshi/server_for_esp32cam/issues/417)。
-- Status: **設計案。モード切替・容量制御は未実装**。本PRでは稼働Piの設定・画像・ログ・rawを変更しない。
+- Status: **モード切替・保存/DB制御は設計案**。サービス出力の上限制御は[log_runner](../../script/log_runner.py)に実装済み（[有効化手順](../deployment.md)）。実装・実機受入は項目ごとに管理し、モード切替の完了とは扱わない。
 
 ## CAPABILITY
 
@@ -14,7 +14,7 @@
 | 対象 | 現状と不足 |
 |---|---|
 | Pi処理能力 | [30分測定](raspi-high-rate-recognition-results.md)で5.262Hz、process CPU250%（1 core=100%）、最大76℃。通常保存/通知同時負荷・常用統合は未受入。10Hz撮影時の認識は6.908Hzでdrop34.44% |
-| 通常経路 | [推論FIFO](../../script/inference.py)は上限なし。保存/SQLite更新後に推論し、[HTTP成功INFO](../../script/routes.py)も存在する。単に撮影周期を縮めると書込みとbacklogが増える |
+| 通常経路 | [推論FIFO](../../script/inference.py)は上限なし。保存/SQLite更新後に推論する。HTTP成功ログはDEBUGへ変更済みだが、単に撮影周期を縮めると書込みとbacklogが増える |
 | 画像保存 | 猫なし画像を推論後に削除しても、一度は保存する。猫が写り続ければ全画像が残り得る。「検出時だけ」では保存頻度上限にならない |
 | 試験用ログ | [observer](../../script/live_observer.py)は100,000 events/128MiB/指定時間で停止。30分runのeventsは13,221,042 bytes（約12.6MiB）。同じ記録密度を24時間分へ換算すると約635MB/日だが、実測は30分で、現CLIは無期限運転しない |
 | 既存の保持制御 | 画像/動画はage/byte retentionがある。[端末ログ](../../script/config.py)のage retentionは既定0（無効）、byte/件数上限なし。DELETE後のDB/WAL物理サイズも別に扱う |
@@ -58,7 +58,7 @@
 
 RAM上の鮮度・異常判定はフレームごとに行う。60秒のログ集計まで停止判断を待たせない。CPU-boundな画像/推論/大きな削除・DB保守はgevent request greenletを塞がない専用処理へ出す。保存quotaは容量を制限してもSDへの累積書込み量は制限しないため、bytes/時間も受入に含める。
 
-[Compose](../../docker-compose.yml)にはservice別log rotation設定がない。[Docker仕様](https://docs.docker.com/engine/logging/drivers/json-file/)の`max-size`/`max-file`等をサービス単位で適用し、コンテナ再作成後の有効値を確認する。Piはsystemd運用なので別途対応が必要。[journaldの上限](https://www.freedesktop.org/software/systemd/man/latest/journald.conf.html)は共有journal/namespace単位であり、ホスト全体の設定をこのサービス専用の上限と誤認しない。user serviceで使える方式を確認し、file出力を選ぶ場合もstdout/journalとの二重永続化を含めて総量を検証する。DB保守も[SQLite VACUUM](https://www.sqlite.org/lang_vacuum.html)の必要空き領域・ロック・負荷を確認し、低容量時や撮影ごとに実行しない。
+[Compose](../../docker-compose.yml)はservice別に`json-file`の`max-size=10m`/`max-file=3`を設定済み。[Docker仕様](https://docs.docker.com/engine/logging/drivers/json-file/)に従い、コンテナ再作成後の有効値を確認する。Piのsystemd運用では[専用collectorの起動手順](../deployment.md)を使う。[journaldの上限](https://www.freedesktop.org/software/systemd/man/latest/journald.conf.html)は共有journal/namespace単位であり、ホスト全体の設定をこのサービス専用の上限と誤認しない。file出力とstdout/journalとの二重永続化を含めて総量を検証する。DB保守も[SQLite VACUUM](https://www.sqlite.org/lang_vacuum.html)の必要空き領域・ロック・負荷を確認し、低容量時や撮影ごとに実行しない。
 
 ### 状態・インターフェース
 

@@ -186,13 +186,32 @@ After=network-online.target
 Type=simple
 WorkingDirectory=/home/ubuntu/server_for_esp32cam
 EnvironmentFile=/home/ubuntu/server_for_esp32cam/.env
-ExecStart=/home/ubuntu/server_for_esp32cam/.venv/bin/gunicorn -k gevent -w 1 --timeout 120 --graceful-timeout 30 -b 0.0.0.0:${PORT} script.server:app
+ExecStart=/home/ubuntu/server_for_esp32cam/.venv/bin/python -m script.log_runner --directory /home/ubuntu/.local/state/esp32cam/logs -- /home/ubuntu/server_for_esp32cam/.venv/bin/gunicorn -k gevent -w 1 --timeout 120 --graceful-timeout 30 -b 0.0.0.0:${PORT} script.server:app
 Restart=on-failure
 RestartSec=5
 
 [Install]
 WantedBy=default.target
 ```
+
+The POSIX `script.log_runner` collector captures Gunicorn and worker stdout/stderr
+outside the request process. It creates its own private managed directory; do not
+point it at uploads, experiment raw or an existing unrelated directory. Defaults
+are 10 MiB per file plus two backups (30 MiB of log files), 8 KiB per record,
+60 distinct records/64 KiB per minute, plus a bounded summary every 60 seconds.
+Identical messages are suppressed within each minute; summaries include cumulative
+suppressed, truncated, queue-drop and write-error counts. A bounded writer queue
+keeps disk stalls/failures from blocking recognition. These are log counters, not
+per-frame inference metrics. Changing limits also enforces the new bound on old
+managed generations. The marker and writer lock are small additional metadata.
+
+The collector requires `waitid`/`WNOWAIT` (available on Raspberry Pi Linux); it
+rejects unsupported Python builds before launching the command. It forwards stop
+signals and cleans up the child process group. Keep secrets in EnvironmentFile,
+not command arguments. Only one collector can own each directory. Compose uses
+Docker's separate `json-file` 10m/3-file rotation; do not additionally send the
+same output to a second persistent sink. Existing containers need recreation to
+pick up the Compose logging settings. No host-wide journal quota is changed.
 
 > **`--timeout 120` is required when `ESP32CAM_DETECTOR=tflite_cpu`.** The
 > `gevent` worker shares one OS thread, and XNNPACK delegate creation at
