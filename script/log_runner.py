@@ -25,6 +25,9 @@ _INPUT_LIMIT = 8192
 
 
 class LogBudget:
+    marker_name = _MARKER
+    directory_identity = _IDENTITY
+
     def __init__(self, directory: Path, *, max_bytes=10 * 1024 * 1024, backups=2,
                  line_bytes=8192, records_per_minute=60, bytes_per_minute=64 * 1024, clock=time.monotonic):
         values = (max_bytes, backups, line_bytes, records_per_minute, bytes_per_minute)
@@ -58,15 +61,16 @@ class LogBudget:
             raise ValueError("Log directory must be privately owned")
         files = list(directory.iterdir())
         for path in files:
-            valid = (path.name in {_MARKER, "runtime.log", ".writer.lock"}
+            valid = (path.name in {self.marker_name, "runtime.log", ".writer.lock"}
                      or re.fullmatch(r"runtime\.log\.[1-9]", path.name))
             if not valid or path.is_symlink() or not stat.S_ISREG(path.stat().st_mode):
                 raise ValueError("Directory contains unmanaged data")
-        marker = directory / _MARKER
+        marker = directory / self.marker_name
         if files and not marker.exists():
             raise ValueError("Existing data is not a managed log directory")
         if marker.exists():
-            if marker.stat().st_size != len(_IDENTITY) or marker.read_text() != _IDENTITY:
+            if (marker.stat().st_size != len(self.directory_identity)
+                    or marker.read_text() != self.directory_identity):
                 raise ValueError("Invalid managed log directory")
         else:
             try:
@@ -74,7 +78,7 @@ class LogBudget:
             except FileExistsError as exc:
                 raise ValueError("Concurrent log directory initialization; retry startup") from exc
             with os.fdopen(fd, "w") as handle:
-                handle.write(_IDENTITY)
+                handle.write(self.directory_identity)
         if self._lock_file is None:
             flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
             handle = os.fdopen(os.open(directory / ".writer.lock", flags, 0o600), "r+b")

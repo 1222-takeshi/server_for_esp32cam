@@ -213,6 +213,23 @@ Docker's separate `json-file` 10m/3-file rotation; do not additionally send the
 same output to a second persistent sink. Existing containers need recreation to
 pick up the Compose logging settings. No host-wide journal quota is changed.
 
+Optional detailed diagnostics use `script.diagnostic_logs.DiagnosticLog` in the
+native recognition process. The component is available for the operating-mode
+worker integration; it is not enabled automatically by the web service. Each
+explicit session lasts at most 600 seconds/32 MiB. All sessions in its dedicated
+managed directory share 8 MiB × four rotating files (32 MiB, plus marker/lock).
+These are disposable operational diagnostics: never use experiment raw, GT or
+baseline directories. A distinct marker also rejects normal runtime log directories.
+Records are plain JSON, at most 8 KiB, with eight waiting records and one in flight.
+Before encoding, snapshots are limited to depth six/1,024 nodes/64-bit integers
+and a byte budget. Only one bounded encoding runs at a time; busy/full producers
+drop without waiting, and oversized/invalid records are counted. Expiry, byte limit
+or storage failure stops only diagnostics.
+`status()` exposes state, counts and bytes; successful and attempted writes are
+distinct because a failed write can be partial. An already-issued disk operation
+may finish after expiry/close, while close waits at most one second. Gevent-patched
+processes are rejected so disk calls cannot accidentally run on request greenlets.
+
 > **`--timeout 120` is required when `ESP32CAM_DETECTOR=tflite_cpu`.** The
 > `gevent` worker shares one OS thread, and XNNPACK delegate creation at
 > worker boot (~30 s on a Raspberry Pi 4) is a CPU-bound phase that doesn't
