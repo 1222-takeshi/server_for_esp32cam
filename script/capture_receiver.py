@@ -120,7 +120,7 @@ class CaptureReceiver:
     def __init__(self, *, camera_id, device_api_key, detector=None, event_sink=None,
                  clock_us=None, max_age_ms=500, max_duration_s=3600,
                  max_frames=100_000, max_messages=200_000, profile=None,
-                 result_sink=None, continuous=False):
+                 result_sink=None, continuous=False, health_check=None):
         key = device_api_key.encode("utf-8") if isinstance(device_api_key, str) else device_api_key
         if not isinstance(key, bytes) or not key:
             raise ValueError("A nonempty device API key is required")
@@ -136,6 +136,7 @@ class CaptureReceiver:
         self.detector = detector
         self.sink = event_sink or (lambda event: None)
         self.result_sink, self.profile, self.continuous = result_sink, profile, continuous
+        self.health_check = health_check
         self.clock_us = clock_us or (lambda: time.monotonic_ns() // 1000)
         self.max_age_us = max_age_ms * 1000
         self.max_duration_us = max_duration_s * 1_000_000
@@ -358,6 +359,8 @@ class CaptureReceiver:
                 if self.failed or self._stop_requested.is_set() or stopping.is_set():
                     break
                 now = self.clock_us()
+                if self.health_check is not None:
+                    self.health_check()  # Cached state only; no filesystem/SQL/native work.
                 if not self.continuous and (now - begun >= self.max_duration_us or messages >= self.max_messages):
                     break
                 if self.profile is not None:
@@ -498,13 +501,14 @@ class CaptureReceiver:
 def create_receiver(*, camera_id="esp32cam-01", device_api_key, detector=None,
                     event_sink=None, clock_us=None, max_age_ms=500,
                     max_duration_s=3600, max_frames=100_000, max_messages=200_000,
-                    profile=None, result_sink=None, continuous=False):
+                    profile=None, result_sink=None, continuous=False, health_check=None):
     """Build an isolated receiver; caller supplies a private key."""
     return CaptureReceiver(camera_id=camera_id, device_api_key=device_api_key,
                            detector=detector, event_sink=event_sink, clock_us=clock_us,
                            max_age_ms=max_age_ms, max_duration_s=max_duration_s,
                            max_frames=max_frames, max_messages=max_messages,
-                           profile=profile, result_sink=result_sink, continuous=continuous)
+                           profile=profile, result_sink=result_sink, continuous=continuous,
+                           health_check=health_check)
 
 
 class _SocketAdapter:

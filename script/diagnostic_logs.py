@@ -223,6 +223,7 @@ class DiagnosticLog:
                     "written_bytes": self._budget.written_bytes,
                     "attempted_bytes": self._budget.attempted_bytes}
 
-    def close(self):
+    def close(self, *, wait=True):
         self._finish("closed")
-        self._thread.join(timeout=1)  # Disk stalls cannot hold up normal recognition/shutdown.
+        if wait:
+            self._thread.join(timeout=1)  # Disk stalls cannot hold up normal recognition/shutdown.
