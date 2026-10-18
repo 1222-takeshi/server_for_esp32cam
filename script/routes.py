@@ -1015,7 +1015,7 @@ def _camera_connection_details(camera) -> dict[str, object]:
     except (ValueError, TypeError):
         origin = None
     metrics = current_app.extensions["upload_metrics"].snapshot(camera.camera_id)
-    return {
+    result = {
         "websocket_frames_received": metrics["frames_received"],
         "last_websocket_frame_at": metrics["last_frame_at"],
         "keep_only_detected_snapshots": current_app.config["KEEP_ONLY_DETECTED_SNAPSHOTS"],
@@ -1025,6 +1025,18 @@ def _camera_connection_details(camera) -> dict[str, object]:
         "expected_interval_seconds": camera.expected_interval_seconds,
         "device_server_base_url": origin,
     }
+    from script.operating_routes import enabled, status
+    if enabled(camera.camera_id):
+        native = status(camera.camera_id)
+        age = native.get("last_result_age_seconds")
+        interval = .19 if native.get("effective_mode") == "tracking" else 5
+        result.update(operating=native, expected_interval_seconds=interval,
+                      status="healthy" if native.get("connected") and age is not None and age <= interval + .5 else "unknown",
+                      seconds_since_contact=int(age) if age is not None else None,
+                      last_seen_at=(now - timedelta(seconds=age)).isoformat() if age is not None else None,
+                      websocket_frames_received=native.get("counters", {}).get("frames", 0),
+                      last_websocket_frame_at=(now - timedelta(seconds=age)).isoformat() if age is not None else None)
+    return result
 
 
 @server.route("/api/cameras/<camera_id>/connection")
@@ -1060,6 +1072,7 @@ def camera_detail(camera_id: str):
         latest=latest,
         recent_logs=recent_logs,
         recent_videos=recent_videos,
+        operating_enabled=bool(current_app.config.get("OPERATING_SOCKET")) and camera_id == current_app.config["OPERATING_CAMERA_ID"],
     )
 
 
