@@ -360,7 +360,8 @@ All variables are optional unless marked **required for production**.
 | `ESP32CAM_VIDEO_RETENTION_MAX_AGE_SECONDS` | `0` (disabled) | Delete videos older than this many seconds. Set `0` to disable. |
 | `ESP32CAM_VIDEO_RETENTION_MAX_BYTES` | `0` (disabled) | Delete oldest videos when total video storage exceeds this size. |
 | `ESP32CAM_VIDEO_RETENTION_SCAN_INTERVAL_UPLOADS` | `1` | Same as `ESP32CAM_STORAGE_RETENTION_SCAN_INTERVAL_UPLOADS` but for the video retention scan. |
-| `ESP32CAM_DEVICE_LOG_RETENTION_MAX_AGE_SECONDS` | `0` (disabled) | Delete `device_logs` rows (from `POST /api/log_error`) older than this many seconds. Runs on the same background `ESP32CAM_RETENTION_SCHEDULER_INTERVAL_SECONDS` cadence as image/video retention; there is no byte-based limit since log rows carry no file. Set `0` to disable. |
+| `ESP32CAM_DEVICE_LOG_RETENTION_MAX_AGE_SECONDS` | `0` (disabled) | Delete `device_logs` rows older than this many seconds, at each log INSERT and on the retention scheduler. Nonnegative integer, opt-in; `604800` means 7 days. Restart after changing. |
+| `ESP32CAM_DEVICE_LOG_RETENTION_MAX_ROWS` | `0` (disabled) | Keep the newest N received logs across **all cameras**, atomically with INSERT and on the scheduler. Nonnegative integer, opt-in; `10000` is the initial small-SD candidate. Enabling prunes existing history. Neither this nor age retention bounds or shrinks physical DB/WAL bytes; no automatic VACUUM is performed. Restart after changing. |
 | `ESP32CAM_DISK_USAGE_CHECK_INTERVAL_UPLOADS` | `1` | Only recheck disk usage against `ESP32CAM_STORAGE_RETENTION_MAX_BYTES` every N uploads instead of every upload. |
 | `ESP32CAM_DETECTOR` | `disabled` | Object detector. Options: `disabled`, `tflite_cpu`. |
 | `ESP32CAM_MODEL_PATH` | _(empty)_ | Path to TFLite model file. Required when `DETECTOR=tflite_cpu`. |

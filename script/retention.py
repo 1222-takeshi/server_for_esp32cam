@@ -228,15 +228,17 @@ def apply_video_upload_retention(stored: StoredVideo) -> list[str]:
 
 
 def apply_device_log_retention() -> int:
-    """Delete device_logs rows older than the configured max age.
+    """Prune existing history using opted-in age and all-camera row limits.
 
-    device_logs has no on-disk file and no byte budget, so unlike
-    apply_upload_retention()/apply_video_upload_retention() this only needs
-    an age cutoff and a single DELETE -- no candidate scan. Disabled by
-    default (`DEVICE_LOG_RETENTION_MAX_AGE_SECONDS` <= 0). Runs on the same
-    RetentionScheduler cadence as image/video retention rather than a
-    separate background loop (#357).
+    The same policy also runs inside each INSERT transaction. The scheduler
+    handles old history even without new device logs; no VACUUM is performed.
+    Both limits are disabled by default and configured at process startup.
     """
+    if current_app.config.get("DEVICE_LOG_RETENTION_MAX_ROWS", 0) > 0:
+        deleted = current_app.extensions["metadata_store"].prune_device_logs()
+        if deleted:
+            _logger.info("Device log retention deleted %s rows", deleted)
+        return deleted
     max_age_seconds = current_app.config.get("DEVICE_LOG_RETENTION_MAX_AGE_SECONDS", 0)
     if not max_age_seconds or max_age_seconds <= 0:
         return 0

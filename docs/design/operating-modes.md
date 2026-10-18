@@ -1,7 +1,7 @@
 # 容量と負荷を制限する運転モード
 
 - Source: 2026-10-18の利用者提案「容量が少ないのでログを抑え、モータトラッキングと省エネを分ける」。設計Issue [#504](https://github.com/1222-takeshi/server_for_esp32cam/issues/504)、常用統合 [#486](https://github.com/1222-takeshi/server_for_esp32cam/issues/486)、既存ログ最適化 [#417](https://github.com/1222-takeshi/server_for_esp32cam/issues/417)。
-- Status: **モード切替・保存/DB制御は設計案**。サービス出力の上限制御は[log_runner](../../script/log_runner.py)に実装済み（[有効化手順](../deployment.md)）。実装・実機受入は項目ごとに管理し、モード切替の完了とは扱わない。
+- Status: **モード切替・保存頻度・DB物理容量制御は設計案**。サービス出力の上限制御と端末ログのage/全体row上限は実装済み（[有効化手順](../deployment.md)）。実装・実機受入は項目ごとに管理し、モード切替の完了とは扱わない。
 
 ## CAPABILITY
 
@@ -17,7 +17,7 @@
 | 通常経路 | [推論FIFO](../../script/inference.py)は上限なし。保存/SQLite更新後に推論する。HTTP成功ログはDEBUGへ変更済みだが、単に撮影周期を縮めると書込みとbacklogが増える |
 | 画像保存 | 猫なし画像を推論後に削除しても、一度は保存する。猫が写り続ければ全画像が残り得る。「検出時だけ」では保存頻度上限にならない |
 | 試験用ログ | [observer](../../script/live_observer.py)は100,000 events/128MiB/指定時間で停止。30分runのeventsは13,221,042 bytes（約12.6MiB）。同じ記録密度を24時間分へ換算すると約635MB/日だが、実測は30分で、現CLIは無期限運転しない |
-| 既存の保持制御 | 画像/動画はage/byte retentionがある。[端末ログ](../../script/config.py)のage retentionは既定0（無効）、byte/件数上限なし。DELETE後のDB/WAL物理サイズも別に扱う |
+| 既存の保持制御 | 画像/動画はage/byte retentionがある。[端末ログ](../../script/config.py)はage/全camera合計row上限を実装済みで、どちらも既定0（無効・opt-in）。DELETE後のDB/WAL物理サイズや書込み量の制限は別に扱う |
 | Pi容量の確認 | 2026-10-18 JSTのread-only確認: filesystem 30,060,949,504 bytes、空き23,964,651,520 bytes（約22.3GiB）、journal全体39.2M、ready。確認した`.env`では画像8GiB/動画1GiB/猫なし削除を明示、端末ログageは明示なし（他の環境上書きを含むeffective値は未確認）。ホスト全体の数値で、サービス専用消費量や電力の実測ではない |
 
 ### 固定する方針

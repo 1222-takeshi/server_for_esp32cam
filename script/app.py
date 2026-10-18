@@ -281,6 +281,8 @@ def create_app(test_config: dict | None = None) -> Flask:
     metadata_store = SQLiteMetadataStore(
         app.config["DB_PATH"],
         default_expected_interval_seconds=app.config["CAMERA_EXPECTED_INTERVAL_SECONDS"],
+        device_log_max_rows=app.config["DEVICE_LOG_RETENTION_MAX_ROWS"],
+        device_log_max_age_seconds=app.config["DEVICE_LOG_RETENTION_MAX_AGE_SECONDS"],
     )
     # Cheap filename-only walk first, then only stat()/hydrate the files
     # that are genuinely new -- avoids stat()-ing every on-disk file on
