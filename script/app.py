@@ -16,6 +16,7 @@ from script.detector import DisabledDetector, TFLiteCpuDetector
 from script.events import SnapshotEventPublisher
 from script.inference import InferenceService
 from script.logging_config import configure_logging
+from script.operating_routes import operating
 from script.metadata import SQLiteMetadataStore
 from script.prometheus_metrics import AppMetrics
 from script.retention import RetentionScanGate, RetentionScheduler
@@ -429,6 +430,7 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.extensions["app_metrics"] = app_metrics
     limiter.init_app(app)
     app.register_blueprint(server)
+    app.register_blueprint(operating)
 
     # Flask's test suite creates many application instances; avoid leaking a
     # daemon thread from each test while keeping the scheduler enabled for the

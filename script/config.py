@@ -97,6 +97,8 @@ def gunicorn_worker_count(
 
 
 class Config:
+    OPERATING_SOCKET = os.getenv("ESP32CAM_OPERATING_SOCKET", "")
+    OPERATING_CAMERA_ID = os.getenv("ESP32CAM_OPERATING_CAMERA_ID", "esp32cam-01")
     BASE_DIR = Path(__file__).resolve().parent.parent
     UPLOAD_DIR = Path(os.getenv("ESP32CAM_UPLOAD_DIR", BASE_DIR / "uploads"))
     DB_PATH = Path(os.getenv("ESP32CAM_DB_PATH", BASE_DIR / "esp32cam.sqlite3"))

@@ -73,6 +73,7 @@ def _worker():
     warmup = BytesIO()
     Image.new("RGB", (320, 240)).save(warmup, format="JPEG", quality=88)
     detector.detect(warmup.getvalue())
+    app.extensions["metadata_store"].ensure_camera(camera)  # Once, never a per-frame heartbeat.
     app.extensions["metadata_store"].prune_device_logs()
     runtime = OperatingRuntime(app, detector, camera, key,
                  os.getenv("ESP32CAM_OPERATING_DIAGNOSTIC_DIR", str(Path.home() / ".local/state/esp32cam/diagnostics")))

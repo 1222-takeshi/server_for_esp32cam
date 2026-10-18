@@ -1,0 +1,18 @@
+<section class="card" id="operating-panel" style="padding:16px 20px;margin-bottom:20px;"
+         data-url="{{ url_for('operating.get_status', camera_id=camera.camera_id) }}">
+  <h2 style="font-size:15px;margin:0 0 12px;">撮影・認識モード</h2>
+  <p id="operating-state" aria-live="polite">運転状態を確認中…</p>
+  <p id="operating-resources"></p>
+  <label>管理者トークン <input id="operating-token" type="password" autocomplete="off" placeholder="切替時のみ必要"></label>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+    <button type="button" class="btn" data-mode="eco">省エネ（5秒）</button>
+    <button type="button" class="btn" data-mode="tracking">追跡準備（5Hz以上・モーター停止）</button>
+    <button type="button" class="btn" id="operating-resume" disabled>保護停止から省エネへ復帰</button>
+    <button type="button" class="btn" id="operating-diagnostic">診断を60秒記録</button>
+    <button type="button" class="btn" id="operating-diagnostic-stop">診断を停止</button>
+  </div>
+  <p id="operating-message" role="status"></p>
+  <p class="text-4">両モードは同じモデル・画質・閾値を使います。省エネ時は撮影間隔が長いため、短時間の出現を見逃す場合があります。消費電力の削減量は未測定です。</p>
+  <p class="text-4">最新画像はRAMから最大2回/秒で表示。保存は最大10秒に1枚です。診断は既定OFF、最大10分・合計32MiB。モーターの駆動は許可しません。</p>
+</section>
+<script src="{{ url_for('static', filename='operating.js') }}" defer></script>

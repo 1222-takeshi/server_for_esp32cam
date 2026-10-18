@@ -62,3 +62,11 @@ modeは`mode,expected_version`、resumeは`expected_version`、diagnostic.start�
 管理者認証は外部Flask APIで行い、UNIX socketをHTTP/TCPへ直接公開しないでください。
 認識Hz・age histogram（上方向1ms丸め）・drop/保存/通知/診断・CPU/RSS/温度/資源をRAMで参照し、
 常用ログは60秒集計です。実機30分同時負荷、24h書込み、現場精度、実W数の受入は別に記録します。
+
+管理画面は `/cameras/<camera_id>` の「撮影・認識モード」から操作できます。
+`ESP32CAM_OPERATING_SOCKET` と `ESP32CAM_OPERATING_CAMERA_ID` が一致するカメラだけ有効です。
+`ESP32CAM_ADMIN_TOKEN` を設定し、画面のpassword欄へ入力してください。ブラウザの永続storageには保存しません。
+GET `/api/cameras/<id>/operating` は要求/実効/ACK/資源、GET `.../frame` はRAM JPEGです（鮮度超過204、不通503）。
+PUT `.../operating` は `mode,expected_version`、POST `.../resume` は `expected_version` をJSONで渡します。
+診断はPOST `.../diagnostic` に `duration_seconds`、停止はDELETEに空のJSON objectを渡します。
+変更APIはBearer管理者認証必須・body最大1KiB。未対応camera404・世代競合409・未設定token/worker不通503です。
