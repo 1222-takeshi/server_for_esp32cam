@@ -114,9 +114,14 @@ class ResourceGuard:
             self._started = True
 
     def monitor_failed(self):
+        self.pause("monitor_error")
+
+    def pause(self, reason):
+        if reason not in {"monitor_error", "thermal_fault", "pipeline_fault"}:
+            raise ValueError("Invalid resource pause reason")
         with self.lock:
             self._started = True
-            self._fault("monitor_error")
+            self._fault(reason)
 
     def resume(self):
         with self.lock:
@@ -158,7 +163,7 @@ class RepresentativeWriter:
     """One writer, two admitted images, <=4 cameras, <=1 image/10s/camera.
 
     save(camera_id, jpeg, immutable_detections, context) owns storage/SQL/notify.
-    context is a bounded (boot, generation, sequence) identity. No retry queue.
+    context is (boot, generation, sequence[, estimated_capture_host_us]). No retry queue.
     """
 
     def __init__(self, save, guard, *, keep_only_detected=True, clock=time.monotonic):
@@ -184,7 +189,7 @@ class RepresentativeWriter:
         if (type(jpeg) is not bytes or not 0 < len(jpeg) <= 128 * 1024
                 or type(camera_id) is not str or not is_valid_camera_id(camera_id)
                 or frozen is None
-                or len(frozen) > 300 or type(context) is not tuple or len(context) != 3
+                or len(frozen) > 300 or type(context) is not tuple or len(context) not in (3, 4)
                 or any(type(v) is not int or not 0 < v < 2**64 for v in context)
                 or any(not self._valid_detection(d) for d in frozen)
                 or sum(200 + len(d.label.encode("utf-8")) * 6 for d in frozen) > 64 * 1024):

@@ -410,6 +410,7 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.extensions["storage"] = storage
     app.extensions["metadata_store"] = metadata_store
     app.extensions["detector"] = detector
+    app.extensions["webhook_notifier"] = notifier
     app.extensions["inference_service"] = inference_service
     app.extensions["thumbnail_pool"] = thumbnail_pool
     app.extensions["thumbnail_cache"] = thumbnail_cache

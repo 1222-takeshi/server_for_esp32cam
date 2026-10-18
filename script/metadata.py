@@ -554,6 +554,36 @@ class SQLiteMetadataStore:
             ).fetchone()
         return self._snapshot_from_row(row)
 
+    def record_completed_snapshot(self, stored: StoredImage,
+                                  detections: tuple[Detection, ...]) -> SnapshotRecord:
+        """Atomically index an already-inferred representative; never requeue it.
+
+        stored must be a newly owned UUID filename. Failure rolls back camera,
+        snapshot, and detections together; the caller removes its new file.
+        """
+        if len(detections) > 300:
+            raise ValueError("Too many representative detections")
+        conn = self._get_connection()
+        with conn:
+            if stored.device_id is not None:
+                self._upsert_camera_row(conn, stored.device_id, stored.created_at)
+            row = conn.execute(
+                """INSERT INTO snapshots
+                (filename, relative_path, size, camera_id, captured_at, stored_at,
+                 inference_status, inference_error)
+                VALUES (?, ?, ?, ?, ?, ?, 'succeeded', NULL) RETURNING *""",
+                (stored.name, stored.relative_path, stored.size, stored.device_id,
+                 stored.captured_at.isoformat() if stored.captured_at else None,
+                 stored.created_at.isoformat()),
+            ).fetchone()
+            conn.executemany(
+                """INSERT INTO detections (snapshot_id, label, score, x1, y1, x2, y2, track_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                [(row["id"], d.label, d.score, d.x1, d.y1, d.x2, d.y2, d.track_id)
+                 for d in detections],
+            )
+        return self._snapshot_from_row(row)
+
     def record_video(self, stored: StoredVideo) -> VideoRecord:
         conn = self._get_connection()
         with conn:
