@@ -100,6 +100,89 @@ def setup(**kwargs):
     return clock, mode, events, results, done, receiver
 
 
+@pytest.mark.parametrize("interval", [49, 2001, True, 50.5])
+def test_tracking_ping_interval_rejects_unbounded_or_invalid_rates(interval):
+    with pytest.raises(ValueError):
+        setup(tracking_ping_interval_ms=interval)
+
+
+@pytest.mark.parametrize("interval", [50, 2000])
+def test_control_ping_deadlines_follow_tracking_then_return_to_eco(interval):
+    clock = type("FixedClock", (), {"value": 2_000_000, "__call__": lambda self: self.value})()
+    mode = OperatingMode(clock=lambda: clock.value / 1_000_000)
+    mode.hello(7, 0)
+    mode.request("tracking", mode.version, ready=True)
+    assert mode.acknowledge(7, mode.version, "tracking", 1)
+    pings, waits = [], []
+
+    class TimedSocket:
+        answered = None
+        switched = False
+
+        def send(self, raw):
+            value = json.loads(raw)
+            if value["type"] == "clock.ping":
+                pings.append((clock.value, mode.requested, value["id"]))
+
+        def receive(self, timeout):
+            if self.answered != pings[-1][2]:
+                self.answered = pings[-1][2]
+                return json.dumps({"type": "clock.pong", "id": self.answered, "boot_id": 7,
+                                   "device_us": clock.value-1_000_000})
+            if clock.value >= 2_350_000 and not self.switched:
+                mode.request("eco", mode.version, ready=True)
+                assert mode.acknowledge(7, mode.version, "eco", 1)
+                self.switched = True
+            if clock.value >= 4_500_000:
+                assert mode.reason is None
+                return None
+            waits.append((mode.requested, timeout))
+            clock.value += max(1, round(timeout*1_000_000))
+            raise TimeoutError
+
+        def close(self): pass
+
+    receiver = create_receiver(device_api_key="private", profile=mode, clock_us=clock,
+                               tracking_ping_interval_ms=interval)
+    receiver.handle(TimedSocket(), "esp32cam-01", "private")
+    tracking = [stamp for stamp, profile, _ in pings if profile == "tracking"]
+    if interval == 50:
+        assert len(tracking) >= 7
+        assert all(b-a == 50_000 for a,b in zip(tracking,tracking[1:], strict=False))
+        assert all(wait <= .05 for profile,wait in waits if profile == "tracking")
+    else:
+        assert len(tracking) == 1  # Legacy/default clock traffic is unchanged.
+    assert pings[-1][1] == "eco" and pings[-1][0]-tracking[-1] == 2_000_000
+    assert mode.reason == "disconnected" and mode.status()["actuation_state"] == "hold"
+
+
+def test_fast_tracking_ping_keeps_one_outstanding_nonce_and_one_second_timeout():
+    clock = type("FixedClock", (), {"value": 2_000_000, "__call__": lambda self: self.value})()
+    mode = OperatingMode(clock=lambda: clock.value / 1_000_000)
+    mode.hello(7, 0)
+    mode.request("tracking", mode.version, ready=True)
+    assert mode.acknowledge(7, mode.version, "tracking", 1)
+    pings, events = [], []
+
+    class SilentSocket:
+        def send(self, raw):
+            if json.loads(raw)["type"] == "clock.ping":
+                pings.append(raw)
+
+        def receive(self, timeout):
+            clock.value += max(1, round(timeout*1_000_000))
+            raise TimeoutError
+
+        def close(self): pass
+
+    receiver = create_receiver(device_api_key="private", profile=mode, clock_us=clock,
+                               tracking_ping_interval_ms=50, event_sink=events.append)
+    receiver.handle(SilentSocket(), "esp32cam-01", "private")
+    assert len(pings) == 1
+    assert events[-1]["reason"] == "clock_timeout"
+    assert 1_000_000 < clock.value-2_000_000 <= 1_001_000
+
+
 def test_ack_and_generation_gate_preserves_bounded_result_handoff():
     detector = Detector()
     clock, mode, events, results, done, receiver = setup(detector=detector)
@@ -284,8 +367,9 @@ def test_profile_hello_timeout_without_frames():
     assert mode.status()["actuation_state"] == "hold"
 
 
-def test_real_websocket_profile_ack_and_result():
-    clock, mode, events, results, done, receiver = setup(detector=Detector())
+@pytest.mark.parametrize("tracking", [False, True])
+def test_real_websocket_profile_ack_and_result(tracking):
+    clock, mode, events, results, done, receiver = setup(detector=Detector(), tracking_ping_interval_ms=50)
     with serve_live(receiver, "127.0.0.1", 0) as server:
         thread = Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -300,11 +384,29 @@ def test_real_websocket_profile_ack_and_result():
                 command = json.loads(websocket.recv())
                 assert command["type"] == "profile.set" and command["mode"] == "eco"
                 websocket.send(json.dumps({**command, "type": "profile.ack", "applied_us": 500_000}))
+                if tracking:
+                    mode.request("tracking", mode.version, ready=True)
+                    command = json.loads(websocket.recv(timeout=2))
+                    assert command["type"] == "profile.set" and command["mode"] == "tracking"
+                    websocket.send(json.dumps({**command, "type": "profile.ack", "applied_us": 500_000}))
                 jpeg, stamp = image(), clock.value - 1_000_000
                 websocket.send(PROFILE_HEADER.pack(b"ECF2", 7, 1, stamp, stamp,
                                                    command["generation"], len(jpeg)) + jpeg)
                 assert done.wait(2)
                 assert len(results) == 1
+                if tracking:
+                    for sequence in range(2, 5):
+                        done.clear()
+                        clock.value += 60_000
+                        ping = json.loads(websocket.recv(timeout=2))
+                        assert ping["type"] == "clock.ping"
+                        stamp = clock.value - 1_000_000
+                        websocket.send(json.dumps({"type": "clock.pong", "id": ping["id"],
+                                                   "boot_id": 7, "device_us": stamp}))
+                        websocket.send(PROFILE_HEADER.pack(b"ECF2", 7, sequence, stamp, stamp,
+                                                           command["generation"], len(jpeg)) + jpeg)
+                        assert done.wait(2)
+                        assert len(results) == sequence
         finally:
             receiver.close()
             server.shutdown()
