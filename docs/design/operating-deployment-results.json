@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "recorded_date_jst": "2026-10-20",
+  "issue": 528,
+  "deployed_commit": "badfe24beba46086f6fca20742e4fdb45f7f47d7",
+  "deployment_run": "update-20261019T124314Z",
+  "camera_boot_id": "14507871396716366643",
+  "fixed_configuration": {
+    "model_sha256": "ff1013da8734fe2b8ede5f34a2124855d447fbefd248d148e9f29e7f8e28c9c4",
+    "model": "YOLO11n FP32 ONNX",
+    "input_size": 320,
+    "threshold": 0.5,
+    "threads": 3,
+    "frame_size": "QVGA",
+    "jpeg_quality": 12,
+    "eco_interval_ms": 5000,
+    "tracking_interval_ms": 190,
+    "motor_actuation_enabled": false
+  },
+  "evidence_private_directory": "~/.local/share/esp32cam-training/operating-deploy",
+  "evidence_sha256": {
+    "pi-code-update-badfe24-validation.json": "0af22f4a2ef625ada48ffb61b14e9f35a7ae979a86a5bbdcd1e9db36317c4347",
+    "eco-cpu-badfe24.json": "6c160c860e9324d76bc2a921884e132171baeb5babac3be3ede3e3409e052f5a",
+    "acceptance-v4-evidence.tar.gz": "d9423a01d8b4180220af8f1e14279c817c347c10e7f4fdf9aa788cb33bc3103e",
+    "acceptance-v5-evidence.tar.gz": "2d618e732807fa9d65dffa7783d7a7aab031ca813f7fe14b349ed85c3ac9c730",
+    "acceptance-v6.py": "8882a78cd4f86d121e825f798e7ae0562e4048b761cc7d6bada59a1de4b1a80e",
+    "control-v6.py": "decec89eff0169a372046f27d4c3e88792ab2c35f13368ad0744da2854944d9e",
+    "update.py": "6f1d62959f3236875fc6c99763274e1ca3c777d92042808dd64ba9fa2851641c",
+    "acceptance-v6-evidence.tar.gz": "63c913d41faad0084209fde6ccc0800ed6c4df294758a154d20e04f4d83bf9da",
+    "acceptance-v6-analysis.json": "20598280f509db0cffc836e9c02edce7bc77ce5aedeaa52fe17bf3d7d3bedc5f",
+    "audit-checkpoint-20261019T2247Z.tar.gz": "89eda6d15c27af80654cb789d39fdd8a91234040e87fa1998370555bb1ad7a84",
+    "audit-checkpoint-20261019T2247Z-summary.json": "ed3122b48e87751d013d3fbc80078cb2b9014413c638d8412dc6a9a2754e476a"
+  },
+  "eco_observation": {
+    "scope": "native_process_eco_observation",
+    "source": "badfe24beba46086f6fca20742e4fdb45f7f47d7",
+    "start": {
+      "native_pid": 584718,
+      "start_ticks": 79796309,
+      "cpu_ticks": 3856,
+      "ticks_per_second": 100,
+      "monotonic": 798050.668201807,
+      "frames": 71,
+      "fresh_success": 70,
+      "state": "active",
+      "mode": "eco",
+      "version": 906306801741
+    },
+    "end": {
+      "native_pid": 584718,
+      "start_ticks": 79796309,
+      "cpu_ticks": 4554,
+      "ticks_per_second": 100,
+      "monotonic": 798115.500801778,
+      "frames": 84,
+      "fresh_success": 83,
+      "state": "active",
+      "mode": "eco",
+      "version": 906306801741
+    },
+    "elapsed_seconds": 64.83259997109417,
+    "native_cpu_mean_percent": 10.766188619787046,
+    "frame_hz": 0.20051640695878453,
+    "fresh_result_hz": 0.20051640695878453,
+    "watts_measured": false,
+    "network_bytes_measured": false
+  },
+  "concurrent_load": {
+    "run": "acceptance-20261019T124556Z",
+    "status": "failed_before_measurement",
+    "integration_load_passed": false,
+    "reason": "frames_expired",
+    "full_503_reacceptance": false,
+    "synthetic_optional_writes": true,
+    "synthetic_saves": 4,
+    "synthetic_notifications": 4,
+    "inference_max_ms": 169.969,
+    "host_receive_gap_ms": 496.942,
+    "eco_after_verified": true,
+    "eco_after_hz": 0.20006345670587508,
+    "next_inference_completion_gap_ms": 515.621,
+    "next_inference_completion_status": "profile_changed_not_published"
+  },
+  "audit_24h": {
+    "status": "running_not_accepted",
+    "runs": [
+      "audit24h-20261019T000449Z",
+      "audit24h-20261019T052550Z"
+    ],
+    "single_release_24h": false,
+    "checkpoint_utc": "2026-10-19T22:47Z",
+    "partial_observations": {
+      "audit24h-20261019T000449Z": {
+        "rows": 1363,
+        "success_rows": 1362,
+        "error_rows": 1,
+        "elapsed_seconds": 81720.05374872091,
+        "state_counts": {
+          "active": 829,
+          "degraded": 530,
+          "pending": 3
+        },
+        "result_file_present": false
+      },
+      "audit24h-20261019T052550Z": {
+        "rows": 1042,
+        "success_rows": 1042,
+        "error_rows": 0,
+        "elapsed_seconds": 62460.10632877296,
+        "state_counts": {
+          "active": 658,
+          "degraded": 382,
+          "pending": 2
+        },
+        "result_file_present": false
+      }
+    }
+  },
+  "unaccepted": [
+    "10Hz_recognition",
+    "field_precision_recall",
+    "watts",
+    "temporal_misses",
+    "motor_actuation",
+    "24h_writes"
+  ],
+  "log_observation": {
+    "bytes": 1158537,
+    "budget_bytes": 31457280,
+    "summaries": 445,
+    "largest_summary_bytes": 1912,
+    "partial_observation_only": true
+  },
+  "blocking_comparison": {
+    "wifi_power_save_off_test": "not_performed",
+    "current_ssh_sudo": "password_required",
+    "root_cause": "not_established"
+  },
+  "latest_eco_checkpoint": {
+    "run": "checkpoint-20261019T224707Z",
+    "same_native_pid": 584718,
+    "before_state": "degraded",
+    "before_reason": "cadence_low",
+    "manual_resume": true,
+    "after_state": "active",
+    "after_hz": 0.19996442770791092,
+    "motor": "hold",
+    "acknowledged": true
+  },
+  "manual_staging_observation": {
+    "disk_usage_bytes": 293093376,
+    "observed_date_utc": "2026-10-19",
+    "scope": "manual release/test/backup directory; outside managed log budget"
+  }
+}
