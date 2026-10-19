@@ -9,6 +9,7 @@ import shutil
 import threading
 import time
 import uuid
+from dataclasses import replace
 from urllib.parse import urlsplit
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
@@ -322,6 +323,7 @@ def _serialize_device_log(log: DeviceLogRecord) -> dict[str, object]:
 
 
 def _serialize_camera_summary(summary: CameraSummary) -> dict[str, object]:
+    summary = _live_camera_summary(summary)
     return {
         "camera_id": summary.camera.camera_id,
         "display_name": summary.camera.display_name,
@@ -334,6 +336,20 @@ def _serialize_camera_summary(summary: CameraSummary) -> dict[str, object]:
             summary.latest_detection_at.isoformat() if summary.latest_detection_at else None
         ),
     }
+
+
+def _live_camera_summary(summary, *, display_period=False):
+    from script.operating_routes import enabled, status
+    if not enabled(summary.camera.camera_id):
+        return summary
+    native = status(summary.camera.camera_id)
+    age = native.get("last_result_age_seconds")
+    interval = .19 if native.get("effective_mode") == "tracking" else 5
+    healthy = native.get("connected") and age is not None and age <= (.5 if native.get("effective_mode") == "tracking" else 7)
+    camera = replace(summary.camera, expected_interval_seconds=interval if display_period else summary.camera.expected_interval_seconds,
+                     last_seen_at=datetime.now(timezone.utc) - timedelta(seconds=age)
+                     if age is not None else summary.camera.last_seen_at)
+    return replace(summary, camera=camera, status="healthy" if healthy else "unknown")
 
 
 _DESIRED_CONFIG_DEFAULT: dict[str, object] = {
@@ -542,6 +558,7 @@ def index():
     camera_summaries = store.list_camera_summaries(
         limit=limit, offset=offset, include_detections=False, include_latest_detection_at=False
     )
+    camera_summaries = [_live_camera_summary(item, display_period=True) for item in camera_summaries]
     one_hour_ago = datetime.now(tz=timezone.utc) - timedelta(hours=1)
     cameras_with_errors = store.camera_ids_with_recent_errors(since=one_hour_ago)
     return render_template(
@@ -989,6 +1006,7 @@ def list_cameras():
     camera_summaries = store.list_camera_summaries(
         limit=limit, offset=offset, include_latest_detection_at=False
     )
+    camera_summaries = [_live_camera_summary(item, display_period=True) for item in camera_summaries]
     return render_template(
         "cameras.html",
         camera_summaries=camera_summaries,
@@ -1031,7 +1049,7 @@ def _camera_connection_details(camera) -> dict[str, object]:
         age = native.get("last_result_age_seconds")
         interval = .19 if native.get("effective_mode") == "tracking" else 5
         result.update(operating=native, expected_interval_seconds=interval,
-                      status="healthy" if native.get("connected") and age is not None and age <= interval + .5 else "unknown",
+                      status="healthy" if native.get("connected") and age is not None and age <= (.5 if native.get("effective_mode") == "tracking" else 7) else "unknown",
                       seconds_since_contact=int(age) if age is not None else None,
                       last_seen_at=(now - timedelta(seconds=age)).isoformat() if age is not None else None,
                       websocket_frames_received=native.get("counters", {}).get("frames", 0),

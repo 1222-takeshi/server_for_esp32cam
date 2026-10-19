@@ -117,6 +117,7 @@
   // instead of duplicated here and in camera_detail.html -- see #358.
   const { RECONNECT_MS, STALE_AFTER_MS, OFFLINE_AFTER_MS, formatTimestamp, formatFrameSize } = window.CameraShared;
   const pill = document.getElementById('live-pill');
+  const OPERATING_CAMERA_ID = {{ config.OPERATING_CAMERA_ID | tojson if config.OPERATING_SOCKET else 'null' }};
   let ws = null, timer = null;
 
   function camId(raw) { return raw.replace(/[\s-]/g, '_'); }
@@ -144,7 +145,7 @@
     const badge = document.getElementById('cam-status-badge-' + cid);
     incrementOnlineCountIfNeeded(badge);
     if (!badge) return;
-    badge.classList.remove('stale', 'offline');
+    badge.classList.remove('stale', 'offline', 'unknown');
     badge.classList.add('healthy');
     badge.dataset.status = 'healthy';
     const label = document.getElementById('cam-status-text-' + cid);
@@ -163,7 +164,7 @@
     const badge = document.getElementById('cam-status-badge-' + cid);
     if (!badge || badge.dataset.status === status) return;
     if (status !== 'healthy') decrementOnlineCountIfNeeded(badge);
-    badge.classList.remove('healthy', 'stale', 'offline');
+    badge.classList.remove('healthy', 'stale', 'offline', 'unknown');
     badge.classList.add(status);
     badge.dataset.status = status;
     const label = document.getElementById('cam-status-text-' + cid);
@@ -198,6 +199,7 @@
         const seenAt = new Date(interval.dataset.lastSeen || '');
         if (Number.isNaN(seenAt.getTime())) return;
         const cid = interval.id.replace('cam-interval-', '');
+        if (OPERATING_CAMERA_ID && cid === camId(OPERATING_CAMERA_ID)) return;
         const ageMs = Date.now() - seenAt.getTime();
         if (ageMs >= OFFLINE_AFTER_MS) {
           setCameraStatus(cid, 'offline');
@@ -212,6 +214,7 @@
     let data;
     try { data = JSON.parse(event.data); } catch { return; }
     if (data.type !== 'snapshot.created') return;
+    if (OPERATING_CAMERA_ID === data.camera_id) return; // Native health is independent of saved/legacy events.
 
     const cid = camId(data.camera_id || '');
     const snap = data.snapshot || {};
@@ -232,6 +235,25 @@
     ws.addEventListener('error',   () => ws.close());
   }
 
+  async function pollOperatingHealth() {
+    if (!OPERATING_CAMERA_ID) return;
+    const cid = camId(OPERATING_CAMERA_ID);
+    if (!document.getElementById('cam-status-badge-' + cid)) return;
+    try {
+      const response = await fetch('/api/cameras/' + encodeURIComponent(OPERATING_CAMERA_ID) + '/operating',
+        {cache: 'no-store', signal: AbortSignal.timeout(2500)});
+      const data = await response.json();
+      const age = data.last_result_age_seconds;
+      const limit = data.effective_mode === 'tracking' ? .5 : 7;
+      if (response.ok && data.connected && age != null && age <= limit) markCameraHealthy(cid);
+      else setCameraStatus(cid, 'unknown');
+      const interval = document.getElementById('cam-interval-' + cid);
+      if (interval) interval.textContent = age == null ? '認識結果を未確認' : `認識結果 ${age.toFixed(1)}秒前`;
+    } catch (_) { setCameraStatus(cid, 'unknown'); }
+    finally { setTimeout(pollOperatingHealth, document.hidden ? 10000 : 2000); }
+  }
+
+  pollOperatingHealth();
   connect();
   scheduleHealthChecks();
 })();
