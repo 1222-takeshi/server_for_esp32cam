@@ -1,7 +1,7 @@
 # 容量と負荷を制限する運転モード
 
 - Source: 2026-10-18の利用者提案「容量が少ないのでログを抑え、モータトラッキングと省エネを分ける」。設計Issue [#504](https://github.com/1222-takeshi/server_for_esp32cam/issues/504)、常用統合 [#486](https://github.com/1222-takeshi/server_for_esp32cam/issues/486)、既存ログ最適化 [#417](https://github.com/1222-takeshi/server_for_esp32cam/issues/417)。
-- Status: **モード切替・保存頻度・DB物理容量制御は設計案**。サービス出力の上限制御と端末ログのage/全体row上限は実装済み（[有効化手順](../deployment.md)）。実装・実機受入は項目ごとに管理し、モード切替の完了とは扱わない。
+- Status: **native backend・管理UI/API・共通firmwareと容量制御は実装し、2026-10-19にPiへ反映済み**。[実機反映と測定状況](operating-deployment-results.md)、[運用手順](../operating-service.md)を参照。以下の設計時の根拠と候補は履歴として保持し、24h書込み・現場精度・実W数の受入とは分ける。
 
 ## CAPABILITY
 
@@ -9,7 +9,7 @@
 
 ## CONSTRAINTS
 
-### 現状の根拠
+### 設計時の根拠（2026-10-18の履歴）
 
 | 対象 | 現状と不足 |
 |---|---|
@@ -44,7 +44,7 @@
 
 ### ログ・保存・資源の初期候補
 
-以下は実装前に固定して負荷試験する**候補値**。現Piへ適用済みの値ではない。
+以下は設計時の**候補値の履歴**。現在の実装・有効値は[反映記録](operating-deployment-results.md)を参照。
 
 | 領域 | 制限と振る舞い |
 |---|---|
@@ -93,4 +93,4 @@ RAM上の鮮度・異常判定はフレームごとに行う。60秒のログ集
 
 ## HANDOFF
 
-実装前のarchitecture reviewが必要。まず[#505](https://github.com/1222-takeshi/server_for_esp32cam/issues/505)で既存[#417](https://github.com/1222-takeshi/server_for_esp32cam/issues/417)と連携して有界ログ/保存/DB・待ち行列を実装し、次に[#506](https://github.com/1222-takeshi/server_for_esp32cam/issues/506)で共通firmwareと管理画面/APIのACK付き手動profileを独立worktreeで実装する。現場精度・同時負荷・実W数を評価した後に対象検出による自動切替、角度simulation、実motorの順で別受入する。各PRでmeaningful tests、関連GitHub Actions/local act、静的解析、2名以上のread-only reviewを行う。ロードマップ上の実装・実測完了はこの設計mergeとは分ける。
+有界ログ/保存/DB・待ち行列とACK付き手動profileは実装・Pi反映済み。[#505](https://github.com/1222-takeshi/server_for_esp32cam/issues/505)と[#506](https://github.com/1222-takeshi/server_for_esp32cam/issues/506)で、同時負荷・24h書込み・ecoのCPU/通信/実W数・時間方向の見逃しの残る受入を継続する。現場精度・同時負荷・実W数を評価した後に対象検出による自動切替、角度simulation、実motorの順で別受入する。各PRでmeaningful tests、関連GitHub Actions/local act、静的解析、2名以上のread-only reviewを行う。ロードマップ上の実装・実測完了はこの設計mergeとは分ける。
