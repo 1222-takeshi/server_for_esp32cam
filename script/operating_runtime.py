@@ -72,6 +72,7 @@ class OperatingRuntime:
         self.receiver = create_receiver(camera_id=camera_id, device_api_key=device_key,
                     detector=detector, event_sink=self._event, result_sink=self._result,
                     profile=self.mode, continuous=True, health_check=self._protect,
+                    inference_reserve_ms=165,
                     clock_us=lambda: int(clock() * 1_000_000))
 
     def _event(self, event):
@@ -186,7 +187,9 @@ class OperatingRuntime:
                     self._protect()
                 last_cpu, last_time = cpu, now
                 if now >= next_log:
-                    logger.info("operating_summary %s", json.dumps(self.status(), separators=(",", ":")))
+                    summary = self.status()
+                    summary.pop("age_histogram_ms")  # Full histogram remains in bounded RAM/API.
+                    logger.info("operating_summary %s", json.dumps(summary, separators=(",", ":")))
                     next_log = now + 60
         self.monitor = Thread(target=monitor, daemon=True)
         self.monitor.start()

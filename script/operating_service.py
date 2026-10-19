@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import logging
 import os
 import signal
 import subprocess
@@ -48,6 +49,7 @@ def _worker():
     from script.operating_runtime import MODEL_SHA256, OperatingRuntime
     from script.validation import is_valid_camera_id
 
+    _configure_native_logging()
     camera = os.getenv("ESP32CAM_OPERATING_CAMERA_ID", "esp32cam-01")
     path = os.getenv("ESP32CAM_OPERATING_SOCKET", "")
     model_path = Path(os.environ["ESP32CAM_OPERATING_MODEL_PATH"])
@@ -113,6 +115,19 @@ def _retention_limit(value, limit):
     if type(value) is not int or value < 0:
         raise ValueError("Retention settings must be nonnegative integers")
     return min(value or limit, limit)
+
+
+def _configure_native_logging():
+    # A native worker has no Gunicorn log setup. Keep other modules at their
+    # existing levels; only this bounded minute-summary logger needs INFO.
+    logger = logging.getLogger("script.operating_runtime")
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    if not any(getattr(handler, "_operating_native", False) for handler in logger.handlers):
+        handler = logging.StreamHandler()
+        handler._operating_native = True
+        handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+        logger.addHandler(handler)
 
 
 def main():

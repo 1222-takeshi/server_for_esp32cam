@@ -70,3 +70,14 @@ GET `/api/cameras/<id>/operating` は要求/実効/ACK/資源、GET `.../frame` 
 PUT `.../operating` は `mode,expected_version`、POST `.../resume` は `expected_version` をJSONで渡します。
 診断はPOST `.../diagnostic` に `duration_seconds`、停止はDELETEに空のJSON objectを渡します。
 変更APIはBearer管理者認証必須・body最大1KiB。未対応camera404・世代競合409・未設定token/worker不通503です。
+
+trackingのactive判定は最初の新しい認識結果を含む `[開始, 開始+10秒)` の観測を待ち、
+連続する完了済み10秒区間ごとに50件以上の新規結果があることを確認します。
+観測完了後のHzも直前の完了区間の計数です。短い3秒区間の揺れだけで
+保護へ移ることを避け、採用済みの10秒基準に合わせています。50件未満なら保護eco/holdです。
+結果間隔500ms超過の即時保護、世代照合、モデル/画質/thresholdは変更しません。
+Pi native workerでは推論前に165msの処理余裕を予約し、現在の画像年齢上限との合計が500msを
+超える画像は推論せず、次の新しい画像へ進みます。実測861件の推論P95 161.56msを切り上げた
+ヒューリスティックであり、実測最大220.986msを含む遅い推論では期限切れが残り得ます。
+完了時の500ms検査も維持し、実機負荷試験で再発・Hz・最大gapを検証します。モデルの計算や出力は変えません。
+旧実験receiverの既定予約は0msです。`insufficient_inference_time` をdropへ計上します。

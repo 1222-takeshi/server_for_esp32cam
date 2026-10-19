@@ -120,7 +120,7 @@ class CaptureReceiver:
     def __init__(self, *, camera_id, device_api_key, detector=None, event_sink=None,
                  clock_us=None, max_age_ms=500, max_duration_s=3600,
                  max_frames=100_000, max_messages=200_000, profile=None,
-                 result_sink=None, continuous=False, health_check=None):
+                 result_sink=None, continuous=False, health_check=None, inference_reserve_ms=0):
         key = device_api_key.encode("utf-8") if isinstance(device_api_key, str) else device_api_key
         if not isinstance(key, bytes) or not key:
             raise ValueError("A nonempty device API key is required")
@@ -131,6 +131,8 @@ class CaptureReceiver:
             raise ValueError("Invalid receiver limit")
         if type(continuous) is not bool or continuous and profile is None:
             raise ValueError("Continuous capture requires an acknowledged profile")
+        if type(inference_reserve_ms) is not int or not 0 <= inference_reserve_ms < max_age_ms:
+            raise ValueError("Inference reserve must be within the freshness limit")
         self.camera_id = camera_id
         self._key = key
         self.detector = detector
@@ -139,6 +141,7 @@ class CaptureReceiver:
         self.health_check = health_check
         self.clock_us = clock_us or (lambda: time.monotonic_ns() // 1000)
         self.max_age_us = max_age_ms * 1000
+        self.inference_reserve_us = inference_reserve_ms * 1000
         self.max_duration_us = max_duration_s * 1_000_000
         self.max_frames = max_frames
         self.max_messages = max_messages
@@ -289,6 +292,11 @@ class CaptureReceiver:
                         if age_high_now(metadata, started) > self.max_age_us:
                             running = None
                             emit_counted("dropped", status="dropped", reason="expired_queue",
+                                         queue_checked_us=started, **metadata)
+                            continue
+                        if age_high_now(metadata, started) + self.inference_reserve_us > self.max_age_us:
+                            running = None
+                            emit_counted("dropped", status="dropped", reason="insufficient_inference_time",
                                          queue_checked_us=started, **metadata)
                             continue
                     try:
@@ -501,14 +509,14 @@ class CaptureReceiver:
 def create_receiver(*, camera_id="esp32cam-01", device_api_key, detector=None,
                     event_sink=None, clock_us=None, max_age_ms=500,
                     max_duration_s=3600, max_frames=100_000, max_messages=200_000,
-                    profile=None, result_sink=None, continuous=False, health_check=None):
+                    profile=None, result_sink=None, continuous=False, health_check=None, inference_reserve_ms=0):
     """Build an isolated receiver; caller supplies a private key."""
     return CaptureReceiver(camera_id=camera_id, device_api_key=device_api_key,
                            detector=detector, event_sink=event_sink, clock_us=clock_us,
                            max_age_ms=max_age_ms, max_duration_s=max_duration_s,
                            max_frames=max_frames, max_messages=max_messages,
                            profile=profile, result_sink=result_sink, continuous=continuous,
-                           health_check=health_check)
+                           health_check=health_check, inference_reserve_ms=inference_reserve_ms)
 
 
 class _SocketAdapter:

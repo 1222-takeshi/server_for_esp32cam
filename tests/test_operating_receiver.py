@@ -243,7 +243,7 @@ def test_close_holds_synchronously_while_handler_receive_is_stalled():
         assert entered.wait(2)
         mode.request("tracking", mode.version, ready=True)
         assert mode.acknowledge(7, mode.version, "tracking", 100)
-        for sequence in range(1, 26):
+        for sequence in range(1, 106):
             clock.value += 100_000
             candidate = CameraFrame(7, sequence, 100 + sequence, 100 + sequence, b"x", mode.version)
             assert mode.publish_result(candidate, lambda: None)
