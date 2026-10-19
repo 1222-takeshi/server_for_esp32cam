@@ -32,6 +32,9 @@ class OperatingMode:
         self.reason = "disconnected"
         self.ack = None
         self.ack_at = None
+        self.cadence_at = None
+        self.cadence_count = 0
+        self.cadence_rate = None
         self.requested_at = self.clock()
         self.last_command = -float("inf")
         self.frames = deque(maxlen=128)
@@ -53,6 +56,9 @@ class OperatingMode:
         self.reason = reason
         self.ack = None
         self.ack_at = None
+        self.cadence_at = None
+        self.cadence_count = 0
+        self.cadence_rate = None
         self.frames.clear()
         self.requested_at = self.clock()
         self.last_command = -float("inf")
@@ -144,19 +150,24 @@ class OperatingMode:
                 self.protect("publication_failed")
                 raise
             self.frames.append((now, frame.captured_us, frame.sequence))
+            if self.cadence_at is None:
+                self.cadence_at = now
+            if self.requested == "tracking":
+                self.cadence_count += 1
             self._trim(now)
             self._reconcile()
             return True
 
     def _trim(self, now):
-        window = 3 if self.requested == "tracking" else 18
-        while self.frames and now - self.frames[0][0] > window:
+        window = 10 if self.requested == "tracking" else 18
+        while self.frames and now - self.frames[0][0] >= window:
             self.frames.popleft()
 
     def _cadence(self):
         if self.requested == "tracking":
-            span = self.frames[-1][0] - self.frames[0][0] if len(self.frames) >= 2 else 0
-            return span >= 2 and (len(self.frames) - 1) / span >= 5
+            # Completed consecutive [start, start+10) windows, including their
+            # first result, avoid a false 49-count just before the next result.
+            return self.cadence_rate is not None and self.cadence_rate >= 5
         recent = list(self.frames)[-3:]
         return len(recent) == 3 and all(4 <= b[0] - a[0] <= 6
                                       for a, b in zip(recent, recent[1:], strict=False))
@@ -183,9 +194,18 @@ class OperatingMode:
                 expired = now - self.ack_at > (1 if self.requested == "tracking" else 7)
             if expired:
                 self.protect("frames_expired")
-            elif not self._cadence() and now - self.ack_at > (5 if self.requested == "tracking" else 20):
-                self.protect("cadence_low")
             else:
+                if self.requested == "tracking":
+                    if self.cadence_at is not None and now - self.cadence_at >= 10:
+                        if now - self.cadence_at >= 20 or self.cadence_count < 50:
+                            self.protect("cadence_low")
+                            return
+                        self.cadence_rate = self.cadence_count / 10
+                        self.cadence_at += 10
+                        self.cadence_count = 0
+                elif now - self.ack_at > 20 and not self._cadence():
+                    self.protect("cadence_low")
+                    return
                 self._reconcile()
 
     def command(self):
@@ -203,6 +223,9 @@ class OperatingMode:
             self.tick()
             now = self.clock()
             span = self.frames[-1][0] - self.frames[0][0] if len(self.frames) >= 2 else 0
+            rate = (len(self.frames) - 1) / span if span else 0
+            if self.requested == "tracking" and self.cadence_rate is not None:
+                rate = self.cadence_rate
             return {"schema": 2, "version": self.version, "boot_id": self.boot,
                     "requested_mode": self.requested,
                     "effective_mode": self.requested if self.ack is not None and self.frames else None,
@@ -210,6 +233,6 @@ class OperatingMode:
                     "actuation_state": "observe_only" if self.state == "active" and self.requested == "tracking" else "hold",
                     "acknowledged": self.ack is not None,
                     "last_result_age_seconds": now - self.frames[-1][0] if self.frames else None,
-                    "recognition_hz": (len(self.frames) - 1) / span if span else 0,
+                    "recognition_hz": rate,
                     "cadence_samples": len(self.frames), "transitions": self.transitions,
                     "rejected_ack": self.rejected_ack, "rejected_result": self.rejected_result}

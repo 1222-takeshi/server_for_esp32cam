@@ -314,3 +314,18 @@ def test_retention_failure_latches_until_success_then_requires_stable_recovery(r
     result = rt.dispatch({"camera_id": "cam", "op": "resume", "expected_version": rt.mode.version})
     assert result["retention_ok"] is True and not result["resources"]["paused"]
     assert result["requested_mode"] == "eco" and result["actuation_state"] == "hold"
+
+
+def test_native_minute_logger_is_visible_once_without_enabling_other_info_logs():
+    source = """import logging
+from script.operating_service import _configure_native_logging
+logging.basicConfig(level=logging.WARNING)
+_configure_native_logging()
+_configure_native_logging()
+logging.getLogger('script.operating_runtime').info('operating_summary test')
+logging.getLogger('script.capture_receiver').info('unrelated per-frame message')
+"""
+    result = subprocess.run([sys.executable, "-c", source], capture_output=True, text=True, timeout=3)
+    assert result.returncode == 0
+    assert result.stderr.count("operating_summary test") == 1
+    assert "per-frame" not in result.stderr and not result.stdout

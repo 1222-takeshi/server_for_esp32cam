@@ -377,6 +377,82 @@ def test_result_expiring_during_inference_is_not_fresh_success():
         "counters"]["inferred"] == 1
 
 
+def test_nearly_expired_frame_does_not_delay_newer_fresh_inference():
+    clock, skipped = Clock(), Event()
+    events, calls = [], []
+
+    def observe(event):
+        events.append(event)
+        if event.get("reason") == "insufficient_inference_time":
+            skipped.set()
+
+    class Detector:
+        def detect(self, image):
+            calls.append(image)
+            clock.value += 150_000
+            return []
+
+    class BurstSocket(Socket):
+        def receive(self, timeout=None):
+            if self.messages and self.messages[0] == "OLD":
+                self.messages.pop(0)
+                clock.value += 480_000  # Delayed TCP frame, still below the 500ms ingress limit.
+                return frame()
+            if self.messages and self.messages[0] == "NEW":
+                self.messages.pop(0)
+                assert skipped.wait(2)
+                return frame(2, captured=1_480_100, sent=1_480_110)
+            return super().receive(timeout)
+
+    app = create_receiver(device_api_key="private", clock_us=clock, detector=Detector(),
+                          event_sink=observe, inference_reserve_ms=165)
+    app.handle(BurstSocket(["PONG", "OLD", "NEW"], idle_wait=.05), "esp32cam-01", "private")
+    assert len(calls) == 1
+    assert [event["sequence"] for event in events if event["status"] == "success"] == [2]
+    rejected = next(event for event in events if event.get("reason") == "insufficient_inference_time")
+    assert rejected["sequence"] == 1 and rejected["counters"]["inferred"] == 0
+
+
+@pytest.mark.parametrize("value", [-1, True, 500, 1.5])
+def test_invalid_inference_reserve_is_rejected(value):
+    with pytest.raises(ValueError):
+        create_receiver(device_api_key="private", inference_reserve_ms=value)
+
+
+@pytest.mark.parametrize("age_us,accepted", [(335_000, True), (335_001, False)])
+@pytest.mark.parametrize("duration_us", [150_000, 221_000])
+def test_inference_reserve_exact_deadline_boundary(age_us, accepted, duration_us):
+    class FixedClock:
+        value = 2_000_000
+
+        def __call__(self):
+            return self.value
+
+    clock, calls, events = FixedClock(), [], []
+
+    class Detector:
+        def detect(self, image):
+            calls.append(image)
+            clock.value += duration_us
+            return []
+
+    class DelayedSocket(Socket):
+        def receive(self, timeout=None):
+            if self.messages and self.messages[0] == "IMAGE":
+                self.messages.pop(0)
+                clock.value += age_us
+                return frame(captured=1_000_000, sent=1_000_000)
+            return super().receive(timeout)
+
+    app = create_receiver(device_api_key="private", clock_us=clock, detector=Detector(),
+                          event_sink=events.append, inference_reserve_ms=165)
+    app.handle(DelayedSocket(["PONG", "IMAGE"], idle_wait=.05), "esp32cam-01", "private")
+    assert bool(calls) is accepted
+    assert any(event["status"] == "success" for event in events) is (accepted and duration_us == 150_000)
+    if accepted and duration_us == 221_000:
+        assert any(event.get("reason") == "expired_result" for event in events)
+
+
 def test_waiting_frame_expiring_before_inference_is_dropped():
     clock = Clock()
     started = Event()
