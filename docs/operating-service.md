@@ -81,3 +81,11 @@ Pi native workerでは推論前に165msの処理余裕を予約し、現在の�
 ヒューリスティックであり、実測最大220.986msを含む遅い推論では期限切れが残り得ます。
 完了時の500ms検査も維持し、実機負荷試験で再発・Hz・最大gapを検証します。モデルの計算や出力は変えません。
 旧実験receiverの既定予約は0msです。`insufficient_inference_time` をdropへ計上します。
+
+Pi native workerのtracking要求中は、既存の認証済みclock pingを50ms目標（最大20Hz）で送ります。
+JPEGが来ない間も次のping期限までに受信待ちを終え、ecoへ戻ると従来の2秒周期へ戻します。
+未応答nonceは1個のみで、1秒の応答timeoutを維持します。旧receiverの既定値は2秒です。
+Pi側Wi-Fi省電力ONと受信の途切れを実測したための通信頻度対策であり、OS設定は変更しません。
+[Wi-Fi省電力はAPによる遅延送出を伴い得ます](https://wireless.docs.kernel.org/en/latest/en/developers/documentation/ieee80211/power-savings.html)が、
+このPiの途切れの原因や対策効果を確定するものではありません。追加の小さなping/pong通信はtracking限定で、
+実機のHz・遅延・CPUを再測定します。認識回数へpingや補間を加算せず、常用ログは60秒集計のままです。

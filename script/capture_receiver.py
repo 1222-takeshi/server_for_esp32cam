@@ -120,7 +120,8 @@ class CaptureReceiver:
     def __init__(self, *, camera_id, device_api_key, detector=None, event_sink=None,
                  clock_us=None, max_age_ms=500, max_duration_s=3600,
                  max_frames=100_000, max_messages=200_000, profile=None,
-                 result_sink=None, continuous=False, health_check=None, inference_reserve_ms=0):
+                 result_sink=None, continuous=False, health_check=None, inference_reserve_ms=0,
+                 tracking_ping_interval_ms=2000):
         key = device_api_key.encode("utf-8") if isinstance(device_api_key, str) else device_api_key
         if not isinstance(key, bytes) or not key:
             raise ValueError("A nonempty device API key is required")
@@ -133,6 +134,8 @@ class CaptureReceiver:
             raise ValueError("Continuous capture requires an acknowledged profile")
         if type(inference_reserve_ms) is not int or not 0 <= inference_reserve_ms < max_age_ms:
             raise ValueError("Inference reserve must be within the freshness limit")
+        if type(tracking_ping_interval_ms) is not int or not 50 <= tracking_ping_interval_ms <= 2000:
+            raise ValueError("Tracking ping interval must be 50..2000ms")
         self.camera_id = camera_id
         self._key = key
         self.detector = detector
@@ -142,6 +145,7 @@ class CaptureReceiver:
         self.clock_us = clock_us or (lambda: time.monotonic_ns() // 1000)
         self.max_age_us = max_age_ms * 1000
         self.inference_reserve_us = inference_reserve_ms * 1000
+        self.tracking_ping_interval_us = tracking_ping_interval_ms * 1000
         self.max_duration_us = max_duration_s * 1_000_000
         self.max_frames = max_frames
         self.max_messages = max_messages
@@ -352,6 +356,7 @@ class CaptureReceiver:
             worker.start()
         begun = self.clock_us()
         next_ping = begun
+        last_ping = None
         pending = None
         sample = None
         boot = None
@@ -360,7 +365,7 @@ class CaptureReceiver:
         def ping(now):
             nonce = secrets.token_hex(8)
             websocket.send(json.dumps({"type": "clock.ping", "id": nonce}))
-            return (nonce, now), now + 2_000_000
+            return nonce, now
 
         try:
             while True:
@@ -385,10 +390,21 @@ class CaptureReceiver:
                 if pending is not None and now - pending[1] > 1_000_000:
                     self._emit(status="closed", reason="clock_timeout")
                     break
+                interval = 2_000_000
+                if self.profile is not None:
+                    with self.profile.lock:
+                        if self.profile.requested == "tracking":
+                            interval = self.tracking_ping_interval_us
+                if last_ping is not None:
+                    next_ping = last_ping + interval
                 if now >= next_ping and pending is None:
-                    pending, next_ping = ping(now)
+                    pending = ping(now)
+                    last_ping, next_ping = now, now + interval
+                # Wake by the next control deadline even without incoming JPEGs.
+                deadline = next_ping if pending is None else pending[1] + 1_000_000
+                timeout = min(.1, max(.001, (deadline - self.clock_us()) / 1_000_000))
                 try:
-                    raw = websocket.receive(timeout=0.1)
+                    raw = websocket.receive(timeout=timeout)
                 except TimeoutError:
                     continue
                 except (ConnectionClosed, OSError):
@@ -509,14 +525,16 @@ class CaptureReceiver:
 def create_receiver(*, camera_id="esp32cam-01", device_api_key, detector=None,
                     event_sink=None, clock_us=None, max_age_ms=500,
                     max_duration_s=3600, max_frames=100_000, max_messages=200_000,
-                    profile=None, result_sink=None, continuous=False, health_check=None, inference_reserve_ms=0):
+                    profile=None, result_sink=None, continuous=False, health_check=None, inference_reserve_ms=0,
+                    tracking_ping_interval_ms=2000):
     """Build an isolated receiver; caller supplies a private key."""
     return CaptureReceiver(camera_id=camera_id, device_api_key=device_api_key,
                            detector=detector, event_sink=event_sink, clock_us=clock_us,
                            max_age_ms=max_age_ms, max_duration_s=max_duration_s,
                            max_frames=max_frames, max_messages=max_messages,
                            profile=profile, result_sink=result_sink, continuous=continuous,
-                           health_check=health_check, inference_reserve_ms=inference_reserve_ms)
+                           health_check=health_check, inference_reserve_ms=inference_reserve_ms,
+                           tracking_ping_interval_ms=tracking_ping_interval_ms)
 
 
 class _SocketAdapter:

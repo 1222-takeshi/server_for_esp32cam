@@ -73,6 +73,7 @@ class OperatingRuntime:
                     detector=detector, event_sink=self._event, result_sink=self._result,
                     profile=self.mode, continuous=True, health_check=self._protect,
                     inference_reserve_ms=165,
+                    tracking_ping_interval_ms=50,
                     clock_us=lambda: int(clock() * 1_000_000))
 
     def _event(self, event):
