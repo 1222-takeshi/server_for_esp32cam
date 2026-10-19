@@ -19,7 +19,8 @@ from websockets.sync.server import serve
 
 from script.detector import Detection
 from script.frame_protocol import (
-    ClockSample, FrameOrder, HEADER, MAX_GENERATION, MAX_JPEG_BYTES, PROFILE_HEADER, decode_frame,
+    ClockSample, ClockWindow, FrameOrder, HEADER, MAX_GENERATION, MAX_JPEG_BYTES, PROFILE_HEADER,
+    decode_frame,
 )
 
 
@@ -359,6 +360,7 @@ class CaptureReceiver:
         last_ping = None
         pending = None
         sample = None
+        clock_window = ClockWindow()
         boot = None
         messages = 0
 
@@ -434,6 +436,7 @@ class CaptureReceiver:
                             sample = ClockSample.from_exchange(item["boot_id"],
                                                                item["device_us"],
                                                                pending[1], received)
+                            clock_window.add(sample)
                             boot = item["boot_id"]
                             pending = None
                             self._emit(status="clock", boot_id=boot,
@@ -486,7 +489,7 @@ class CaptureReceiver:
                 elif reason is None and sample is None:
                     reason = "clock_unknown"
                 elif reason is None:
-                    age = sample.age_bounds_us(frame, received)
+                    age = clock_window.age_bounds_us(frame, received)
                     if age is None:
                         reason = "clock_expired"
                     elif age[1] > self.max_age_us:

@@ -276,6 +276,43 @@ def test_expired_clock_sample_drops_frame_even_if_capture_is_recent():
     assert any(event.get("reason") == "clock_expired" for event in events)
 
 
+def test_delayed_pong_does_not_discard_valid_tighter_clock_evidence():
+    class FixedClock:
+        value = 2_000_000
+
+        def __call__(self):
+            return self.value
+
+    clock, events = FixedClock(), []
+
+    class DelayedExchange(Socket):
+        def receive(self, timeout=None):
+            step = self.messages.pop(0) if self.messages else None
+            if step == "TIGHT":
+                clock.value += 100
+                device = clock.value - 1_000_000
+            elif step == "NEXT":
+                clock.value = 4_000_000
+                raise TimeoutError
+            elif step == "DELAYED":
+                clock.value += 400_000
+                device = clock.value - 1_000_000
+            elif step == "IMAGE":
+                clock.value += 40_000
+                return frame(captured=3_400_000, sent=3_420_000)
+            else:
+                return None
+            return json.dumps({"type": "clock.pong", "id": self.sent[-1]["id"],
+                               "boot_id": 7, "device_us": device})
+
+    app = create_receiver(device_api_key="private", clock_us=clock, event_sink=events.append)
+    app.handle(DelayedExchange(["TIGHT", "NEXT", "DELAYED", "IMAGE"]), "esp32cam-01", "private")
+    accepted = next(event for event in events if event["status"] == "accepted")
+    assert accepted["age_low_us"] <= 40_000 <= accepted["age_high_us"] < 41_000
+    clocks = [event for event in events if event["status"] == "clock"]
+    assert len(clocks) == 2 and clocks[-1]["round_trip_us"] == 400_000
+
+
 def test_oversized_envelope_closes_and_does_not_reach_sink_as_image():
     socket, events = receiver(["PONG", b"x" * (40 + 128 * 1024 + 1)])
     assert socket.closed

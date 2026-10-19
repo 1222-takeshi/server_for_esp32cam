@@ -138,3 +138,35 @@ class ClockSample:
         if high < 0:
             return None
         return max(0, low), high
+
+
+class ClockWindow:
+    """Intersect up to eight independently drift-bounded clock observations.
+
+    A delayed exchange cannot discard still-valid tighter evidence. Each sample
+    keeps its original expiry; new exchanges never renew an older sample.
+    Empty intersections and definitely future captures fail closed.
+    """
+
+    def __init__(self) -> None:
+        self.samples: deque[ClockSample] = deque(maxlen=8)
+
+    def add(self, sample: ClockSample) -> None:
+        if self.samples and sample.received_us < self.samples[-1].received_us:
+            raise ValueError("Out-of-order clock exchange")
+        if self.samples and sample.boot_id != self.samples[-1].boot_id:
+            self.samples.clear()
+        self.samples.append(sample)
+
+    def age_bounds_us(self, frame: CameraFrame, received_us: int) -> tuple[int, int] | None:
+        low, high = 0, None
+        for sample in self.samples:
+            if (sample.boot_id != frame.boot_id or sample.received_us > received_us
+                    or received_us - sample.received_us > 10_000_000):
+                continue
+            bounds = sample.age_bounds_us(frame, received_us)
+            if bounds is None:
+                return None
+            low = max(low, bounds[0])
+            high = bounds[1] if high is None else min(high, bounds[1])
+        return (low, high) if high is not None and low <= high else None

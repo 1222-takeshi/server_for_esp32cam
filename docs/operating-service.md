@@ -89,3 +89,10 @@ Pi側Wi-Fi省電力ONと受信の途切れを実測したための通信頻度�
 [Wi-Fi省電力はAPによる遅延送出を伴い得ます](https://wireless.docs.kernel.org/en/latest/en/developers/documentation/ieee80211/power-savings.html)が、
 このPiの途切れの原因や対策効果を確定するものではありません。追加の小さなping/pong通信はtracking限定で、
 実機のHz・遅延・CPUを再測定します。認識回数へpingや補間を加算せず、常用ログは60秒集計のままです。
+
+時計同期は同じ接続・bootの直近最大8 exchangeから、各frame受信時に有効な年齢区間の
+共通部分を使います。各exchangeの元の受信時刻から10秒で失効し、capture時刻の前後両方向の
+200ppm drift余裕を個別に含めます。新しい遅延pongだけで、まだ有効な狭い区間を捨てません。
+区間の矛盾・明らかな未来時刻・有効sampleなしでは推論へ渡さず、boot変更/再接続では過去を引き継ぎません。
+これは既存の時計rate誤差仮定の下での境界改善で、200ppmが実機の保証値になるものではありません。
+500ms freshnessと165ms処理予約は同じです。実機同時負荷の合格は別途測定します。

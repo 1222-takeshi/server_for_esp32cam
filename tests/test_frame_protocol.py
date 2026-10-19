@@ -4,7 +4,7 @@ import struct
 
 import pytest
 
-from script.frame_protocol import ClockSample, FrameOrder, decode_frame
+from script.frame_protocol import ClockSample, ClockWindow, FrameOrder, decode_frame
 
 
 def packet(*, boot=11, seq=1, captured=1000, sent=1100, jpeg=b"jpeg"):
@@ -92,3 +92,83 @@ def test_retired_boot_history_retains_only_the_latest_32():
 def test_bad_clock_exchanges_fail(args):
     with pytest.raises(ValueError):
         ClockSample.from_exchange(*args)
+
+
+def test_clock_window_retains_tight_evidence_after_a_delayed_exchange():
+    window = ClockWindow()
+    tight = ClockSample.from_exchange(11, 1_000_000, 1_009_900, 1_010_100)
+    delayed = ClockSample.from_exchange(11, 1_500_000, 1_110_000, 1_510_000)
+    window.add(tight)
+    window.add(delayed)
+    frame = decode_frame(packet(captured=1_600_000, sent=1_625_000))
+    low, high = window.age_bounds_us(frame, 1_660_000)
+    assert low <= 50_000 <= high < 51_000
+    assert delayed.age_bounds_us(frame, 1_660_000)[1] > 400_000
+    assert low >= tight.age_bounds_us(frame, 1_660_000)[0]
+    assert high <= tight.age_bounds_us(frame, 1_660_000)[1]
+
+
+def test_clock_window_expires_each_sample_without_renewing_old_evidence():
+    window = ClockWindow()
+    old = ClockSample.from_exchange(11, 1_000_000, 1_009_900, 1_010_100)
+    recent = ClockSample.from_exchange(11, 11_000_000, 10_610_000, 11_010_000)
+    window.add(old)
+    window.add(recent)
+    frame = decode_frame(packet(captured=11_050_000, sent=11_060_000))
+    assert window.age_bounds_us(frame, 11_100_000) == recent.age_bounds_us(frame, 11_100_000)
+    assert window.age_bounds_us(frame, 22_000_000) is None
+
+
+def test_clock_window_rejects_contradictions_and_definitely_future_frames():
+    window = ClockWindow()
+    assert window.age_bounds_us(decode_frame(packet()), 20_000) is None
+    window.add(ClockSample.from_exchange(11, 1000, 10_900, 11_100))
+    window.add(ClockSample.from_exchange(11, 2000, 21_900, 22_100))
+    assert window.age_bounds_us(decode_frame(packet(captured=2100, sent=2200)), 23_000) is None
+    future = ClockWindow()
+    future.add(ClockSample.from_exchange(11, 1000, 10_900, 11_100))
+    assert future.age_bounds_us(decode_frame(packet(captured=2000, sent=2100)), 11_400) is None
+
+
+def test_clock_window_is_bounded_and_resets_on_boot_change():
+    window = ClockWindow()
+    for device in range(1000, 1010):
+        window.add(ClockSample.from_exchange(11, device, device+9900, device+10_100))
+    assert len(window.samples) == 8 and window.samples[0].device_us == 1002
+    window.add(ClockSample.from_exchange(12, 1000, 11_900, 12_100))
+    assert len(window.samples) == 1
+    assert window.age_bounds_us(decode_frame(packet(captured=1200, sent=1250)), 11_400) is None
+    new_frame = decode_frame(packet(boot=12, captured=1200, sent=1250))
+    assert window.age_bounds_us(new_frame, 12_400) == window.samples[0].age_bounds_us(new_frame, 12_400)
+
+
+def test_clock_window_intersection_includes_drift_before_and_after_exchange():
+    window = ClockWindow()
+    window.add(ClockSample.from_exchange(11, 10_001_000, 20_000_000, 20_000_200))
+    before = decode_frame(packet(captured=1000, sent=1100))
+    assert window.age_bounds_us(before, 20_000_200) == (9_998_000, 10_002_200)
+    after = decode_frame(packet(captured=20_001_000, sent=20_001_100))
+    assert window.age_bounds_us(after, 30_000_200) == (0, 2200)
+
+
+def test_clock_window_rejects_reordered_samples_and_excludes_future_observations():
+    window = ClockWindow()
+    window.add(ClockSample.from_exchange(11, 2000, 11_900, 12_100))
+    with pytest.raises(ValueError, match="Out-of-order"):
+        window.add(ClockSample.from_exchange(11, 1000, 10_900, 11_100))
+    assert len(window.samples) == 1
+    assert window.age_bounds_us(decode_frame(packet(captured=1200, sent=1250)), 11_400) is None
+
+
+@pytest.mark.parametrize("drift_ppm", [-200, 200])
+@pytest.mark.parametrize("captured,age", [(9_000_000, 4_000_000), (12_000_000, 60_000)])
+def test_clock_window_contains_true_age_at_both_drift_limits(drift_ppm, captured, age):
+    def host(device):
+        return 1_000_000 + device + device * drift_ppm // 1_000_000
+
+    window = ClockWindow()
+    for device, outbound, inbound in ((10_000_000, 100, 100), (11_000_000, 390_000, 10_000)):
+        window.add(ClockSample.from_exchange(11, device, host(device)-outbound, host(device)+inbound))
+    frame = decode_frame(packet(captured=captured, sent=captured+20_000))
+    low, high = window.age_bounds_us(frame, host(captured)+age)
+    assert low <= age <= high
