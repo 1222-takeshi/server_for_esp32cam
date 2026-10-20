@@ -1,0 +1,318 @@
+{
+  "schema_version": 1,
+  "issue": 538,
+  "model_sha256": "ff1013da8734fe2b8ede5f34a2124855d447fbefd248d148e9f29e7f8e28c9c4",
+  "model_input_size": 320,
+  "threshold": 0.5,
+  "ort_threads": 3,
+  "frame_size": "QVGA",
+  "jpeg_quality": 12,
+  "camera_boot_id": "14507871396716366643",
+  "power_save_observed": "off",
+  "power_save_observed_utc": "2026-10-20T14:54:48Z",
+  "motor_actuation_enabled": false,
+  "single_cause_established": false,
+  "eco_observation": {
+    "scope": "native_process_eco_observation_after_wifi_power_save_off",
+    "source": "badfe24beba46086f6fca20742e4fdb45f7f47d7",
+    "elapsed_seconds": 91.78846493095625,
+    "native_cpu_mean_percent": 11.134296676262682,
+    "frame_hz": 0.20699768771916924,
+    "fresh_result_hz": 0.20699768771916924,
+    "watts_measured": false,
+    "network_bytes_measured": false
+  },
+  "completed_audits": {
+    "audit24h-20261019T000449Z": {
+      "completed": true,
+      "elapsed_seconds": 86400.05683138897,
+      "rows": 1441,
+      "success_rows": 1440,
+      "error_rows": 1,
+      "state_counts": {
+        "active": 907,
+        "degraded": 530,
+        "pending": 3
+      },
+      "reason_counts": {
+        "None": 910,
+        "cadence_low": 470,
+        "resources_unavailable": 25,
+        "resource_pipeline_fault": 33,
+        "frames_expired": 2
+      },
+      "max_db_bytes": 32104448,
+      "max_wal_bytes": 630392,
+      "max_managed_log_bytes": 2522921,
+      "minimum_free_bytes": 23531208704,
+      "service_write_bytes_lower_bound": 20221952,
+      "observed_exited_processes": 25,
+      "whole_host_write_bytes": 2065559552,
+      "service_journal": {
+        "bytes_observed": 2805,
+        "truncated": false
+      }
+    },
+    "audit24h-20261019T052550Z": {
+      "completed": true,
+      "elapsed_seconds": 86400.10652088001,
+      "rows": 1441,
+      "success_rows": 1441,
+      "error_rows": 0,
+      "state_counts": {
+        "active": 897,
+        "degraded": 542,
+        "pending": 2
+      },
+      "reason_counts": {
+        "None": 899,
+        "cadence_low": 504,
+        "resource_pipeline_fault": 33,
+        "frames_expired": 2,
+        "resources_unavailable": 3
+      },
+      "max_db_bytes": 32104448,
+      "max_wal_bytes": 663352,
+      "max_managed_log_bytes": 3176987,
+      "minimum_free_bytes": 23526629376,
+      "service_write_bytes_lower_bound": 18378752,
+      "observed_exited_processes": 17,
+      "whole_host_write_bytes": 1857511424,
+      "service_journal": {
+        "bytes_observed": 1126,
+        "truncated": false
+      },
+      "commit_counts": {
+        "31dca868cadb5beca5702be5586179ceac8c0870": 418,
+        "c1bda0b351135e1696752d6cdd7abcfcb014eac8": 20,
+        "badfe24beba46086f6fca20742e4fdb45f7f47d7": 1003
+      }
+    }
+  },
+  "normal_load_24h_accepted": false,
+  "wifi_off_24h_accepted": false,
+  "evidence_private_directory": "~/.local/share/esp32cam-training/operating-deploy",
+  "evidence_sha256": {
+    "wifi-off-preflight-20261020T145448Z.json": "1d3d7fed36ebf89cfc5ad10aef3594070830d3f8db36878746c3283bef0a430e",
+    "completed-audits-20261020.tar.gz": "4e853635523f3cc1cf713faa2d3ce8c9193e55d9fcff8ba0ad9f4fa51e035103",
+    "completed-audits-20261020-summary.json": "391c24c8085321946b89878cfbfc4c653c2a363e8f5575502af409068ab022f2",
+    "eco-cpu-wifi-off-20261020.json": "2bb7b8284463ac9ff160672052652b35aae208654903bb9e7ad7660f35ee7c43",
+    "acceptance-v6.py": "8882a78cd4f86d121e825f798e7ae0562e4048b761cc7d6bada59a1de4b1a80e",
+    "control-v6.py": "decec89eff0169a372046f27d4c3e88792ab2c35f13368ad0744da2854944d9e",
+    "wifi-off-original-source-evidence.tar.gz": "96b5322be54554cc78737a3dd452c3b83d7f6214143a49eef6823f1989077aa9",
+    "wifi-off-original-source-summary.json": "ec2fd4b295a968720e82dd1b6946e7ee5488322cc9cdd34ee654059424fdc331",
+    "spinning-parity-20261020T151404Z.json": "8a5b09aefa2e203deaaf1b8983b2ba97bbc8db4fd12b8ae4272cf719111e2963",
+    "spinning-parity.py": "61115a35380cf9ff72db388abba2eb1d9630b85e031279277f43c1edc86a98cc",
+    "audit24h-v3.py": "a2cde208d073cc1158041ce944146ad3f4bff3fa4a6fb635385b880805d1cc3a",
+    "release-31a96a5-manifest.json": "06d66816c81775e8d32063c45b195df10cf164577cd593a978f30d13df7657d5",
+    "spinning-539-pi-tests.log": "24c54e5e9a7b902fb4fb785b2b333775561502dc6b249904931430654ba02e3d",
+    "update-20261020T152212Z-validation.json": "6017f058419762299af0e0a71ecafb331b942ece4a9ec71a44b9b357e2469e7c",
+    "spinning-preflight-20261020.json": "4f9ddd0f6822981f99b5e79496e7d05fe57dc68d9a3888146bd16ada9e0ace7d",
+    "spinning-source-evidence.tar.gz": "4163bb0e492ec2db9be72c74f1917bca290743ca6742c3af73c6617cbda15c9c",
+    "spinning-source-summary.json": "fe664b4cba6d645d6479e99b65d95e1b900ad600cd55aa316cde32c78802cbf3",
+    "audit-v3-start-20261020.json": "e9c3350c812531d5fe42f8c4e4e0b0b8301d9ba4157ba28a3d9cc6617c7c0503",
+    "eco-cpu-spinning-off-20261020.json": "d7495031a64e90e3654f554c7c36571505b10a74b7b66fc9d44e95f9c7e7edbb"
+  },
+  "remaining_acceptance": [
+    "field_precision_recall",
+    "temporal_misses",
+    "10Hz_recognition",
+    "watts",
+    "normal_load_24h",
+    "motor_actuation"
+  ],
+  "spinning_change": {
+    "issue": 539,
+    "pr": 540,
+    "merge_commit": "31a96a5dae95d1f92d6c3de813fc62168e7c8ee0",
+    "native_allow_spinning": false,
+    "detector_default_allow_spinning": true,
+    "model_pre_post_threads_unchanged": true,
+    "fixture_count": 20,
+    "repetitions": 3,
+    "saved_outputs_max_difference": 0,
+    "reported_helper_cpu_percent": {
+      "legacy_default": 249.08840676450077,
+      "spinning_disabled": 192.25666053680817
+    },
+    "reported_helper_inference_median_ms": {
+      "legacy_default": 150.1206739922054,
+      "spinning_disabled": 153.20894494652748
+    },
+    "timing_aggregates_independently_recomputable": false,
+    "field_accuracy_accepted": false
+  },
+  "spinning_deployment": {
+    "update": "update-20261020T152212Z",
+    "source": "31a96a5dae95d1f92d6c3de813fc62168e7c8ee0",
+    "process": {
+      "pid": 675235,
+      "start_ticks": "89389983",
+      "cwd": "/home/ubuntu/.local/share/esp32cam-training/operating-deploy/release-31a96a5"
+    },
+    "firmware_unchanged": true,
+    "states": [
+      {
+        "boot_id": 14507871396716366643,
+        "native_pid": 675239,
+        "version": 906306801750,
+        "requested_mode": "eco",
+        "recognition_hz": 0.20016623787929727,
+        "state": "active",
+        "acknowledged": true,
+        "actuation_state": "hold"
+      },
+      {
+        "boot_id": 14507871396716366643,
+        "native_pid": 675239,
+        "version": 906306801751,
+        "requested_mode": "tracking",
+        "recognition_hz": 5.3,
+        "state": "active",
+        "acknowledged": true,
+        "actuation_state": "observe_only"
+      },
+      {
+        "boot_id": 14507871396716366643,
+        "native_pid": 675239,
+        "version": 906306801752,
+        "requested_mode": "eco",
+        "recognition_hz": 0.20001405908828,
+        "state": "active",
+        "acknowledged": true,
+        "actuation_state": "hold"
+      }
+    ]
+  },
+  "source_at_initial_wifi_off": "badfe24beba46086f6fca20742e4fdb45f7f47d7",
+  "native_pid_at_initial_wifi_off": 584718,
+  "initial_concurrent_load": {
+    "run": "acceptance-20261020T145842Z",
+    "passed": false,
+    "reason": "resource_thermal_fault",
+    "measurement_seconds": 414.22980945999734,
+    "sample_count": 414,
+    "native_bucket_hz_min": 5.2,
+    "native_bucket_hz_max": 5.3,
+    "max_gap_ms": 329.703,
+    "cpu_mean_percent": 272.4607117950368,
+    "temperature_at_fault_c": 80.341,
+    "throttled_at_fault": 0,
+    "preview_empty": 0,
+    "synthetic_saved": 45,
+    "synthetic_notifications": 45,
+    "eco_after_hz": 0.19998941017976213,
+    "eco_after_verified": true,
+    "status": "failed_thermal",
+    "full_503_reacceptance": false,
+    "unmeasured": [
+      "wire_loss",
+      "raw_clock_consistency",
+      "measurement_start_aligned_10s_windows"
+    ],
+    "source": "badfe24beba46086f6fca20742e4fdb45f7f47d7"
+  },
+  "concurrent_load": {
+    "run": "acceptance-20261020T152531Z",
+    "source": "31a96a5dae95d1f92d6c3de813fc62168e7c8ee0",
+    "passed": true,
+    "integration_load_passed": true,
+    "scope": "operating_profiles_concurrent_load_v6",
+    "full_503_reacceptance": false,
+    "drop_fraction": 0.0,
+    "inference_failures": 0,
+    "health_latency_p95_ms": 14.796881005167961,
+    "health_latency_max_ms": 107.5367359444499,
+    "synthetic_saves_during_measurement": 178,
+    "synthetic_notifications_during_measurement": 178,
+    "native_completed_bucket_hz_min": 5.2,
+    "native_completed_bucket_hz_max": 5.3,
+    "elapsed_seconds": 1800.0807772830594,
+    "fresh_results": 9474,
+    "recognition_hz": 5.2630971451734085,
+    "p95_age_upper_ms": 225,
+    "max_gap_ms": 359.564,
+    "health_ok": 3600,
+    "preview_ok": 3597,
+    "preview_empty": 0,
+    "view_ok": 180,
+    "synthetic_writer": {
+      "pending": 0,
+      "pending_bytes": 0,
+      "saved": 183,
+      "errors": 0,
+      "interval": 9478,
+      "full": 0,
+      "undetected": 0,
+      "resource": 0,
+      "invalid": 0,
+      "closed": 0,
+      "cameras": 0,
+      "discarded": 0
+    },
+    "synthetic_notifications": 183,
+    "temperature_max_c": 76.445,
+    "cpu_mean_percent": 209.2445607662349,
+    "rss_growth_bytes": 618496,
+    "sample_count": 1800,
+    "histogram_count": 9474,
+    "calculated_recognition_hz": 5.2630971451734085,
+    "all_samples_active": true,
+    "all_samples_throttled_zero": true,
+    "max_status_sample_gap_seconds": 1.0060000000000855,
+    "synthetic_monitor_errors_max": 0,
+    "eco_after": {
+      "requested_mode": "eco",
+      "state": "active",
+      "acknowledged": true,
+      "actuation_state": "hold",
+      "recognition_hz": 0.1999005251411737,
+      "native_pid": 675239,
+      "boot_id": 14507871396716366643,
+      "version": 906306801754
+    },
+    "unmeasured": [
+      "wire_loss",
+      "raw_clock_consistency",
+      "measurement_start_aligned_10s_windows"
+    ],
+    "scope_note": "simultaneous real-camera inference/preview with isolated synthetic representative-save/webhook load; not field detection ground truth"
+  },
+  "postflight": {
+    "observed_utc": "2026-10-20T15:57:00Z",
+    "source": "31a96a5dae95d1f92d6c3de813fc62168e7c8ee0",
+    "process": {
+      "pid": 675235,
+      "start_ticks": "89389983",
+      "cwd": "/home/ubuntu/.local/share/esp32cam-training/operating-deploy/release-31a96a5"
+    },
+    "power_save": "Power save: off",
+    "managed_log_bytes": 4471701,
+    "private_stage_disk_bytes": 372305920
+  },
+  "audit_v3": {
+    "run": "audit24h-20261020T155722Z",
+    "unit": "esp32cam-operating-audit24h-v3-20261020.service",
+    "first_sample_observed_state": "active",
+    "first_sample_wlan_power_save": "off",
+    "camera_boot_id": "14507871396716366643",
+    "duration_seconds": 86400,
+    "period_seconds": 60,
+    "helper_sha256": "a2cde208d073cc1158041ce944146ad3f4bff3fa4a6fb635385b880805d1cc3a",
+    "first_sample_verified": true,
+    "completed_at_start_record": false,
+    "normal_load_24h_accepted": false,
+    "wifi_off_24h_accepted": false,
+    "policy": "read-only current manual mode; per-row source/PID fence, boot and actual WLAN power-save state; <=8MiB evidence"
+  },
+  "eco_observation_after_spinning": {
+    "scope": "native_process_eco_observation_after_spinning_disabled",
+    "source": "31a96a5dae95d1f92d6c3de813fc62168e7c8ee0",
+    "elapsed_seconds": 101.07848669192754,
+    "native_cpu_mean_percent": 8.656639297211406,
+    "frame_hz": 0.19786604107911784,
+    "fresh_result_hz": 0.19786604107911784,
+    "watts_measured": false,
+    "network_bytes_measured": false
+  }
+}

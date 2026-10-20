@@ -1,5 +1,8 @@
 # 運転モードの実装・Pi反映と同時負荷の記録
 
+> 更新: このページの途中値は当時のcheckpointとして保持する。完了した24h観測と
+> Wi-Fi省電力OFF後の再測定は[更新記録](wifi-power-save-off-results.md)を参照。
+
 2026-10-19 JST、[#505](https://github.com/1222-takeshi/server_for_esp32cam/issues/505) /
 [#506](https://github.com/1222-takeshi/server_for_esp32cam/issues/506) の手動モード・容量対策を実装し、
 既存Raspberry Pi 4とESP32-CAMへ反映した。Macは操作端末だけで、受信・JPEG前処理・推論・保存はPiで行う。
@@ -136,8 +139,8 @@ min/median/max 146.218/151.6835/169.969msで、今回の末尾では推論自体
 模擬保存/通知4件・監視異常0件、cleanup異常なし。正常60秒後のCAS resumeと
 同一bootのeco active 0.200063Hz/ACK/holdまで確認した。不合格は不合格のまま保存する。
 
-Pi側Wi-Fi省電力OFFでの比較は未実施。現 `ubuntu@raspi-server.local` 接続はsudoにパスワードが
-必要で、NetworkManagerもないため、この比較には管理権限を使える接続または利用者側の設定操作が必要。
+Pi側Wi-Fi省電力OFFでの比較は当時未実施だった。その時点の `ubuntu@raspi-server.local` 接続はsudoにパスワードが
+必要で、NetworkManagerもなく、利用者側の設定操作等が必要だった（設定後は上記の更新記録を参照）。
 省電力・無線再送・cameraの送信待ち・host schedulingの根本原因を確定したものではない。
 同じ条件で失敗する試験を合格扱いせず、次の比較を[#506](https://github.com/1222-takeshi/server_for_esp32cam/issues/506)へ残す。
 
@@ -169,7 +172,7 @@ raw・helper原本・失敗run・DB backupはPi/Macのprivate領域に保持す�
 記録 `checkpoint-20261019T224707Z` で新世代ACK、eco active 0.199964Hz、holdまで確認した。
 無停止・常時正常だったとは扱わず、保護状態も監査の原本に残す。
 
-同時点のaudit途中値は次の通り。いずれも24時間のresultファイルはまだない。
+同時点のaudit途中値は次の通り。このcheckpoint時点では24時間のresultファイルはまだなかった。
 
 | audit | 経過 | 取得成功/失敗 | active / degraded / pending の観測行 |
 |---|---:|---:|---:|
