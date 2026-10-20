@@ -16,7 +16,7 @@
 
 ### サーバーサイド:
 
-*   **Python:** Python 3.10 以上。
+*   **Python:** Python 3.11 以上。
 *   **Flask:** サーバーで使用する Web フレームワーク。
 *   **pytest:** 自動テストに使用します。
 *   **オペレーティングシステム:** Linux, macOS, Windows。

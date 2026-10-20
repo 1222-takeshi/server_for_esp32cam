@@ -1,5 +1,8 @@
 # Contributing
 
+Python 3.11 or later is required; CI exercises 3.11 and 3.12. Pillow 13 security fixes
+require Python 3.11+, so Python 3.10 is no longer supported. Docker uses Python 3.11.
+
 Contributions to this project are welcome! If you'd like to contribute, please follow these general guidelines:
 
 1.  **Fork the Repository:**
