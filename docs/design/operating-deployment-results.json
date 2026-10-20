@@ -82,7 +82,7 @@
     "next_inference_completion_status": "profile_changed_not_published"
   },
   "audit_24h": {
-    "status": "running_not_accepted",
+    "status": "completed_observation_not_accepted",
     "runs": [
       "audit24h-20261019T000449Z",
       "audit24h-20261019T052550Z"
@@ -114,7 +114,8 @@
         },
         "result_file_present": false
       }
-    }
+    },
+    "completion_record": "wifi-power-save-off-results.json"
   },
   "unaccepted": [
     "10Hz_recognition",
@@ -132,7 +133,7 @@
     "partial_observation_only": true
   },
   "blocking_comparison": {
-    "wifi_power_save_off_test": "not_performed",
+    "wifi_power_save_off_test": "see_follow_up_record",
     "current_ssh_sudo": "password_required",
     "root_cause": "not_established"
   },
@@ -151,5 +152,6 @@
     "disk_usage_bytes": 293093376,
     "observed_date_utc": "2026-10-19",
     "scope": "manual release/test/backup directory; outside managed log budget"
-  }
+  },
+  "follow_up_record": "wifi-power-save-off-results.json"
 }
