@@ -113,6 +113,17 @@ class OnnxDetectorTests(unittest.TestCase):
         np.testing.assert_array_equal(legacy._session.received, quiet._session.received)
         self.assertEqual(quiet._session.options.intra_op_num_threads, 3)
 
+    def test_grayscale_jpeg_keeps_rgb_channels_and_letterbox_padding(self):
+        image = Image.new("L", (80, 160), 128)
+        encoded = io.BytesIO()
+        image.save(encoded, format="JPEG")
+        detector = self.detector(num_threads=3, allow_spinning=False)
+        self.assertEqual(detector.detect(encoded.getvalue()), [])
+        tensor = detector._session.received
+        self.assertEqual(tensor.shape, (1, 3, 320, 320))
+        np.testing.assert_allclose(tensor[0, :, 160, 160], [128 / 255] * 3)
+        np.testing.assert_allclose(tensor[0, :, 160, 0], [114 / 255] * 3)
+
     def test_spinning_option_rejects_non_booleans(self):
         for invalid in (0, 1, "false", None, [], 0.0):
             with self.subTest(value=invalid), self.assertRaises(ValueError):

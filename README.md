@@ -47,6 +47,8 @@ Continuous video and remote I/O control remain later phases.
 
 ## Quick Start (Docker)
 
+Source installs require Python 3.11+ (Pillow 13); the Docker image uses Python 3.11.
+
 ```bash
 cp .env.example .env          # configure environment variables
 docker compose build
