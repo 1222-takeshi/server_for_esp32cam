@@ -71,7 +71,9 @@ def _worker():
         key = app.config["DEVICE_API_KEY"]
     if not key:
         raise ValueError("A camera-bound device key is required")
-    detector = OnnxYoloDetector(model_path, threshold=.5, num_threads=3, input_size=320)
+    # Keep model work unchanged while avoiding active CPU waits between frames.
+    detector = OnnxYoloDetector(model_path, threshold=.5, num_threads=3, input_size=320,
+                               allow_spinning=False)
     warmup = BytesIO()
     Image.new("RGB", (320, 240)).save(warmup, format="JPEG", quality=88)
     detector.detect(warmup.getvalue())

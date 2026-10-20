@@ -230,6 +230,44 @@ def test_service_help_does_not_load_optional_onnx_runtime():
     assert result.returncode == 0 and "supervise" in result.stdout
 
 
+def test_native_worker_disables_idle_spinning_without_changing_model_settings(monkeypatch, tmp_path):
+    import hashlib
+    from contextlib import nullcontext
+    from unittest.mock import Mock
+    import script.app
+    import script.capture_receiver
+    import script.onnx_detector
+    import script.operating_rpc
+    import script.operating_runtime
+    import script.operating_service as service
+
+    model = tmp_path / "model.onnx"
+    model.write_bytes(b"model fixture")
+    monkeypatch.setattr(script.operating_runtime, "MODEL_SHA256", hashlib.sha256(model.read_bytes()).hexdigest())
+    monkeypatch.setenv("ESP32CAM_OPERATING_MODEL_PATH", str(model))
+    monkeypatch.setenv("ESP32CAM_OPERATING_CAMERA_ID", "cam")
+    monkeypatch.setenv("ESP32CAM_OPERATING_SOCKET", str(tmp_path / "control.sock"))
+    app = SimpleNamespace(config={"DEVICE_API_KEYS": {"cam": "fixture"}},
+                          extensions={"metadata_store": Mock()})
+    detector = SimpleNamespace(detect=Mock(return_value=[]))
+    factory = Mock(return_value=detector)
+    rt = SimpleNamespace(start=Mock(), close=Mock(), dispatch=Mock(), receiver=object())
+    monkeypatch.setattr(script.app, "create_app", lambda _: app)
+    monkeypatch.setattr(script.onnx_detector, "OnnxYoloDetector", factory)
+    monkeypatch.setattr(script.operating_runtime, "OperatingRuntime", lambda *args: rt)
+    monkeypatch.setattr(script.operating_rpc, "ControlServer", lambda *args: nullcontext(object()))
+    monkeypatch.setattr(script.capture_receiver, "serve_live", lambda *args: nullcontext(object()))
+    monkeypatch.setattr(service.signal, "signal", lambda *args: None)
+    monkeypatch.setattr(service, "_configure_native_logging", lambda: None)
+    monkeypatch.setattr(service, "_serve", lambda *args: None)
+    assert service._worker() == 0
+    factory.assert_called_once_with(model, threshold=.5, num_threads=3, input_size=320,
+                                   allow_spinning=False)
+    detector.detect.assert_called_once()
+    rt.start.assert_called_once()
+    rt.close.assert_called_once()
+
+
 @pytest.mark.parametrize("failed_listener", ["control", "live"])
 def test_listener_thread_failure_stops_worker_for_supervised_restart(failed_listener):
     released, closed = Event(), Event()

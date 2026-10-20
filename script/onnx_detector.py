@@ -26,6 +26,7 @@ class OnnxYoloDetector:
         threshold: float = 0.5,
         num_threads: int = 4,
         input_size: int = 320,
+        allow_spinning: bool = True,
     ) -> None:
         if isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
             raise ValueError("threshold must be a finite number in [0, 1]")
@@ -39,6 +40,8 @@ class OnnxYoloDetector:
             raise ValueError("num_threads must be an integer in [1, 256]")
         if isinstance(input_size, bool) or not isinstance(input_size, int) or input_size != 320:
             raise ValueError("input_size must be the integer 320")
+        if type(allow_spinning) is not bool:
+            raise ValueError("allow_spinning must be a boolean")
 
         try:
             import numpy as np
@@ -52,10 +55,14 @@ class OnnxYoloDetector:
         self._image_ops = ImageOps
         self.threshold = float(threshold)
         self.input_size = input_size
+        self.allow_spinning = allow_spinning
         options = ort.SessionOptions()
         options.intra_op_num_threads = num_threads
         options.inter_op_num_threads = 1
         options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        if not allow_spinning:
+            options.add_session_config_entry("session.intra_op.allow_spinning", "0")
+            options.add_session_config_entry("session.inter_op.allow_spinning", "0")
         self._session = ort.InferenceSession(
             str(model_path), sess_options=options, providers=["CPUExecutionProvider"]
         )
