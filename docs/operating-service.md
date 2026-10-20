@@ -96,3 +96,9 @@ Pi側Wi-Fi省電力ONと受信の途切れを実測したための通信頻度�
 区間の矛盾・明らかな未来時刻・有効sampleなしでは推論へ渡さず、boot変更/再接続では過去を引き継ぎません。
 これは既存の時計rate誤差仮定の下での境界改善で、200ppmが実機の保証値になるものではありません。
 500ms freshnessと165ms処理予約は同じです。実機同時負荷の合格は別途測定します。
+
+native workerは `session.intra_op.allow_spinning=0` / `session.inter_op.allow_spinning=0` を明示し、
+処理待ち中のactive spinを抑えます。一般ONNX detectorの`allow_spinning`既定値はTrueで従来互換です。
+[ORT公式説明](https://onnxruntime.ai/docs/performance/tune-performance/threading.html)の通り、
+spin無効化はCPU/電力と推論待ち時間のtradeoffなので、実機でHz・温度・出力互換を確認します。
+モデル・前後処理・3threads・500ms freshness・80℃保護は変更せず、W数の低下や30分合格を先取りしません。

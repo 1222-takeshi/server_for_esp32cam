@@ -47,7 +47,14 @@ class OnnxDetectorTests(unittest.TestCase):
         Session.metadata = "{15: 'cat'}"
         Session.input_shape = ["batch", 3, "height", "width"]
         Session.output_shape = ["batch", 84, "anchors"]
-        options = type("Options", (), {})
+        class Options:
+            def __init__(self):
+                self.entries = {}
+
+            def add_session_config_entry(self, key, value):
+                self.entries[key] = value
+
+        options = Options
         ort = types.SimpleNamespace(
             SessionOptions=options,
             InferenceSession=Session,
@@ -85,6 +92,8 @@ class OnnxDetectorTests(unittest.TestCase):
         self.assertEqual(detector._session.options.intra_op_num_threads, 3)
         self.assertEqual(detector._session.options.inter_op_num_threads, 1)
         self.assertEqual(detector._session.options.execution_mode, "sequential")
+        self.assertTrue(detector.allow_spinning)
+        self.assertEqual(detector._session.options.entries, {})
         self.assertEqual(detector.detect(self.jpeg()), [])
         tensor = detector._session.received
         self.assertEqual(tensor.shape, (1, 3, 320, 320))
@@ -92,6 +101,22 @@ class OnnxDetectorTests(unittest.TestCase):
         self.assertTrue(tensor.flags.c_contiguous)
         self.assertAlmostEqual(tensor[0, 0, 0, 0], 114 / 255)
         self.assertGreater(tensor[0, 0, 100, 100], 0.95)
+
+    def test_disabled_spinning_preserves_model_input_and_detection_output(self):
+        Session.output = self.output((15, 0.9, (160, 160, 160, 80)))
+        legacy = self.detector(num_threads=3)
+        quiet = self.detector(num_threads=3, allow_spinning=False)
+        self.assertFalse(quiet.allow_spinning)
+        self.assertEqual(quiet._session.options.entries, {
+            "session.intra_op.allow_spinning": "0", "session.inter_op.allow_spinning": "0"})
+        self.assertEqual(legacy.detect(self.jpeg()), quiet.detect(self.jpeg()))
+        np.testing.assert_array_equal(legacy._session.received, quiet._session.received)
+        self.assertEqual(quiet._session.options.intra_op_num_threads, 3)
+
+    def test_spinning_option_rejects_non_booleans(self):
+        for invalid in (0, 1, "false", None, [], 0.0):
+            with self.subTest(value=invalid), self.assertRaises(ValueError):
+                self.detector(allow_spinning=invalid)
 
     def test_cat_box_is_deletterboxed_and_normalized(self):
         # Original 160x80 -> 320x160 at y=80. Network xywh=(160,160,160,80).
