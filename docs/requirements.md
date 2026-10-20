@@ -16,7 +16,7 @@ To use the current milestone as intended, you will typically need:
 
 ### Server-Side:
 
-*   **Python:** Python 3.10 or later.
+*   **Python:** Python 3.11 or later.
 *   **Flask:** The web framework used by the server.
 *   **pytest:** Used for automated tests.
 *   **Operating System:** Linux, macOS, or Windows.
