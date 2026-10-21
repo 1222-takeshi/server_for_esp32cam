@@ -102,3 +102,34 @@ native workerは `session.intra_op.allow_spinning=0` / `session.inter_op.allow_s
 [ORT公式説明](https://onnxruntime.ai/docs/performance/tune-performance/threading.html)の通り、
 spin無効化はCPU/電力と推論待ち時間のtradeoffなので、実機でHz・温度・出力互換を確認します。
 モデル・前後処理・3threads・500ms freshness・80℃保護は変更せず、W数の低下や30分合格を先取りしません。
+
+## 24時間観測の集計
+
+v3の `manifest.json` / `samples.jsonl` / 完了後の `result.json` を原本のまま保管し、
+集計は完了したrun、または別ディレクトリに凍結した途中コピーに対して実行します。
+Python標準ライブラリだけを使い、認識processやmodeを変更しません。
+
+```sh
+python scripts/summarize_operating_audit.py \
+  --run /private/audit24h-RUN --output /private/audit24h-summary.json \
+  --require-complete
+```
+
+入力はsamples最大8MiB、manifest/result各64KiBに制限します。既存outputや原本の上書き、
+読込中の入力変更、不正な行/累積counter/完了件数は拒否します。`--require-complete` は
+24h経過・1,441行・resultの取得件数整合に加え、各sampleが予定時刻から60秒以内の遅れ
+（丸めの早着許容1ms）・最大gap120秒以内を要求し、揃わなければexit3でoutputを作りません。
+`observer_result_completed`（collector終了）と `sampling_coverage_complete`（網羅性）は別々に記録します。
+省略時は途中値を `observation_completed=false` と明示して記録できます。
+不正な入力や既存outputはexit2、集計成功はexit0です。出力は同じdirectoryの一時ファイルに
+write/flush/fsync/closeした後、排他的hard linkで確定し、途中失敗で不完全なJSONを残しません。
+
+source/boot/mode/WLANの行数、保護・不明sample、DB/WAL/logの観測最大、最小空き容量を
+記録します。service書込みは退出processで取りこぼし得る下限、host書込みは他serviceを含む値です。
+行数比を実時間uptimeにせず、完了しても `normal_load_24h_accepted=false`、
+`tracking_24h_accepted=false`、`watts_measured=false` を維持します。
+実際の手動eco観測だけで、猫が常に写る通常負荷・現場精度・実W数を合格扱いにしません。
+
+完了時の集計を予約する場合は、auditの終了予定後に `--require-complete` を実行する
+一回のuser timerを使います。未完了exit3のみ有限回retryし、既存output/不正入力のexit2は
+停止させます。observer自体の再起動・mode変更・raw削除や通知送信は行いません。
