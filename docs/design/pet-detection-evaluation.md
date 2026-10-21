@@ -44,6 +44,36 @@ The command refuses an existing output path (including any input path) and exits
 
 ## Acceptance and next phases
 
+### Native Pi ONNX evaluation
+
+For the deployed YOLO11n FP32 ONNX profile, use the separate CLI below with the same
+immutable manifest and verified 80-class labels (cat at zero-based index 15). It fixes
+320px input, confidence 0.5, three threads, CPUExecutionProvider and disabled spinning.
+The box-match IoU is 0.5; the detector's frozen NMS IoU remains 0.7. The original
+TFLite CLI above keeps its interface and behavior.
+
+```sh
+python scripts/evaluate_native_cat.py \
+  --manifest /private/pet-eval/manifest.json --model /private/models/yolo11n.onnx \
+  --labels /private/models/coco-labels.txt \
+  --expected-model-sha256 ff1013da8734fe2b8ede5f34a2124855d447fbefd248d148e9f29e7f8e28c9c4 \
+  --output /private/pet-eval/native-result.json
+```
+
+Install the `onnx` extra on the target Pi. Pin the expected model digest in the
+evaluation plan before running: a mismatch is rejected before inference, and all
+existing model/labels/manifest/image immutability checks remain in effect. Outputs
+include ONNX Runtime/Pillow versions and the fixed backend settings. They are published
+atomically and never overwrite inputs or an existing result. Use separate development
+and held-out sessions and keep the source images, labels and results outside Git.
+
+`field_accuracy_accepted` stays false: metrics alone do not prove day/night coverage,
+short appearances missed between eco frames, false alerts per day or watts. Freeze and
+evaluate those conditions separately. A public-fixture compatibility run is not field
+ground truth. Avoid a sustained offline inference load during a normal-mode 24h audit.
+
+### Field acceptance
+
 Before collecting held-out results, approve and record the numeric gate in a separate reviewable evaluation plan. A proposed starting gate is at least 100 positive and 100 negative held-out images per intended camera, spanning both day and night; image-level and object-level precision and recall each at least 0.90; observed false alerts at most one per camera-day; and Pi p95 inference time below half the snapshot interval. Confirm these numbers against operational needs before locking the evaluation set. Include both positive and negative images from each intended camera and operating condition. Do not accept a metric with a `null` denominator or tune thresholds on the held-out set. Investigate every high-confidence FP/FN and report confidence intervals or uncertainty alongside any claimed rate. A deployment decision needs Pi results under normal server load, stability across day/night sessions, and a rollback to the existing person-only configuration if cat alerts misbehave.
 
 Notification integration depends on a passing detection gate, a chosen event policy (per frame versus tracked episode), deduplication, recipient consent, and observed end-to-end delivery/false-alert rates. Short-video integration additionally depends on a defined pre/post-event recording window, camera capture/transport support (including any Tapo source), retention/privacy policy, storage budget, and a test showing the clip corresponds to the triggering event. These are later-phase acceptance criteria, not features delivered by this evaluation tool.
