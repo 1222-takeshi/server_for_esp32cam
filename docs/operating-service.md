@@ -53,6 +53,14 @@ nativeの独立maintenance threadが起動時と1時間ごとに保持制御を�
 成功後も正常な資源監視60秒と手動resumeが必要です。
 DB/WAL/空き/論理予約量/worker実write_bytesを既存guardで監視し、80℃以上・throttle非0・監視故障も
 任意書込み抑止と保護eco/holdへ接続します。正常60秒＋手動resumeでecoへ再開し、trackingへ自動昇格しません。
+省エネ起点の周期異常は別扱いです。新しい正常結果をpublishしたhost monotonic時刻から
+7秒超を警告、17秒超をdegradedとして表示します。最後の結果をt=0とするとt=5/10の
+欠落後t=15で届く場合は許容し、t=15も欠落した場合は17秒超で保護表示になります。
+ACK後の初回結果待ちも同じ期限です。現boot/世代の重複しない新しい結果3枚が
+4〜6秒の2間隔で届き、最新結果7秒以内かつ資源/温度/保持処理が正常なら自動復帰します。
+この間は書込みguardを停止せず、APIの`eco_warning`/`eco_auto_recovery_pending`で
+警告/自動復帰待ちを表示します。tracking起点のfallback、ACK/publication故障、
+資源/過熱/監視故障は手動解除のままです。画像自体の500ms鮮度制限は維持します。
 これは物理hard quotaではなく、実行中書込みや他processの超過を含む実bytesの測定が必要です。
 raw削除・自動VACUUMはしません。診断は既定off、明示的に最大600秒/32MiBで開始します。
 

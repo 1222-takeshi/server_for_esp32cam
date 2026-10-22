@@ -367,3 +367,49 @@ logging.getLogger('script.capture_receiver').info('unrelated per-frame message')
     assert result.returncode == 0
     assert result.stderr.count("operating_summary test") == 1
     assert "per-frame" not in result.stderr and not result.stdout
+
+
+@pytest.mark.parametrize('gap', [15, 18])
+def test_eco_gap_and_recovery_do_not_latch_storage_guard(runtime, gap):
+    rt = runtime
+    for sequence in range(1, 4):
+        publish(rt, sequence, ())
+        advance(rt, 5)
+    advance(rt, gap - 5)
+    status = rt.status()
+    assert status['eco_auto_recovery_pending'] == (gap > 17)
+    assert not status['resources']['paused']
+    for sequence in range(4, 7):
+        publish(rt, sequence, ())
+        advance(rt, 5)
+    status = rt.status()
+    assert status['state'] == 'active' and not status['resources']['paused']
+    assert status['actuation_state'] == 'hold'
+
+
+@pytest.mark.parametrize('gap', [10, 18])
+@pytest.mark.parametrize('fault', ['thermal', 'monitor', 'retention'])
+def test_resource_fault_dominates_eco_warning_and_auto_recovery(runtime, gap, fault):
+    rt = runtime
+    for sequence in range(1, 4):
+        publish(rt, sequence, ())
+        advance(rt, 5)
+    advance(rt, gap - 5)
+    if fault == 'thermal':
+        rt.hardware = lambda: (80, 0)
+    elif fault == 'monitor':
+        rt.clock.now += 4
+    else:
+        rt.retention_ok = False
+    rt.sample()
+    assert rt.status()['resources']['paused']
+    assert not rt.status()['eco_auto_recovery_pending']
+    reason = rt.mode.reason
+    rt.hardware = lambda: (45, 0)
+    rt.retention_ok = True
+    for sequence in range(4, 19):
+        publish(rt, sequence, ())
+        advance(rt, 5)
+    assert rt.status()['state'] == 'degraded'
+    assert rt.status()['resources']['paused']
+    assert rt.mode.reason == reason

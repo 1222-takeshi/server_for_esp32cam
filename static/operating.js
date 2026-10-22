@@ -15,7 +15,8 @@
   function render(data) {
     if (latest?.version !== data.version || latest?.boot_id !== data.boot_id) clearPreview();
     latest = data;
-    get('operating-state').textContent = `要求：${names[data.requested_mode] || '不明'} ／ 実効：${names[data.effective_mode] || '未確認'} ／ ${states[data.state] || '不明'} ／ 認識 ${(data.recognition_hz || 0).toFixed(2)} Hz ／ モーター停止`;
+    const state = data.eco_auto_recovery_pending ? '省エネの自動復帰待ち' : data.eco_warning ? '省エネの周期揺れを確認中' : states[data.state] || '不明';
+    get('operating-state').textContent = `要求：${names[data.requested_mode] || '不明'} ／ 実効：${names[data.effective_mode] || '未確認'} ／ ${state} ／ 認識 ${(data.recognition_hz || 0).toFixed(2)} Hz ／ モーター停止`;
     const resources = data.resources || {};
     const free = resources.sample?.free;
     get('operating-resources').textContent = `温度 ${data.vitals?.temperature_c ?? '—'}℃ ／ 空き容量 ${free == null ? '—' : (free / 1024 ** 3).toFixed(2) + ' GiB'} ／ 保存 ${data.writer?.saved ?? 0}枚 ／ 診断 ${data.diagnostic?.state || 'off'} ／ 保護理由 ${data.reason || resources.reason || 'なし'}`;

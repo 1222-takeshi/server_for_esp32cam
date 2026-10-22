@@ -8,6 +8,7 @@ from collections import deque
 from threading import RLock
 
 MAX_VERSION = 2**53 - 1
+ECO_GAP_LIMIT = 17  # Missing t=5,10 is tolerated if the next fresh result arrives at t=15.
 
 
 def _uint(value, *, zero=False, maximum=MAX_VERSION):
@@ -41,6 +42,8 @@ class OperatingMode:
         self.rejected_ack = 0
         self.rejected_result = 0
         self.transitions = 0
+        self.eco_recoverable = self.eco_recovery_ready = self.eco_confirmed = False
+        self.automatic_recoveries = 0
 
     def _change(self, mode, *, reason=None):
         if self.version >= MAX_VERSION:
@@ -62,6 +65,7 @@ class OperatingMode:
         self.frames.clear()
         self.requested_at = self.clock()
         self.last_command = -float("inf")
+        self.eco_recoverable = self.eco_confirmed = False
 
     def hello(self, boot_id, generation_floor):
         with self.lock:
@@ -104,6 +108,10 @@ class OperatingMode:
             if self.requested == "tracking":
                 self._change("eco", reason=reason)
             else:
+                transient = reason in {"frames_expired", "cadence_low"}
+                if transient and self.reason is not None and not self.eco_recoverable:
+                    return  # Cadence must never replace a manual/resource latch.
+                self.eco_recoverable = transient and (self.reason is None or self.eco_recoverable)
                 self.state, self.reason = "degraded", reason
 
     def acknowledge(self, boot_id, generation, mode, applied_us):
@@ -169,12 +177,19 @@ class OperatingMode:
             # first result, avoid a false 49-count just before the next result.
             return self.cadence_rate is not None and self.cadence_rate >= 5
         recent = list(self.frames)[-3:]
-        return len(recent) == 3 and all(4 <= b[0] - a[0] <= 6
-                                      for a, b in zip(recent, recent[1:], strict=False))
+        return (len(recent) == 3 and self.clock() - recent[-1][0] <= 7
+                and all(4 <= b[0] - a[0] <= 6
+                        for a, b in zip(recent, recent[1:], strict=False)))
 
     def _reconcile(self):
+        if (self.connected and self.eco_recoverable and self.eco_recovery_ready
+                and self.ack is not None and self._cadence()):
+            self.reason, self.eco_recoverable = None, False
+            self.automatic_recoveries += 1
         if self.connected and self.reason is None:
             self.state = "active" if self.ack is not None and self._cadence() else "pending"
+            if self.requested == "eco" and self.state == "active":
+                self.eco_confirmed = True
 
     def tick(self):
         with self.lock:
@@ -186,26 +201,23 @@ class OperatingMode:
                 if now - self.requested_at >= 5:
                     self.protect("ack_timeout")
                 return
-            limit = .5 if self.requested == "tracking" else 7
+            limit = .5 if self.requested == "tracking" else ECO_GAP_LIMIT
             if self.frames:
                 expired = now - self.frames[-1][0] > limit
             else:
                 # Allow the first 190ms capture + inference, or first 5s eco frame.
-                expired = now - self.ack_at > (1 if self.requested == "tracking" else 7)
+                expired = now - self.ack_at > (1 if self.requested == "tracking" else ECO_GAP_LIMIT)
             if expired:
                 self.protect("frames_expired")
             else:
-                if self.requested == "tracking":
-                    if self.cadence_at is not None and now - self.cadence_at >= 10:
-                        if now - self.cadence_at >= 20 or self.cadence_count < 50:
-                            self.protect("cadence_low")
-                            return
-                        self.cadence_rate = self.cadence_count / 10
-                        self.cadence_at += 10
-                        self.cadence_count = 0
-                elif now - self.ack_at > 20 and not self._cadence():
-                    self.protect("cadence_low")
-                    return
+                if (self.requested == "tracking" and self.cadence_at is not None
+                        and now - self.cadence_at >= 10):
+                    if now - self.cadence_at >= 20 or self.cadence_count < 50:
+                        self.protect("cadence_low")
+                        return
+                    self.cadence_rate = self.cadence_count / 10
+                    self.cadence_at += 10
+                    self.cadence_count = 0
                 self._reconcile()
 
     def command(self):
@@ -226,10 +238,15 @@ class OperatingMode:
             rate = (len(self.frames) - 1) / span if span else 0
             if self.requested == "tracking" and self.cadence_rate is not None:
                 rate = self.cadence_rate
+            warning = (self.requested == "eco" and self.ack is not None and self.reason is None
+                       and ((self.eco_confirmed and not self._cadence())
+                            or now - (self.frames[-1][0] if self.frames else self.ack_at) > 7))
             return {"schema": 2, "version": self.version, "boot_id": self.boot,
                     "requested_mode": self.requested,
                     "effective_mode": self.requested if self.ack is not None and self.frames else None,
                     "state": self.state, "reason": self.reason, "connected": self.connected,
+                    "eco_warning": warning, "eco_auto_recovery_pending": self.eco_recoverable,
+                    "automatic_recoveries": self.automatic_recoveries,
                     "actuation_state": "observe_only" if self.state == "active" and self.requested == "tracking" else "hold",
                     "acknowledged": self.ack is not None,
                     "last_result_age_seconds": now - self.frames[-1][0] if self.frames else None,
