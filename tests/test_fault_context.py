@@ -102,6 +102,10 @@ def test_unknown_and_large_input_is_bounded_and_never_serialized():
         context.observe(event)
     assert context.status()['ring_records'] == 0
     assert context.status()['rejected_events'] == 4
+    for status in ['clock', 'device_status']:
+        context.observe({'status': status})
+    assert context.status()['rejected_events'] == 4
+    assert context.status()['ring_records'] == 0
     context.observe({'status': 'closed', 'reason': 'secret' * 1000000})
     assert json.loads(context.take())['events'][-1]['reason'] == 'other'
 
