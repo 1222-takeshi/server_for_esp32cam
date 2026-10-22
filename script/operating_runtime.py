@@ -157,8 +157,10 @@ class OperatingRuntime:
                 self.guard.pause("thermal_fault")
             if self.retention_ok is False:
                 self.guard.monitor_failed()
+            self._protect()  # Update the recovery gate before tick can clear an eco latch.
             mode = self.mode.status()
-            if mode["reason"] in {"frames_expired", "cadence_low", "publication_failed", "ack_timeout"} and not self.guard.status()["paused"]:
+            if (mode["reason"] in {"frames_expired", "cadence_low", "publication_failed", "ack_timeout"}
+                    and not mode["eco_auto_recovery_pending"] and not self.guard.status()["paused"]):
                 self.guard.pause("pipeline_fault")
         except (OSError, ValueError, IndexError, subprocess.SubprocessError):
             self.guard.monitor_failed()
@@ -166,8 +168,12 @@ class OperatingRuntime:
 
     def _protect(self):
         guard = self.guard.status()
-        if guard["paused"] and (self.mode.reason is None or self.mode.requested == "tracking"):
-            self.mode.protect(f"resource_{guard['reason']}")
+        with self.mode.lock:
+            self.mode.eco_recovery_ready = (not guard["paused"] and self.vitals["thermal_ok"]
+                                            and self.retention_ok is True)
+            if guard["paused"] and (self.mode.reason is None or self.mode.requested == "tracking"
+                                     or self.mode.eco_recoverable):
+                self.mode.protect(f"resource_{guard['reason']}")
         if guard["paused"] and self.diagnostic is not None and self.diagnostic.status()["state"] == "running":
             self.diagnostic.close(wait=False)
 

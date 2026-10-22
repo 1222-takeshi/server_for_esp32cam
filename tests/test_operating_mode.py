@@ -323,3 +323,91 @@ def test_exact_five_hz_window_boundaries_and_watchdog_before_new_result():
     ack(mode)
     emit(clock, mode, 152, .2)
     assert mode.status()["state"] == "pending"  # A generation cannot inherit old buckets.
+
+
+@pytest.mark.parametrize('gap', [10, 15, 17])
+def test_eco_missing_results_warn_without_latching(gap):
+    clock, mode = connected()
+    ack(mode)
+    for sequence in range(1, 4):
+        emit(clock, mode, sequence, 5)
+    clock.now += gap
+    status = mode.status()
+    assert status['state'] == 'pending' and status['eco_warning']
+    assert status['reason'] is None and not status['eco_auto_recovery_pending']
+    emit(clock, mode, 4, 0)
+    emit(clock, mode, 5, 5)
+    emit(clock, mode, 6, 5)
+    assert mode.status()['state'] == 'active'
+    assert mode.status()['actuation_state'] == 'hold'
+
+
+def test_eco_initial_ack_gap_boundaries_and_resource_gated_recovery():
+    clock, mode = connected()
+    ack(mode)
+    clock.now += 7
+    assert not mode.status()['eco_warning']
+    clock.now += .001
+    assert mode.status()['eco_warning']
+    clock.now = mode.ack_at + 17
+    assert not mode.status()['eco_auto_recovery_pending']
+    clock.now += .001
+    assert mode.status()['eco_auto_recovery_pending']
+    assert mode.status()['state'] == 'degraded'
+    for sequence in range(1, 4):
+        emit(clock, mode, sequence, 5)
+    assert mode.status()['state'] == 'degraded'  # Health is not yet confirmed.
+    mode.eco_recovery_ready = True
+    mode.tick()
+    assert mode.status()['state'] == 'active'
+    assert mode.status()['automatic_recoveries'] == 1
+
+
+def test_eco_recovery_rejects_replays_and_burst_results():
+    clock, mode = connected()
+    ack(mode)
+    mode.eco_recovery_ready = True
+    clock.now += 18
+    assert mode.status()['eco_auto_recovery_pending']
+    for sequence in range(1, 4):
+        emit(clock, mode, sequence, .1)
+    assert mode.status()['state'] == 'degraded'
+    assert not mode.publish_result(frame(mode, 3), lambda: pytest.fail('duplicate'))
+    old = frame(mode, 4)
+    old.mode_generation -= 1
+    assert not mode.publish_result(old, lambda: pytest.fail('old generation'))
+    for sequence in range(4, 7):
+        emit(clock, mode, sequence, 5)
+    assert mode.status()['state'] == 'active'
+    assert mode.status()['automatic_recoveries'] == 1
+
+
+@pytest.mark.parametrize('reason', ['resource_low_disk', 'resource_thermal_fault',
+                                   'resource_monitor_stale', 'publication_failed'])
+def test_eco_cadence_cannot_overwrite_or_clear_manual_fault(reason):
+    clock, mode = connected()
+    ack(mode)
+    mode.eco_recovery_ready = True
+    mode.protect(reason)
+    clock.now += 18
+    assert mode.status()['reason'] == reason
+    for sequence in range(1, 4):
+        emit(clock, mode, sequence, 5)
+    assert mode.status()['reason'] == reason
+    assert not mode.status()['eco_auto_recovery_pending']
+    assert mode.status()['automatic_recoveries'] == 0
+
+
+def test_tracking_fault_cannot_become_automatic_eco_recovery():
+    clock, mode = connected()
+    mode.request('tracking', mode.version, ready=True)
+    ack(mode)
+    mode.eco_recovery_ready = True
+    emit(clock, mode, 1, .19)
+    clock.now += .501
+    assert mode.status()['requested_mode'] == 'eco'
+    ack(mode)
+    for sequence in range(2, 5):
+        emit(clock, mode, sequence, 5)
+    assert mode.status()['state'] == 'degraded'
+    assert not mode.status()['eco_auto_recovery_pending']
