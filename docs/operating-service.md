@@ -63,6 +63,15 @@ ACK後の初回結果待ちも同じ期限です。現boot/世代の重複しな
 資源/過熱/監視故障は手動解除のままです。画像自体の500ms鮮度制限は維持します。
 これは物理hard quotaではなく、実行中書込みや他processの超過を含む実bytesの測定が必要です。
 raw削除・自動VACUUMはしません。診断は既定off、明示的に最大600秒/32MiBで開始します。
+常用のfault contextは別途、native workerの直近8イベントをRAMに保持します。
+drop/failed/closed時のsnapshotを最大1件（8イベント）保留し、後続異常は集約します。
+event側は非待機lock・固定metadataのみで、画像/座標/キー/未知reasonの生値を保持しません。
+monitor側がlock外でJSON化し、本文4KiB以下・process全体で5分に最大1件を既存管理ログへ
+`operating_fault`として出力します。書込み失敗の再試行はありません。外側の行8KiB上限を含め
+連続稼働する単一process当たり最大288行/日・2.25MiB/日です。再起動で頻度窓はリセットし、
+保存容量には常に既存の全ログ30MiB rotationが適用されます（原本の保持保証ではありません）。
+`fault_context`で出力試行数（成功書込み数ではない）/保留/集約/不正field/拒否event/競合発生を表示。deviceのcapture/sendとhost単調時刻を区別し、
+各時刻はusです。常用成功ログの永続化は引き続き60秒集計のみです。
 
 private controlのrequestはJSON1KiB、JSON reply64KiB/JPEG128KiB、4handler、読込全体500ms。
 `camera_id,op`を必須とし、opは`status/frame/mode/resume/diagnostic.start/diagnostic.stop`。

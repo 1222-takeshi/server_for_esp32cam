@@ -18,6 +18,7 @@ from uuid import uuid4
 from script.capture_receiver import create_receiver
 from script.detector import Detection
 from script.diagnostic_logs import DiagnosticLog
+from script.fault_context import FaultContext
 from script.operating_mode import ModeError, OperatingMode
 from script.representative_writer import RepresentativeWriter, ResourceGuard, sample_resources
 from script.retention import apply_scheduled_retention, apply_upload_retention
@@ -61,6 +62,8 @@ class OperatingRuntime:
                        "rss_bytes": 0, "thermal_ok": False}
         self.notification_errors = 0
         self.diagnostic = None
+        self.fault_context = FaultContext(clock=clock)
+        self.fault_context_errors = 0
         self._tracker, self._tracking_generation = None, None
         self.stop = Event()
         self.monitor = None
@@ -77,6 +80,10 @@ class OperatingRuntime:
                     clock_us=lambda: int(clock() * 1_000_000))
 
     def _event(self, event):
+        try:
+            self.fault_context.observe(event)
+        except Exception:
+            self.fault_context_errors = min(2**64 - 1, self.fault_context_errors + 1)
         with self.ram_lock:
             if "counters" in event:
                 self.counters = dict(event["counters"])
@@ -193,6 +200,7 @@ class OperatingRuntime:
                     self.guard.monitor_failed()
                     self._protect()
                 last_cpu, last_time = cpu, now
+                self._log_fault_context()
                 if now >= next_log:
                     summary = self.status()
                     summary.pop("age_histogram_ms")  # Full histogram remains in bounded RAM/API.
@@ -202,6 +210,14 @@ class OperatingRuntime:
         self.monitor.start()
         self.maintenance = Thread(target=self._maintenance_loop, daemon=True)
         self.maintenance.start()
+
+    def _log_fault_context(self):
+        try:
+            fault = self.fault_context.take()
+            if fault is not None:
+                logger.warning("operating_fault %s", fault)
+        except Exception:
+            self.fault_context_errors = min(2**64 - 1, self.fault_context_errors + 1)
 
     def maintain(self):
         try:
@@ -236,6 +252,7 @@ class OperatingRuntime:
                 "retention_ok": self.retention_ok,
                 "webhook": self.app.extensions["webhook_notifier"].budget_status(),
                 "diagnostic": self.diagnostic.status() if self.diagnostic else {"state": "off"},
+                "fault_context": {**self.fault_context.status(), "errors": self.fault_context_errors},
                 "counters": counts, "vitals": dict(self.vitals), "notification_errors": self.notification_errors,
                 "metric_generation": generation, "age_histogram_ms": histogram, "max_gap_ms": gap,
                 "age_p95_ms": ages[int((len(ages) - 1) * .95)] if ages else None}

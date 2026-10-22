@@ -413,3 +413,32 @@ def test_resource_fault_dominates_eco_warning_and_auto_recovery(runtime, gap, fa
     assert rt.status()['state'] == 'degraded'
     assert rt.status()['resources']['paused']
     assert rt.mode.reason == reason
+
+
+def test_fault_context_keeps_drop_cause_without_touching_optional_diagnostics(runtime):
+    rt = runtime
+    rt._event({'status': 'dropped', 'reason': 'expired_queue', 'sequence': 1,
+               'age_high_us': 400000, 'queue_checked_us': 900000})
+    payload = json.loads(rt.fault_context.take())
+    assert payload['events'][-1]['reason'] == 'expired_queue'
+    assert not rt.diagnostic_dir.exists()
+    assert not rt.guard.status()['paused']
+    assert rt.status()['fault_context']['attempted'] == 1
+
+
+def test_fault_diagnostic_failure_does_not_stop_recognition_or_retry(runtime, monkeypatch):
+    from script import operating_runtime
+    rt = runtime
+    rt._event({'status': 'dropped', 'reason': 'expired_queue'})
+    def fail(*_):
+        raise OSError('log sink unavailable')
+    monkeypatch.setattr(operating_runtime.logger, 'warning', fail)
+    rt._log_fault_context()
+    assert rt.status()['fault_context']['errors'] == 1
+    rt._log_fault_context()
+    assert rt.status()['fault_context']['errors'] == 1  # No retry of a failed emission.
+    monkeypatch.setattr(rt.fault_context, 'observe', fail)
+    publish(rt, 1, ())
+    assert rt.status()['fault_context']['errors'] == 2
+    assert rt.status()['counters']['fresh_success'] == 1
+    assert not rt.guard.status()['paused']
