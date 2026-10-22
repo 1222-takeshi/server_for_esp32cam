@@ -38,7 +38,7 @@ class FaultContext:
             self._reject()
             return
         status = event.get("status")
-        if type(status) is str and status in {"clock", "device_status"}:
+        if type(status) is str and len(status) <= 16 and status in {"clock", "device_status"}:
             return  # Normal protocol telemetry is outside the frame diagnostic ring.
         if (type(status) is not str or len(status) > 16
                 or status not in {"accepted", "success", "dropped", "failed", "closed"}):
