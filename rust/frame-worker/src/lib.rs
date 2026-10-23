@@ -6,6 +6,8 @@ use std::collections::VecDeque;
 use std::io::{self, Read};
 use std::sync::Mutex;
 
+pub mod detector;
+
 pub const MAX_JPEG: usize = 128 * 1024;
 pub const MAX_GENERATION: u64 = (1 << 53) - 1;
 

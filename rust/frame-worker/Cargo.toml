@@ -6,3 +6,5 @@ rust-version = "1.88"
 publish = false
 
 [dependencies]
+ort = { version = "=2.0.0-rc.11", default-features = false, features = ["std", "load-dynamic"] }
+sha2 = "=0.10.9"
