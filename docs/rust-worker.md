@@ -60,3 +60,9 @@ SHA/JSON/入出力を除きます。infer_usはvalidation/copyを含むDetector 
 Linuxの`usage.cpu_ticks`はprocess全体のuser+system ticks（単位はOSのCLK_TCK）、
 `rss_kib/hwm_kib`はprocess RSS/初期化込みpeakです。不明ならnullとし、0と推定しません。
 固定画像の前処理/検出互換は、現場GTによる精度、24h安定性、消費電力W、本番移行と別の受入です。
+
+Clock port (#558): `clock::ClockWindow` preserves the Python eight-sample, 10s
+expiry and 200ppm drift interval. Run `python3 scripts/check_rust_clock.py` to
+verify the checked-in differential fixtures. This is a library gate only;
+a valid clock interval alone establishes neither profile ACK nor publication
+freshness, and the offline replay still does not perform live freshness checks.

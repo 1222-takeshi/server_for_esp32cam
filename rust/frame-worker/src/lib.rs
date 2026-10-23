@@ -6,6 +6,7 @@ use std::collections::VecDeque;
 use std::io::{self, Read};
 use std::sync::Mutex;
 
+pub mod clock;
 pub mod detector;
 #[cfg(feature = "jpeg")]
 pub mod jpeg;
