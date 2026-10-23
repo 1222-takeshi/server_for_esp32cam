@@ -1,57 +1,62 @@
 # Rust frame worker PoC
 
-Issue #553 の隔離PoCです。既存Pythonサービスとは接続せず、最初はframe replayで比較します。
-この段階でWebSocket認証・時計同期・profile ACK・500ms鮮度・motor制御を提供しません。
-envelopeをdecodeできても、実カメラの新鮮な認識結果として公開してはいけません。
+Issue #553のオフライン互換・性能検証用です。ECF2をstdinから有限回再生し、認識結果と計測値を
+JSON Linesでstdoutへ返します。実行中は1画像・待ちqueueなし、最大120画像・出力1行64KiBです。
+不正/途中EOF/重複/逆順/モデル故障/出力故障で非0終了し、無限retryしません。
 
-`rust/frame-worker` はECF1/ECF2のbig-endian header・正整数identity・時刻順序・世代上限・
-JPEG最大128KiB・宣言長を検証します。stream readerは宣言長をpayload allocation前に検査し、
-途中EOFを拒否します。JPEG実体の検査はdetectorの責務です。orderingは直近32 retired boot、
-最新slotは待ち1件・非待機lockです。受信時のmodeを旧frameへ付け直しません。
+本番Pythonサービスへは接続しません。WebSocket認証、時計同期、profile ACK、実時間の500ms鮮度、
+eco/tracking制御、保存/通知を提供しない段階です。全結果に`replay_only=true`、
+`freshness_checked=false`、`actuation_state=hold`を強制します。実機の新鮮な認識結果や
+motor commandへ流用してはいけません。オフラインHzをcamera live Hz/10Hz達成とは扱いません。
 
-```sh
-cd rust/frame-worker
-cargo fmt --check
-cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked
-```
+## 入力・推論契約
 
-build成果物は既存`.gitignore`の`target/`で除外し、Cargo.lockは追跡します。
-固定モデル/ORT1.23.2のdetectorとJPEG moduleは実装済みで、次にreplay CLIとPi比較を追加します。
-既存raw/GT/baselineを変更せず、認識精度・5/10Hz・本番移行を先取りして受入しません。
+libraryはECF1/ECF2を検証しますが、CLIはECF2必須です。big-endian header、正整数identity、
+capture/sendの順序、世代上限2**53-1、JPEG128KiB、宣言長を検証します。宣言長はallocation前に
+検査し、retired bootは直近32件を記憶します。CLIはACK/時刻の信頼性を検証しません。
 
-## 固定profile detector
+JPEGは幅320・高さ240または320、最初のscan前のEXIFを拒否（後続scan間metadataは検査しない）、
+scan上限64。decode前に寸法を検査しRGB bufferを制限します。resizeせずpadding114/CHW/FP32へ
+変換します。純Rust decoder2種類では固定20画像が不一致だったため、同じupstream版
+libjpeg-turbo3.1.4.1の公式static archiveをsafe Rust wrapper経由で使います。
+Pi上の固定20枚ではRGB/tensor全bytes一致を確認しました。元の不一致結果も保全します。
 
-`detector`は受入済みモデルのSHAと、PiのARM64 ORT1.23.2共有ライブラリのSHAを検査します。
-`ort = 2.0.0-rc.11`の動的ロードだけを使用し、ORT/modelの自動downloadは無効です。
-CPU・FP32・320・3 intra threads・1 inter thread・sequential・spinning off・全graph最適化、
-threshold0.5 / class-aware NMS0.7 / 全class合計max_det300を固定します。
-モデルは検証した同じbytesからsessionを生成します。共有libraryは管理者専用の不変pathで、検証から初期化完了まで差し替えません。
-相対pathはcanonicalな絶対pathへ解決し、その同じpathをhash検査とloaderへ渡します。
+モデルSHAは`ff1013da8734fe2b8ede5f34a2124855d447fbefd248d148e9f29e7f8e28c9c4`に固定。
+PiのARM64 ORT1.23.2 library SHAも検査し、canonicalな同一絶対pathをhash/loadへ渡します。
+libraryは管理者専用・初期化中は不変とします。モデルは検証した同じbytesからsessionを生成し、
+ORT/modelを自動downloadしません。CPU/FP32/320/3 intra threads/1 inter thread/sequential/
+spinning off/ORT_ENABLE_ALL、score0.5/class-aware NMS0.7/全class合計max_det300です。
+同scoreの候補はNumPyのtie順位をまだ保証できないため、PoCでは結果を推測せず拒否します。
 
-RGB入力は幅320・高さ240または320だけで、resizeせずpadding114/CHW/FP32正規化を行います。
-JPEG decodeはoptional jpeg moduleで提供し、frame/replayへの接続は次段階です。
-最初のscan前のEXIF/他geometryはPoCの対象外です。全raw出力のfinite/shapeを確認します。
-同じconfidenceの候補が複数あるとNumPy argsortのtie順序を保証できないため、結果を推測せず拒否します。
-この制約も含め本番互換とはまだ扱わず、固定20画像でtensor/raw/detectionの互換を別々に検証します。
+## Build・再生
 
-Cargo.lockは依存hash manifestとして追跡します。replay/比較ツールは後続PRへ分割します。
-
-## JPEG互換経路
-
-純Rust decoder2種類は固定20枚のRGB/tensorがPythonと一致せず、原結果を保全しました。
-同じlibjpeg-turbo3.1.4.1の公式static archiveではPi上の20枚全てでRGB/tensorの全bytesが一致しました。
-Rustはsafe wrapper `turbojpeg` を使い、JPEG native codecとORTは既存と同じ役割を継続します。
-crateが同梱する古いcodecはbuildせず、公式DebのSHAを検証してstatic archiveとlicenseだけを取り出します。
-本番のPillow/OS packageを変更しません。binary配布時は生成したLICENSE.mdも同梱してください。
+Rust 1.95.0で検証します。次はLinux ARM64 build環境向けの例です。
+Macからのcross buildでは別途ARM64 targetとlinker設定が必要です。Pi評価時はcross buildした
+binaryを転送し、PiへRust toolchainを常設していません。
 
 ```sh
-python3 scripts/prepare_rust_jpeg.py --arch arm64 --output /private/NEW-jpeg-prefix
-export TURBOJPEG_SOURCE=explicit TURBOJPEG_STATIC=1 TURBOJPEG_LIB_DIR=/private/NEW-jpeg-prefix
+prefix=$(mktemp -d)
+python3 scripts/prepare_rust_jpeg.py --arch arm64 --output "$prefix/jpeg"
+export TURBOJPEG_SOURCE=explicit TURBOJPEG_STATIC=1 TURBOJPEG_LIB_DIR="$prefix/jpeg"
+cargo fmt --manifest-path rust/frame-worker/Cargo.toml --check
+cargo clippy --manifest-path rust/frame-worker/Cargo.toml --locked --all-targets --all-features -- -D warnings
 cargo test --manifest-path rust/frame-worker/Cargo.toml --locked --all-features
+cargo build --manifest-path rust/frame-worker/Cargo.toml --locked --release --features jpeg
+rust/frame-worker/target/release/frame-worker /private/yolo11n.onnx /private/libonnxruntime.so.1.23.2 \
+  < /private/input.ecf2 > "$prefix/results.jsonl"
 ```
 
-build prefixは新規のみ、download8MiB/native file16MiB/package計64MiB以下。
-archiveのpath/linkを展開せず固定2ファイルのみ出力し、manifestを最後に確定します。
-JPEG入力は128KiB、幅320・高さ240/320、progressive scan上限64、最初のscan前のEXIFは拒否します（後続scan間のmetadataは検査しません）。
-寸法を検査してからRGB bufferを確保します。画像geometryを広げる前に別の互換検証が必要です。
+取得toolは公式Deb SHAを検証し、path/linkを展開せずstatic libraryとLICENSEだけを新規700
+prefixへ出力します。download8MiB/file16MiB/package計64MiB・1024members以下、manifestを最後に
+作成します。crate付属の旧codecはbuildしません。本番Pillow/OS packageを変更しません。
+binary配布時は生成したLICENSE.mdも同梱し、受入証跡は保護したprivate領域に保存してください。
+Cargo.lockは追跡し、build成果物は既存`.gitignore`の`target/`で除外します。
+
+## 計測値の解釈
+
+`decode_us/prepare_us/infer_us/post_us/total_us`はenvelope受信後からNMS完了までのcomputeで、
+SHA/JSON/入出力を除きます。infer_usはvalidation/copyを含むDetector APIの時間で、
+純kernel時間ではありません。各言語のAPI境界が違うため、主比較にはtotal_usを使います。`wall_us`はmodel初期化後の再生時間で、それらのoverheadも含みます。
+Linuxの`usage.cpu_ticks`はprocess全体のuser+system ticks（単位はOSのCLK_TCK）、
+`rss_kib/hwm_kib`はprocess RSS/初期化込みpeakです。不明ならnullとし、0と推定しません。
+固定画像の前処理/検出互換は、現場GTによる精度、24h安定性、消費電力W、本番移行と別の受入です。
