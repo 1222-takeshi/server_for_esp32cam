@@ -17,13 +17,15 @@ jobs:
     env:
       TURBOJPEG_SOURCE: explicit
       TURBOJPEG_STATIC: '1'
-      TURBOJPEG_LIB_DIR: ${{ runner.temp }}/rust-jpeg
     defaults:
       run:
         working-directory: rust/frame-worker
     steps:
       - uses: actions/checkout@v4
-      - run: python3 scripts/prepare_rust_jpeg.py --arch amd64 --output "$TURBOJPEG_LIB_DIR"
+      - run: |
+          jpeg_prefix=$(mktemp -d "$RUNNER_TEMP/rust-jpeg.XXXXXX")
+          python3 scripts/prepare_rust_jpeg.py --arch amd64 --output "$jpeg_prefix/library"
+          echo "TURBOJPEG_LIB_DIR=$jpeg_prefix/library" >> "$GITHUB_ENV"
         working-directory: .
       - uses: dtolnay/rust-toolchain@stable
         with:
