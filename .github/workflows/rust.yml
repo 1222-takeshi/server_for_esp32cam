@@ -2,9 +2,9 @@ name: Rust PoC
 on:
   push:
     branches: [main]
-    paths: ['rust/**', '.github/workflows/rust.yml']
+    paths: ['rust/**', 'scripts/prepare_rust_jpeg.py', 'tests/test_prepare_rust_jpeg.py', '.github/workflows/rust.yml']
   pull_request:
-    paths: ['rust/**', '.github/workflows/rust.yml']
+    paths: ['rust/**', 'scripts/prepare_rust_jpeg.py', 'tests/test_prepare_rust_jpeg.py', '.github/workflows/rust.yml']
 permissions:
   contents: read
 concurrency:
@@ -14,22 +14,37 @@ jobs:
   rust:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      TURBOJPEG_SOURCE: explicit
+      TURBOJPEG_STATIC: '1'
     defaults:
       run:
         working-directory: rust/frame-worker
     steps:
       - uses: actions/checkout@v4
+      - id: native
+        run: |
+          case "$(uname -m)" in
+            x86_64) jpeg_arch=amd64 ;;
+            aarch64|arm64) jpeg_arch=arm64 ;;
+            *) exit 1 ;;
+          esac
+          echo "arch=$jpeg_arch" >> "$GITHUB_OUTPUT"
+          jpeg_prefix=$(mktemp -d "$RUNNER_TEMP/rust-jpeg.XXXXXX")
+          python3 scripts/prepare_rust_jpeg.py --arch "$jpeg_arch" --output "$jpeg_prefix/library"
+          echo "TURBOJPEG_LIB_DIR=$jpeg_prefix/library" >> "$GITHUB_ENV"
+        working-directory: .
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: '1.95.0'
           components: rustfmt, clippy
       - run: cargo fmt --check
-      - run: cargo clippy --locked --all-targets -- -D warnings
-      - run: cargo test --locked
+      - run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --all-features
       - uses: actions/cache@v4
         with:
           path: ~/.cargo/bin/cargo-audit
-          key: cargo-audit-0.22.2-${{ runner.os }}-${{ runner.arch }}
+          key: esp32cam-cargo-audit-v2-0.22.2-${{ runner.os }}-${{ steps.native.outputs.arch }}
         id: audit-cache
       - if: steps.audit-cache.outputs.cache-hit != 'true'
         run: cargo install cargo-audit --version 0.22.2 --locked
