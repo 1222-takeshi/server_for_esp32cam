@@ -22,9 +22,16 @@ jobs:
         working-directory: rust/frame-worker
     steps:
       - uses: actions/checkout@v4
-      - run: |
+      - id: native
+        run: |
+          case "$(uname -m)" in
+            x86_64) jpeg_arch=amd64 ;;
+            aarch64|arm64) jpeg_arch=arm64 ;;
+            *) exit 1 ;;
+          esac
+          echo "arch=$jpeg_arch" >> "$GITHUB_OUTPUT"
           jpeg_prefix=$(mktemp -d "$RUNNER_TEMP/rust-jpeg.XXXXXX")
-          python3 scripts/prepare_rust_jpeg.py --arch amd64 --output "$jpeg_prefix/library"
+          python3 scripts/prepare_rust_jpeg.py --arch "$jpeg_arch" --output "$jpeg_prefix/library"
           echo "TURBOJPEG_LIB_DIR=$jpeg_prefix/library" >> "$GITHUB_ENV"
         working-directory: .
       - uses: dtolnay/rust-toolchain@stable
@@ -37,7 +44,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/.cargo/bin/cargo-audit
-          key: cargo-audit-0.22.2-${{ runner.os }}-${{ runner.arch }}
+          key: cargo-audit-0.22.2-${{ runner.os }}-${{ steps.native.outputs.arch }}
         id: audit-cache
       - if: steps.audit-cache.outputs.cache-hit != 'true'
         run: cargo install cargo-audit --version 0.22.2 --locked
