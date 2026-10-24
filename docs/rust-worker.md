@@ -1,13 +1,16 @@
-# Rust frame worker PoC
+# Rust frame workers
 
-Issue #553のオフライン互換・性能検証用です。ECF2をstdinから有限回再生し、認識結果と計測値を
+`frame-worker`はIssue #553のオフライン互換・性能検証用です。ECF2をstdinから有限回再生し、認識結果と計測値を
 JSON Linesでstdoutへ返します。実行中は1画像・待ちqueueなし、最大120画像・出力1行64KiBです。
 不正/途中EOF/重複/逆順/モデル故障/出力故障で非0終了し、無限retryしません。
 
-本番Pythonサービスへは接続しません。WebSocket認証、時計同期、profile ACK、実時間の500ms鮮度、
+`frame-worker`は本番Pythonサービスへ接続せず、WebSocket認証、時計同期、profile ACK、実時間の500ms鮮度、
 eco/tracking制御、保存/通知を提供しない段階です。全結果に`replay_only=true`、
 `freshness_checked=false`、`actuation_state=hold`を強制します。実機の新鮮な認識結果や
 motor commandへ流用してはいけません。オフラインHzをcamera live Hz/10Hz達成とは扱いません。
+
+`frame-live`はIssue #558の有限Pi実機検証用で、下記の認証・時計・ACK・worker・試験制御を
+接続します。通常のPython UI/保存/通知の置換は含まず、外部の監視・自動復旧が必要です。
 
 ## 入力・推論契約
 
@@ -74,10 +77,10 @@ publication_failedへ保護遷移します。時計によるcapture age≤500ms�
 5秒ACK期限、trackingの500ms gapと連続10秒窓≥50件、ecoの17秒猶予と正常3件での復帰を
 Pythonと同じに保ちます。tracking故障後やresource故障は自動解除せず、再接続はecoです。
 `python3 scripts/check_rust_mode.py`とRust testsで18本のPython参照traceを照合します。
-CLIおよび本番Pythonサービスへの接続は別段階で、モータ制御・live Hz達成を意味しません。
+このモードlibrary単独ではモータ制御・live Hz達成を意味せず、実測はframe-liveと復旧監視で行います。
 
 任意feature `transport`の`Connection`はcamera path/API keyを検証するLAN内WebSocketです。
-TLSは提供せず、本番listenerへの接続はまだ行いません。handshakeは接続開始から2秒/8KiB、
+TLSは提供せず、通常運用への常設切替は行っていません。handshakeは接続開始から2秒/8KiB、
 受信frame/messageは共通でECF2+JPEG128KiBまで読み込み、textの受理上限は読み込み後に512Bで検査します。
 receive呼出は分割frameの継続中も絶対期限50msで戻り、writeは200msです。
 key重複・query付きpath・未mask frame・圧縮を許可しません。keyを含むrequestやerrorを表示せず、
@@ -132,3 +135,7 @@ reportはJPEGを含まず、測定失敗コードを保持し、global_acceptanc
 到着後経過はqueue待ちとcompute等を含む値で、純queue時間ではありません。dropを成功扱いにしません。
 このringは推論threadで破棄した結果の診断で、全dropの台帳ではありません。queue置換・busyは
 receiverの集計で確認し、停止時に未処理のまま残るqueue itemはringに含みません。
+
+破棄metadataの`capture_to_send_us`はdevice上のcapture→send経過、`arrival_age_low_us`/
+`arrival_age_high_us`は到着時の保守的age区間です。device内の滞留とhost到着までの遅延を
+検討する材料であり、この区間だけで無線の原因を断定しません。
