@@ -24,3 +24,8 @@ bytemuck = "=1.25.2"
 tungstenite = { version = "=0.30.0", default-features = false, features = ["handshake"], optional = true }
 subtle = { version = "=2.6.1", optional = true }
 getrandom = { version = "=0.4.3", features = ["std"], optional = true }
+
+[[bin]]
+name = "frame-live"
+path = "src/live_main.rs"
+required-features = ["jpeg", "transport"]
