@@ -115,3 +115,13 @@ Worker.stopは実行中native呼び出しの終了を待ちます。Model/runtim
 故障時にtrackingを再要求せず、raw sampleを調整して成功扱いにしません。supervisorの準備済み
 信号が必須です。heartbeat ticketはnonce/128B/時刻誤差1.5秒を検証し、cameraの単調時計とは別です。
 このlibraryはlistener/model/復旧機構を起動せず、実環境精度/10Hz/24h/Wの受入ではありません。
+
+`frame-live MODEL ORT ADDRESS CAMERA`は`jpeg,transport`両featureが必要な有限Pi試験binaryです。
+per-device key mapが非空ならcamera専用keyを必須とし、shared keyは明示したdevice IDとの完全一致を
+要求します。実keyは環境から読み、argv/log/reportへ出しません。EXPECTED_BOOTと16hexのtrial nonceを
+別のprivate環境変数で渡し、stdinから`ready NONCE UNIX_MS`の監視ticketを定期的に送る必要があります。
+監視readerは1行128B、cached ticketはmonotonic2秒/wall差1.5秒以内のみ有効、EOFで停止します。
+model初期化後のcamera接続期限20秒、session180秒、tracking評価60秒、出力report最大2MiBです。
+reportはJPEGを含まず、測定失敗コードを保持し、global_acceptance/physical_motor_controlをfalseに
+固定します。native終了待ちを含むため、外部のprocess deadlineと永続的な復旧guardを必ず併用してください。
+通常のPython service/UI/保存/通知はこのbinaryへ移行しておらず、本番切替は別のguarded手順です。
