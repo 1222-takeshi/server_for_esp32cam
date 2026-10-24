@@ -236,7 +236,18 @@ impl OperatingMode {
         frame: &Frame,
         publish: impl FnOnce() -> bool,
     ) -> Result<bool> {
-        self.tick()?; // A late result must not conceal an already expired gap.
+        self.publish_if(frame, |_| true, publish)
+    }
+    /// Additional bounded RAM-only gate, evaluated under the owner's mode lock.
+    /// A false gate drops the result without treating it as a publication fault.
+    pub fn publish_if(
+        &mut self,
+        frame: &Frame,
+        eligible: impl FnOnce(u64) -> bool,
+        publish: impl FnOnce() -> bool,
+    ) -> Result<bool> {
+        let now = self.now();
+        self.tick_at(now)?; // Use the same decision time for watchdog and publication.
         if !self.allows(frame)
             || self
                 .frames
@@ -246,7 +257,14 @@ impl OperatingMode {
             self.rejected_result = self.rejected_result.saturating_add(1);
             return Ok(false);
         }
-        let now = self.now();
+        let eligible = catch_unwind(AssertUnwindSafe(|| eligible(now))).map_err(|_| {
+            let _ = self.protect("publication_failed");
+            ModeError(503)
+        })?;
+        if !eligible {
+            self.rejected_result = self.rejected_result.saturating_add(1);
+            return Ok(false);
+        }
         if !catch_unwind(AssertUnwindSafe(publish)).unwrap_or(false) {
             self.protect("publication_failed")?;
             return Err(ModeError(503));
@@ -311,10 +329,12 @@ impl OperatingMode {
         }
     }
     pub fn tick(&mut self) -> Result<()> {
+        self.tick_at(self.now())
+    }
+    fn tick_at(&mut self, now: u64) -> Result<()> {
         if !self.connected {
             return Ok(());
         }
-        let now = self.now();
         self.trim(now);
         if self.ack.is_none() {
             if now - self.requested_at >= 5_000_000 {

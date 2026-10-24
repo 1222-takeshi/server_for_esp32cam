@@ -181,3 +181,93 @@ fn publication_panic_latches_eco_without_poisoning_owner_mutex() {
     assert_eq!(status["actuation_state"], "hold");
     assert_eq!(status["reason"], "publication_failed");
 }
+
+#[test]
+fn watchdog_and_gate_share_one_clock_sample_at_the_gap_boundary() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize};
+    let armed = Arc::new(AtomicBool::new(false));
+    let reads = Arc::new(AtomicUsize::new(0));
+    let (a, r) = (armed.clone(), reads.clone());
+    let mut mode = OperatingMode::new(10, move || {
+        if !a.load(Ordering::SeqCst) {
+            100_000
+        } else if r.fetch_add(1, Ordering::SeqCst) == 0 {
+            599_999
+        } else {
+            600_001
+        }
+    })
+    .unwrap();
+    mode.hello(1, 0).unwrap();
+    mode.request(Mode::Tracking, mode.generation(), true)
+        .unwrap();
+    mode.acknowledge(1, mode.generation(), Mode::Tracking, 100)
+        .unwrap();
+    assert!(mode.publish_result(&frame(&mode, 1), || true).unwrap());
+    armed.store(true, Ordering::SeqCst);
+    assert!(
+        mode.publish_if(
+            &frame(&mode, 2),
+            |at| {
+                assert_eq!(at, 599_999);
+                true
+            },
+            || true
+        )
+        .unwrap()
+    );
+    assert_eq!(mode.frames.back().unwrap().at, 599_999);
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        mode.status().unwrap()["last_result_age_seconds"],
+        json!(0.000002)
+    );
+}
+
+#[test]
+fn false_guard_skips_callback_and_panicking_guard_latches_hold() {
+    let (mut mode, _) = setup();
+    mode.hello(1, 0).unwrap();
+    mode.acknowledge(1, mode.generation(), Mode::Eco, 100)
+        .unwrap();
+    let input = frame(&mode, 1);
+    let generation = mode.generation();
+    assert!(
+        !mode
+            .publish_if(&input, |_| false, || panic!("ineligible callback"))
+            .unwrap()
+    );
+    assert_eq!(mode.generation(), generation);
+    assert!(mode.status().unwrap()["reason"].is_null());
+    assert_eq!(
+        mode.publish_if(&input, |_| panic!("gate failure"), || true),
+        Err(ModeError(503))
+    );
+    assert_eq!(mode.status().unwrap()["reason"], "publication_failed");
+}
+#[test]
+fn paused_guard_uses_its_original_watchdog_stamp() {
+    let (mut mode, time) = setup();
+    time.store(100_000, Ordering::SeqCst);
+    mode.hello(1, 0).unwrap();
+    mode.request(Mode::Tracking, mode.generation(), true)
+        .unwrap();
+    mode.acknowledge(1, mode.generation(), Mode::Tracking, 100)
+        .unwrap();
+    assert!(
+        mode.publish_if(
+            &frame(&mode, 1),
+            |at| {
+                assert_eq!(at, 100_000);
+                time.store(700_001, Ordering::SeqCst);
+                true
+            },
+            || true
+        )
+        .unwrap()
+    );
+    let status = mode.status().unwrap();
+    assert_eq!(status["requested_mode"], "eco");
+    assert_eq!(status["reason"], "frames_expired");
+    assert_eq!(status["actuation_state"], "hold");
+}
