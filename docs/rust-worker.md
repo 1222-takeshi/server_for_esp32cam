@@ -94,3 +94,11 @@ SessionClockはboot固定・同時pending1件・1秒RTT/nonce照合・eco2秒/tr
 Arrivalはboot/sequence/capture/send/世代の識別子に結び付き、別のフレーム識別子への転用を拒否します。JPEG本体の照合は含みません。
 公開gateにはMode自身の判定時刻を渡し、watchdog・鮮度判定・公開stampを同じ時刻で
 記録します。gate後の遅延によって古い結果の期限を更新しません。
+
+`pipeline::Worker`はnative推論を専用threadで実行し、待機は常に最新1枚です。前段で165msを
+予約し、完了時はモードと同じMutex下で500ms/世代/キャンセルを確認します。公開・保存用に
+元画像を複製せず、最新metadata/detectionと有限試験の最大8192件のRAM内sampleだけを持ちます。
+sample上限到達はevidence_lostへ計上し、SDへframe単位logを書きません。
+JSON/clock/順序/JPEG検査とsession所有権は上位ownerの責務です。native推論そのものはthreadから
+強制中断できないため、有限試験にはprocess全体を終了できる外部supervisorの期限が必須です。
+Worker.stopは実行中native呼び出しの終了を待ちます。Model/runtime実体と通常運用配線は別段階です。

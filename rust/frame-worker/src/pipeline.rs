@@ -1,0 +1,277 @@
+//! One inference thread + one latest waiting frame. No disk or network I/O.
+//! Finite live experiments only: a supervisor must enforce a process deadline
+//! because an in-flight native inference cannot be forcibly cancelled in Rust.
+use crate::{
+    Frame, LatestSlot, MAX_JPEG,
+    control::Arrival,
+    detector::Detection,
+    operating_mode::{ModeError, OperatingMode},
+};
+use std::{
+    cell::Cell,
+    io,
+    panic::{AssertUnwindSafe, catch_unwind},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread::{self, JoinHandle},
+    time::Duration,
+};
+
+pub type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
+const MAX_SAMPLES: usize = 8192;
+pub struct Job {
+    pub frame: Frame,
+    pub arrival: Arrival,
+    pub cancelled: Arc<AtomicBool>,
+}
+pub struct Completed {
+    pub frame: Frame,
+    pub detections: Vec<Detection>,
+    pub published_us: u64,
+    pub compute_us: u64,
+    arrival: Arrival,
+}
+impl Completed {
+    pub fn age_bounds(&self, now: u64) -> Option<(i128, i128)> {
+        self.arrival.age_bounds(&self.frame, now)
+    }
+}
+#[derive(Default)]
+pub struct Counters {
+    pub inferred: u64,
+    pub published: u64,
+    pub dropped: u64,
+    pub failures: u64,
+    pub evidence_lost: u64,
+}
+#[derive(Clone, Copy)]
+pub struct Sample {
+    pub boot: u64,
+    pub generation: u64,
+    pub sequence: u64,
+    pub published_us: u64,
+    pub age_high_us: i128,
+    pub compute_us: u64,
+}
+pub struct State {
+    clock: Clock,
+    pub mode: OperatingMode,
+    pub counters: Counters,
+    latest: Option<Arc<Completed>>,
+    samples: Vec<Sample>,
+}
+impl State {
+    pub fn new(generation: u64, clock: Clock) -> Result<Self, ModeError> {
+        let copy = clock.clone();
+        let mode = OperatingMode::new(generation, move || copy())?;
+        Ok(Self {
+            clock,
+            mode,
+            counters: Counters::default(),
+            latest: None,
+            samples: Vec::new(),
+        })
+    }
+    pub fn samples(&self) -> &[Sample] {
+        &self.samples
+    }
+    pub fn latest(&mut self) -> Result<Option<Arc<Completed>>, ModeError> {
+        self.mode.tick()?;
+        let now = (self.clock)();
+        Ok(self
+            .latest
+            .as_ref()
+            .filter(|r| self.mode.allows(&r.frame) && r.arrival.fits(&r.frame, now, 0))
+            .cloned())
+    }
+    /// Fence cancellation and disconnect with the same lock as publication.
+    pub fn disconnect(&mut self, token: &AtomicBool) -> Result<(), ModeError> {
+        token.store(true, Ordering::Release);
+        self.latest = None;
+        self.mode.disconnect()
+    }
+}
+#[derive(Debug, PartialEq, Eq)]
+pub enum Submit {
+    Queued,
+    Overwritten,
+    Busy,
+    Stopped,
+    Invalid,
+}
+pub struct Worker {
+    queue: Arc<LatestSlot<Job>>,
+    stopped: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+impl Worker {
+    pub fn start(
+        state: Arc<Mutex<State>>,
+        mut infer: impl FnMut(&[u8]) -> Result<Vec<Detection>, &'static str> + Send + 'static,
+    ) -> io::Result<Self> {
+        let clock = state
+            .lock()
+            .map_err(|_| io::Error::other("state unavailable"))?
+            .clock
+            .clone();
+        let queue = Arc::new(LatestSlot::<Job>::default());
+        let stopped = Arc::new(AtomicBool::new(false));
+        let (waiting, stop) = (queue.clone(), stopped.clone());
+        let handle = thread::Builder::new()
+            .name("frame-inference".into())
+            .spawn(move || {
+                while !stop.load(Ordering::Acquire) {
+                    let Some(job) = waiting.take() else {
+                        thread::park_timeout(Duration::from_millis(100));
+                        continue;
+                    };
+                    {
+                        let Ok(mut s) = state.lock() else {
+                            break;
+                        };
+                        if job.cancelled.load(Ordering::Acquire)
+                            || !s.mode.allows(&job.frame)
+                            || !job.arrival.fits(&job.frame, clock(), 165_000)
+                        {
+                            s.counters.dropped = s.counters.dropped.saturating_add(1);
+                            continue;
+                        }
+                    }
+                    let begun = clock();
+                    let output = catch_unwind(AssertUnwindSafe(|| infer(&job.frame.jpeg)))
+                        .ok()
+                        .and_then(Result::ok);
+                    let compute_us = clock().saturating_sub(begun);
+                    let Ok(mut s) = state.lock() else {
+                        break;
+                    };
+                    s.counters.inferred = s.counters.inferred.saturating_add(1);
+                    if stop.load(Ordering::Acquire)
+                        || job.cancelled.load(Ordering::Acquire)
+                        || !s.mode.allows(&job.frame)
+                    {
+                        s.counters.dropped = s.counters.dropped.saturating_add(1);
+                        continue;
+                    }
+                    let Some(detections) = output.filter(|v| {
+                        v.len() <= 300
+                            && v.iter().all(|d| {
+                                d.score.is_finite()
+                                    && (0.0..=1.0).contains(&d.score)
+                                    && d.bbox
+                                        .iter()
+                                        .all(|n| n.is_finite() && (0.0..=1.0).contains(n))
+                                    && d.bbox[0] < d.bbox[2]
+                                    && d.bbox[1] < d.bbox[3]
+                            })
+                    }) else {
+                        s.counters.failures = s.counters.failures.saturating_add(1);
+                        let _ = s.mode.protect("inference_failed");
+                        continue;
+                    };
+                    let frame = Frame {
+                        jpeg: vec![],
+                        ..job.frame
+                    };
+                    let arrival = job.arrival;
+                    let mut completed = Arc::new(Completed {
+                        frame,
+                        detections,
+                        published_us: 0,
+                        compute_us,
+                        arrival,
+                    });
+                    let State {
+                        mode,
+                        latest,
+                        counters,
+                        samples,
+                        ..
+                    } = &mut *s;
+                    let published_at = Cell::new(0);
+                    let published = mode
+                        .publish_if(
+                            &job.frame,
+                            |now| {
+                                published_at.set(now);
+                                !stop.load(Ordering::Acquire)
+                                    && !job.cancelled.load(Ordering::Acquire)
+                                    && arrival.fits(&job.frame, published_at.get(), 0)
+                            },
+                            || {
+                                Arc::get_mut(&mut completed).unwrap().published_us =
+                                    published_at.get();
+                                *latest = Some(completed.clone());
+                                if samples.len() < MAX_SAMPLES {
+                                    samples.push(Sample {
+                                        boot: completed.frame.boot,
+                                        generation: completed.frame.generation.unwrap(),
+                                        sequence: completed.frame.sequence,
+                                        published_us: completed.published_us,
+                                        age_high_us: completed
+                                            .age_bounds(completed.published_us)
+                                            .unwrap()
+                                            .1,
+                                        compute_us,
+                                    });
+                                } else {
+                                    counters.evidence_lost =
+                                        counters.evidence_lost.saturating_add(1);
+                                }
+                                true
+                            },
+                        )
+                        .unwrap_or(false);
+                    if published {
+                        counters.published = counters.published.saturating_add(1);
+                    } else {
+                        counters.dropped = counters.dropped.saturating_add(1);
+                    }
+                }
+                stop.store(true, Ordering::Release);
+            })?;
+        Ok(Self {
+            queue,
+            stopped,
+            thread: Some(handle),
+        })
+    }
+    pub fn submit(&self, job: Job) -> Submit {
+        if self.stopped.load(Ordering::Acquire) {
+            return Submit::Stopped;
+        }
+        if !job.arrival.matches(&job.frame)
+            || job.frame.jpeg.is_empty()
+            || job.frame.jpeg.len() > MAX_JPEG
+        {
+            return Submit::Invalid;
+        }
+        let result = match self.queue.replace(job) {
+            Ok(None) => Submit::Queued,
+            Ok(Some(_)) => Submit::Overwritten,
+            Err(_) => Submit::Busy,
+        };
+        self.thread.as_ref().unwrap().thread().unpark();
+        result
+    }
+    /// May wait for a native call. The process supervisor supplies the hard limit.
+    pub fn stop(mut self) -> thread::Result<()> {
+        self.stopped.store(true, Ordering::Release);
+        let handle = self.thread.take().unwrap();
+        handle.thread().unpark();
+        handle.join()
+    }
+}
+impl Drop for Worker {
+    fn drop(&mut self) {
+        self.stopped.store(true, Ordering::Release);
+        if let Some(handle) = &self.thread {
+            handle.thread().unpark();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;
