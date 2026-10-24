@@ -238,6 +238,9 @@ pub struct Arrival {
     identity: FrameIdentity,
 }
 impl Arrival {
+    pub fn received_us(&self) -> u64 {
+        self.received
+    }
     pub fn matches(&self, frame: &Frame) -> bool {
         self.identity == frame_identity(frame)
     }

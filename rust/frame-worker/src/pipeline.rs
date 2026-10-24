@@ -38,6 +38,17 @@ impl Completed {
         self.arrival.age_bounds(&self.frame, now)
     }
 }
+pub struct DropSample {
+    pub boot: u64,
+    pub generation: Option<u64>,
+    pub sequence: u64,
+    pub at_us: u64,
+    pub stage: &'static str,
+    pub age_high_us: Option<i128>,
+    pub arrival_age_high_us: Option<i128>,
+    pub wait_us: Option<u64>,
+    pub compute_us: u64,
+}
 #[derive(Default)]
 pub struct Counters {
     pub inferred: u64,
@@ -63,6 +74,7 @@ pub struct State {
     pub counters: Counters,
     latest: Option<Arc<Completed>>,
     samples: Vec<Sample>,
+    drops: std::collections::VecDeque<DropSample>,
 }
 impl State {
     pub fn new(generation: u64, clock: Clock) -> Result<Self, ModeError> {
@@ -76,6 +88,7 @@ impl State {
             counters: Counters::default(),
             latest: None,
             samples: Vec::new(),
+            drops: std::collections::VecDeque::with_capacity(32),
         })
     }
     pub fn now(&self) -> u64 {
@@ -107,6 +120,29 @@ impl State {
     }
     pub fn samples(&self) -> &[Sample] {
         &self.samples
+    }
+    pub fn drops(&self) -> &std::collections::VecDeque<DropSample> {
+        &self.drops
+    }
+    fn dropped(&mut self, job: &Job, stage: &'static str, now: u64, compute_us: u64) {
+        self.counters.dropped = self.counters.dropped.saturating_add(1);
+        if self.drops.len() == 32 {
+            self.drops.pop_front();
+        }
+        self.drops.push_back(DropSample {
+            boot: job.frame.boot,
+            generation: job.frame.generation,
+            sequence: job.frame.sequence,
+            at_us: now,
+            stage,
+            age_high_us: job.arrival.age_bounds(&job.frame, now).map(|b| b.1),
+            arrival_age_high_us: job
+                .arrival
+                .age_bounds(&job.frame, job.arrival.received_us())
+                .map(|b| b.1),
+            wait_us: now.checked_sub(job.arrival.received_us()),
+            compute_us,
+        });
     }
     pub fn latest(&mut self) -> Result<Option<Arc<Completed>>, ModeError> {
         self.mode.tick()?;
@@ -164,11 +200,18 @@ impl Worker {
                         let Ok(mut s) = state.lock() else {
                             break;
                         };
-                        if job.cancelled.load(Ordering::Acquire)
-                            || !s.mode.allows(&job.frame)
-                            || !job.arrival.fits(&job.frame, clock(), 165_000)
-                        {
-                            s.counters.dropped = s.counters.dropped.saturating_add(1);
+                        let now = clock();
+                        let reason = if job.cancelled.load(Ordering::Acquire) {
+                            Some("cancelled_before")
+                        } else if !s.mode.allows(&job.frame) {
+                            Some("mode_before")
+                        } else if !job.arrival.fits(&job.frame, now, 165_000) {
+                            Some("age_before")
+                        } else {
+                            None
+                        };
+                        if let Some(reason) = reason {
+                            s.dropped(&job, reason, now, 0);
                             continue;
                         }
                     }
@@ -185,7 +228,14 @@ impl Worker {
                         || job.cancelled.load(Ordering::Acquire)
                         || !s.mode.allows(&job.frame)
                     {
-                        s.counters.dropped = s.counters.dropped.saturating_add(1);
+                        let reason = if stop.load(Ordering::Acquire)
+                            || job.cancelled.load(Ordering::Acquire)
+                        {
+                            "cancelled_after"
+                        } else {
+                            "mode_after"
+                        };
+                        s.dropped(&job, reason, clock(), compute_us);
                         continue;
                     }
                     let Some(detections) = output.filter(|v| {
@@ -260,7 +310,12 @@ impl Worker {
                     if published {
                         counters.published = counters.published.saturating_add(1);
                     } else {
-                        counters.dropped = counters.dropped.saturating_add(1);
+                        let now = if published_at.get() > 0 {
+                            published_at.get()
+                        } else {
+                            clock()
+                        };
+                        s.dropped(&job, "publication_gate", now, compute_us);
                     }
                 }
                 stop.store(true, Ordering::Release);

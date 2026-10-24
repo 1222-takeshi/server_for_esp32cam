@@ -229,6 +229,17 @@ fn execute() -> Result<bool> {
         "published_us":v.published_us,"age_high_us":v.age_high_us,"compute_us":v.compute_us})
         })
         .collect();
+    let drops: Vec<_> = s
+        .drops()
+        .iter()
+        .map(|d| {
+            json!({
+                "boot_id":d.boot,"generation":d.generation,"sequence":d.sequence,"at_us":d.at_us,
+                "stage":d.stage,"age_high_us":d.age_high_us,"arrival_age_high_us":d.arrival_age_high_us,
+        "elapsed_since_arrival_us":d.wait_us,"compute_us":d.compute_us
+            })
+        })
+        .collect();
     let report = json!({"schema":1,"live_validation_only":true,"physical_motor_control":false,"global_acceptance":false,
         "finite_live_gate_passed":passed,"reason":outcome.reason,"measurement":measurement.ok(),"measurement_error":measurement_error,"model_sha256":detector::MODEL_SHA,
         "runtime_sha256":detector::RUNTIME_SHA,"runtime_build":ort::info(),"input_size":320,"threshold":0.5,"threads":3,
@@ -237,7 +248,7 @@ fn execute() -> Result<bool> {
             "overwritten":outcome.stats.overwritten,"queue_busy":outcome.stats.queue_busy,"rejected_ack":outcome.stats.rejected_ack,
             "first_device":outcome.stats.first_device,"last_device":outcome.stats.last_device},
         "worker":{"inferred":s.counters.inferred,"published":s.counters.published,"dropped":s.counters.dropped,
-            "failures":s.counters.failures,"evidence_lost":s.counters.evidence_lost},"process_before_worker_shutdown":usage,"samples":samples});
+            "failures":s.counters.failures,"evidence_lost":s.counters.evidence_lost},"process_before_worker_shutdown":usage,"samples":samples,"recent_worker_drops":drops});
     let raw = serde_json::to_vec(&report)?;
     if raw.len() > 2 * 1024 * 1024 {
         return Err("report limit".into());
