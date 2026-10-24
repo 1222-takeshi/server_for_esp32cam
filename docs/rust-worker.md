@@ -75,3 +75,12 @@ publication_failedへ保護遷移します。時計によるcapture age≤500ms�
 Pythonと同じに保ちます。tracking故障後やresource故障は自動解除せず、再接続はecoです。
 `python3 scripts/check_rust_mode.py`とRust testsで18本のPython参照traceを照合します。
 CLIおよび本番Pythonサービスへの接続は別段階で、モータ制御・live Hz達成を意味しません。
+
+任意feature `transport`の`Connection`はcamera path/API keyを検証するLAN内WebSocketです。
+TLSは提供せず、本番listenerへの接続はまだ行いません。handshakeは接続開始から2秒/8KiB、
+受信frame/messageは共通でECF2+JPEG128KiBまで読み込み、textの受理上限は読み込み後に512Bで検査します。
+receive呼出は分割frameの継続中も絶対期限50msで戻り、writeは200msです。
+key重複・query付きpath・未mask frame・圧縮を許可しません。keyを含むrequestやerrorを表示せず、
+固定長SHA256 digestをconstant-time比較します。nonceと初期世代はOS CSPRNGから生成します。
+上位ownerは1camera session所有、hello/clock/全体の期限、message rate、frame freshnessを
+別途検証し、errorでConnectionをdropしてください。この層だけで画像の公開を許可しません。
