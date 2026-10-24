@@ -2,9 +2,9 @@ name: Rust PoC
 on:
   push:
     branches: [main]
-    paths: ['rust/**', 'scripts/prepare_rust_jpeg.py', 'scripts/check_rust_clock.py', 'script/frame_protocol.py', 'tests/test_prepare_rust_jpeg.py', '.github/workflows/rust.yml']
+    paths: ['rust/**', 'scripts/prepare_rust_jpeg.py', 'scripts/check_rust_clock.py', 'scripts/check_rust_mode.py', 'script/operating_mode.py', 'script/frame_protocol.py', 'tests/test_prepare_rust_jpeg.py', '.github/workflows/rust.yml']
   pull_request:
-    paths: ['rust/**', 'scripts/prepare_rust_jpeg.py', 'scripts/check_rust_clock.py', 'script/frame_protocol.py', 'tests/test_prepare_rust_jpeg.py', '.github/workflows/rust.yml']
+    paths: ['rust/**', 'scripts/prepare_rust_jpeg.py', 'scripts/check_rust_clock.py', 'scripts/check_rust_mode.py', 'script/operating_mode.py', 'script/frame_protocol.py', 'tests/test_prepare_rust_jpeg.py', '.github/workflows/rust.yml']
 permissions:
   contents: read
 concurrency:
@@ -38,6 +38,8 @@ jobs:
         with:
           toolchain: '1.95.0'
           components: rustfmt, clippy
+      - run: python3 scripts/check_rust_mode.py
+        working-directory: .
       - run: python3 scripts/check_rust_clock.py
         working-directory: .
       - run: cargo fmt --check
