@@ -101,6 +101,10 @@ impl State {
             self.session = None;
         }
     }
+    #[cfg(test)]
+    pub(crate) fn record_test_sample(&mut self, sample: Sample) {
+        self.samples.push(sample);
+    }
     pub fn samples(&self) -> &[Sample] {
         &self.samples
     }

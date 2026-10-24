@@ -109,3 +109,9 @@ Worker.stopは実行中native呼び出しの終了を待ちます。Model/runtim
 確認し、native推論はworkerへ渡します。controller callbackは同じmode mutex内で呼ぶため、
 有限のRAM操作のみ許可します。JPEG decode/model/TLS/listener/supervisorはこの層に含みません。
 終了時はleaseを解放する前にTCP接続を閉じます。final_statusは切断処理前のsnapshotで物理制御を許可しません。
+
+`trial::Trial`はeco active確認→tracking warmup→10秒単位の有限評価→eco active確認を行います。
+評価はactive確認後の新しい公開結果を基点とし、区間内の全sampleを同boot/世代か検証して各10秒窓50件以上、端点を含む最大gap500ms、全sample age≤500msを要求します。
+故障時にtrackingを再要求せず、raw sampleを調整して成功扱いにしません。supervisorの準備済み
+信号が必須です。heartbeat ticketはnonce/128B/時刻誤差1.5秒を検証し、cameraの単調時計とは別です。
+このlibraryはlistener/model/復旧機構を起動せず、実環境精度/10Hz/24h/Wの受入ではありません。
