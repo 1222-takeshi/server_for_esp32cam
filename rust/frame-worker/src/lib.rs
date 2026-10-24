@@ -12,6 +12,7 @@ pub mod detector;
 #[cfg(feature = "jpeg")]
 pub mod jpeg;
 pub mod operating_mode;
+pub mod pipeline;
 pub mod replay;
 #[cfg(feature = "transport")]
 pub mod transport;
