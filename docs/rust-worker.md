@@ -66,3 +66,12 @@ expiry and 200ppm drift interval. Run `python3 scripts/check_rust_clock.py` to
 verify the checked-in differential fixtures. This is a library gate only;
 a valid clock interval alone establishes neither profile ACK nor publication
 freshness, and the offline replay still does not perform live freshness checks.
+
+`operating_mode::OperatingMode`はACK・世代・eco/tracking watchdogの移植libraryです。
+全操作とRAM内の公開callbackを呼出側の同じMutexで直列化し、信頼できる単調増加us clockと
+CSPRNGの初期世代を渡す必要があります。公開callbackは非blocking・有限で、失敗/panicで
+publication_failedへ保護遷移します。時計によるcapture age≤500ms判定は別途必須です。
+5秒ACK期限、trackingの500ms gapと連続10秒窓≥50件、ecoの17秒猶予と正常3件での復帰を
+Pythonと同じに保ちます。tracking故障後やresource故障は自動解除せず、再接続はecoです。
+`python3 scripts/check_rust_mode.py`とRust testsで18本のPython参照traceを照合します。
+CLIおよび本番Pythonサービスへの接続は別段階で、モータ制御・live Hz達成を意味しません。

@@ -10,6 +10,7 @@ pub mod clock;
 pub mod detector;
 #[cfg(feature = "jpeg")]
 pub mod jpeg;
+pub mod operating_mode;
 pub mod replay;
 
 pub const MAX_JPEG: usize = 128 * 1024;
