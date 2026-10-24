@@ -57,6 +57,8 @@ pub struct Sample {
 }
 pub struct State {
     clock: Clock,
+    #[cfg(feature = "transport")]
+    session: Option<Arc<AtomicBool>>,
     pub mode: OperatingMode,
     pub counters: Counters,
     latest: Option<Arc<Completed>>,
@@ -68,11 +70,36 @@ impl State {
         let mode = OperatingMode::new(generation, move || copy())?;
         Ok(Self {
             clock,
+            #[cfg(feature = "transport")]
+            session: None,
             mode,
             counters: Counters::default(),
             latest: None,
             samples: Vec::new(),
         })
+    }
+    pub fn now(&self) -> u64 {
+        (self.clock)()
+    }
+    #[cfg(feature = "transport")]
+    pub(crate) fn claim_session(&mut self) -> Result<Arc<AtomicBool>, &'static str> {
+        if self.session.is_some() || self.mode.connected() {
+            return Err("camera_busy");
+        }
+        let token = Arc::new(AtomicBool::new(false));
+        self.session = Some(token.clone());
+        Ok(token)
+    }
+    #[cfg(feature = "transport")]
+    pub(crate) fn release_session(&mut self, token: &Arc<AtomicBool>) {
+        if self
+            .session
+            .as_ref()
+            .is_some_and(|owner| Arc::ptr_eq(owner, token))
+        {
+            let _ = self.disconnect(token);
+            self.session = None;
+        }
     }
     pub fn samples(&self) -> &[Sample] {
         &self.samples
@@ -102,6 +129,7 @@ pub enum Submit {
     Invalid,
 }
 pub struct Worker {
+    state: Arc<Mutex<State>>,
     queue: Arc<LatestSlot<Job>>,
     stopped: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
@@ -119,6 +147,7 @@ impl Worker {
         let queue = Arc::new(LatestSlot::<Job>::default());
         let stopped = Arc::new(AtomicBool::new(false));
         let (waiting, stop) = (queue.clone(), stopped.clone());
+        let owner_state = state.clone();
         let handle = thread::Builder::new()
             .name("frame-inference".into())
             .spawn(move || {
@@ -233,10 +262,14 @@ impl Worker {
                 stop.store(true, Ordering::Release);
             })?;
         Ok(Self {
+            state: owner_state,
             queue,
             stopped,
             thread: Some(handle),
         })
+    }
+    pub fn state(&self) -> Arc<Mutex<State>> {
+        self.state.clone()
     }
     pub fn submit(&self, job: Job) -> Submit {
         if self.stopped.load(Ordering::Acquire) {

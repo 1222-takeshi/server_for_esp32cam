@@ -102,3 +102,10 @@ sample上限到達はevidence_lostへ計上し、SDへframe単位logを書きま
 JSON/clock/順序/JPEG検査とsession所有権は上位ownerの責務です。native推論そのものはthreadから
 強制中断できないため、有限試験にはprocess全体を終了できる外部supervisorの期限が必須です。
 Worker.stopは実行中native呼び出しの終了を待ちます。Model/runtime実体と通常運用配線は別段階です。
+
+`session::Receiver`は上記libraryを接続する有限の1camera coordinatorです。State内のleaseで
+同時接続を拒否し、所有tokenだけが切断処理を行います。hello5秒、clock1秒、session最大600秒、
+最大20000messages/7000frames、1秒固定窓100messagesを上限にできます。ECF2/ACK/boot/順序/ageを
+確認し、native推論はworkerへ渡します。controller callbackは同じmode mutex内で呼ぶため、
+有限のRAM操作のみ許可します。JPEG decode/model/TLS/listener/supervisorはこの層に含みません。
+終了時はleaseを解放する前にTCP接続を閉じます。final_statusは切断処理前のsnapshotで物理制御を許可しません。

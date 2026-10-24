@@ -197,6 +197,9 @@ impl Connection {
             Err(_) => Err(invalid()),
         }
     }
+    pub fn shutdown(&mut self) {
+        let _ = self.0.get_mut().socket.shutdown(Shutdown::Both);
+    }
     pub fn send_text(&mut self, text: &str) -> io::Result<()> {
         if text.len() > TEXT_LIMIT {
             return Err(invalid());

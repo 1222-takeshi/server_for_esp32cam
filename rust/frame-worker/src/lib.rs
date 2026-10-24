@@ -15,6 +15,8 @@ pub mod operating_mode;
 pub mod pipeline;
 pub mod replay;
 #[cfg(feature = "transport")]
+pub mod session;
+#[cfg(feature = "transport")]
 pub mod transport;
 
 pub const MAX_JPEG: usize = 128 * 1024;
