@@ -18,6 +18,7 @@ pub mod replay;
 pub mod session;
 #[cfg(feature = "transport")]
 pub mod transport;
+pub mod trial;
 
 pub const MAX_JPEG: usize = 128 * 1024;
 pub const MAX_GENERATION: u64 = (1 << 53) - 1;
