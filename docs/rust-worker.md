@@ -90,3 +90,7 @@ SessionClockはboot固定・同時pending1件・1秒RTT/nonce照合・eco2秒/tr
 管理します。Arrivalは受信時の保守的age区間を固定し、待ち時間と推論予約時間を加算して
 500ms以内かを判定します。新しいclock sampleによって待機画像の期限を延長しません。
 このlibraryだけではACK/世代/順序/JPEG/connection所有権を確認できず、公開許可には使えません。
+
+Arrivalはboot/sequence/capture/send/世代の識別子に結び付き、別のフレーム識別子への転用を拒否します。JPEG本体の照合は含みません。
+公開gateにはMode自身の判定時刻を渡し、watchdog・鮮度判定・公開stampを同じ時刻で
+記録します。gate後の遅延によって古い結果の期限を更新しません。

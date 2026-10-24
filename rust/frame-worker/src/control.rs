@@ -212,22 +212,44 @@ impl SessionClock {
             return None;
         }
         let bounds = self.window.age_bounds(frame, received)?;
-        (bounds.1 <= 500_000).then_some(Arrival { received, bounds })
+        (bounds.1 <= 500_000).then_some(Arrival {
+            received,
+            bounds,
+            identity: frame_identity(frame),
+        })
     }
 }
 
 /// Frozen conservative age at arrival; newer samples never renew this evidence.
+type FrameIdentity = (u64, u64, u64, u64, Option<u64>);
+fn frame_identity(frame: &Frame) -> FrameIdentity {
+    (
+        frame.boot,
+        frame.sequence,
+        frame.captured_us,
+        frame.sent_us,
+        frame.generation,
+    )
+}
+#[derive(Clone, Copy)]
 pub struct Arrival {
     received: u64,
     bounds: AgeBounds,
+    identity: FrameIdentity,
 }
 impl Arrival {
-    pub fn age_bounds(&self, now: u64) -> Option<AgeBounds> {
+    pub fn matches(&self, frame: &Frame) -> bool {
+        self.identity == frame_identity(frame)
+    }
+    pub fn age_bounds(&self, frame: &Frame, now: u64) -> Option<AgeBounds> {
+        if !self.matches(frame) {
+            return None;
+        }
         let elapsed = i128::from(now.checked_sub(self.received)?);
         Some((self.bounds.0 + elapsed, self.bounds.1 + elapsed))
     }
-    pub fn fits(&self, now: u64, reserve_us: u64) -> bool {
-        self.age_bounds(now)
+    pub fn fits(&self, frame: &Frame, now: u64, reserve_us: u64) -> bool {
+        self.age_bounds(frame, now)
             .is_some_and(|b| b.1 + i128::from(reserve_us) <= 500_000)
     }
 }

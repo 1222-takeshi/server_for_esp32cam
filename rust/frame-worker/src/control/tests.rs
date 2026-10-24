@@ -77,12 +77,13 @@ fn conservative_age_reserve_completion_and_no_evidence_renewal() {
     let mut clock = SessionClock::default();
     clock.poll(10_000, false, nonce).unwrap();
     clock.pong(1, "0123456789abcdef", 1_000, 10_010).unwrap();
-    let arrival = clock.admit(&frame(1, 1_000), 10_020).unwrap();
-    assert!(arrival.fits(344_999, 165_000)); // age high = elapsed + 20
-    assert!(!arrival.fits(345_001, 165_000));
-    assert!(arrival.fits(510_000, 0));
-    assert!(!arrival.fits(510_001, 0));
-    assert!(!arrival.fits(10_019, 0));
+    let original = frame(1, 1_000);
+    let arrival = clock.admit(&original, 10_020).unwrap();
+    assert!(arrival.fits(&original, 344_999, 165_000)); // age high = elapsed + 20
+    assert!(!arrival.fits(&original, 345_001, 165_000));
+    assert!(arrival.fits(&original, 510_000, 0));
+    assert!(!arrival.fits(&original, 510_001, 0));
+    assert!(!arrival.fits(&original, 10_019, 0));
     assert!(clock.admit(&frame(2, 1_000), 10_020).is_none());
     assert!(clock.admit(&frame(1, 9_000_000), 10_020).is_none());
     assert!(clock.admit(&frame(1, 1_000), 510_001).is_none());
@@ -91,7 +92,7 @@ fn conservative_age_reserve_completion_and_no_evidence_renewal() {
     clock
         .pong(1, "0123456789abcdef", 2_001_020, 2_010_030)
         .unwrap();
-    assert!(!arrival.fits(2_010_030, 0));
+    assert!(!arrival.fits(&original, 2_010_030, 0));
 }
 
 #[test]
@@ -151,4 +152,31 @@ fn eco_ping_cadence_invalid_clock_and_entropy_do_not_create_pending() {
     assert!(clock.poll(2_000_001, false, nonce).unwrap().is_some());
     assert!(clock.bind(0).is_err());
     assert!(clock.poll(2_000_000, false, nonce).is_err());
+}
+
+#[test]
+fn arrival_proof_cannot_be_reused_for_another_identity() {
+    let mut clock = SessionClock::default();
+    clock.poll(100_000, false, nonce).unwrap();
+    clock
+        .pong(1, "0123456789abcdef", 1_000_001, 100_000)
+        .unwrap();
+    let mut original = frame(1, 1_000_001);
+    original.sequence = 2;
+    let proof = clock.admit(&original, 100_000).unwrap();
+    for field in 0..5 {
+        let mut mixed = frame(1, 1_000_001);
+        mixed.sequence = 2;
+        match field {
+            0 => mixed.boot += 1,
+            1 => mixed.sequence -= 1,
+            2 => mixed.captured_us = 1,
+            3 => mixed.sent_us += 1,
+            _ => mixed.generation = Some(2),
+        }
+        assert!(!proof.matches(&mixed));
+        assert!(!proof.fits(&mixed, 100_000, 0));
+        assert!(proof.age_bounds(&mixed, 100_000).is_none());
+    }
+    assert!(proof.fits(&original, 100_000, 0));
 }
