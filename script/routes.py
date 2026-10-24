@@ -1615,7 +1615,7 @@ def api_status_update():
         return jsonify({"message": "Forbidden"}), 403
 
     camera = _metadata_store().record_heartbeat(device_id)
-    current_app.logger.info("Heartbeat from device: %s", device_id)
+    current_app.logger.debug("Heartbeat from device: %s", device_id)
     return jsonify(
         {
             "message": "Status updated",
