@@ -15,7 +15,7 @@ use tungstenite::{
     protocol::WebSocketConfig,
 };
 
-pub const TEXT_LIMIT: usize = 512;
+pub use crate::control::TEXT_LIMIT;
 const HANDSHAKE_LIMIT: usize = 8192;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(2);
 

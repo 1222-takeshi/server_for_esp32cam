@@ -84,3 +84,9 @@ key重複・query付きpath・未mask frame・圧縮を許可しません。key�
 固定長SHA256 digestをconstant-time比較します。nonceと初期世代はOS CSPRNGから生成します。
 上位ownerは1camera session所有、hello/clock/全体の期限、message rate、frame freshnessを
 別途検証し、errorでConnectionをdropしてください。この層だけで画像の公開を許可しません。
+
+`control`はfirmwareのhello/ACK/pong/statusを512B以内の厳密なJSON schemaとして検査します。
+SessionClockはboot固定・同時pending1件・1秒RTT/nonce照合・eco2秒/tracking50msのping間隔を
+管理します。Arrivalは受信時の保守的age区間を固定し、待ち時間と推論予約時間を加算して
+500ms以内かを判定します。新しいclock sampleによって待機画像の期限を延長しません。
+このlibraryだけではACK/世代/順序/JPEG/connection所有権を確認できず、公開許可には使えません。
