@@ -12,6 +12,8 @@ pub mod detector;
 pub mod jpeg;
 pub mod operating_mode;
 pub mod replay;
+#[cfg(feature = "transport")]
+pub mod transport;
 
 pub const MAX_JPEG: usize = 128 * 1024;
 pub const MAX_GENERATION: u64 = (1 << 53) - 1;
