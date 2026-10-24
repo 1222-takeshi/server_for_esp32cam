@@ -125,3 +125,10 @@ model初期化後のcamera接続期限20秒、session180秒、tracking評価60�
 reportはJPEGを含まず、測定失敗コードを保持し、global_acceptance/physical_motor_controlをfalseに
 固定します。native終了待ちを含むため、外部のprocess deadlineと永続的な復旧guardを必ず併用してください。
 通常のPython service/UI/保存/通知はこのbinaryへ移行しておらず、本番切替は別のguarded手順です。
+
+有限live reportには直近32件だけのworker drop metadata（段階、identity、保守的age、compute時間）
+を含みます。JPEG・key・frameごとのdisk logは追加せず、500ms/165ms予約などのgateは維持します。
+到着時の保守的ageと到着後の経過時間も記録し、推論前後・キャンセル等の段階を区別します。
+到着後経過はqueue待ちとcompute等を含む値で、純queue時間ではありません。dropを成功扱いにしません。
+このringは推論threadで破棄した結果の診断で、全dropの台帳ではありません。queue置換・busyは
+receiverの集計で確認し、停止時に未処理のまま残るqueue itemはringに含みません。

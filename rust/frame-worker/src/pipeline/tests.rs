@@ -95,6 +95,16 @@ fn completed_stale_or_old_generation_never_publishes() {
         assert_eq!(s.counters.published, 0);
         assert_eq!(s.counters.dropped, 1);
         assert!(s.samples().is_empty());
+        assert_eq!(s.drops().len(), 1);
+        assert_eq!(
+            s.drops()[0].stage,
+            if stale {
+                "publication_gate"
+            } else {
+                "mode_after"
+            }
+        );
+        assert_eq!(s.drops()[0].sequence, 1);
     }
 }
 #[test]
@@ -147,7 +157,17 @@ fn reserve_and_cancelled_jobs_skip_native_work_and_invalid_payloads_are_bounded(
         invalid.frame.jpeg = vec![0; MAX_JPEG + 1];
         assert_eq!(worker.submit(invalid), Submit::Invalid);
         worker.stop().unwrap();
-        assert_eq!(state.lock().unwrap().counters.inferred, 0);
+        let s = state.lock().unwrap();
+        assert_eq!(s.counters.inferred, 0);
+        assert_eq!(
+            s.drops()[0].stage,
+            if cancelled {
+                "cancelled_before"
+            } else {
+                "age_before"
+            }
+        );
+        assert_eq!(s.drops()[0].compute_us, 0);
     }
 }
 
@@ -266,4 +286,25 @@ fn sample_capacity_retains_first_evidence_and_counts_subsequent_loss() {
     assert_eq!(s.samples().last().unwrap().sequence, 1);
     assert_eq!(s.latest().unwrap().unwrap().frame.sequence, 2);
     assert_eq!(s.counters.published, 2);
+}
+
+#[test]
+fn drop_diagnostics_are_bounded_metadata_and_do_not_alter_publication() {
+    let (state, _, _) = setup();
+    for sequence in 1..=40 {
+        let pending = job(&state, sequence);
+        state
+            .lock()
+            .unwrap()
+            .dropped(&pending, "age_before", 435_001, 0);
+    }
+    let s = state.lock().unwrap();
+    assert_eq!(s.counters.dropped, 40);
+    assert_eq!(s.drops().len(), 32);
+    assert_eq!(s.drops().front().unwrap().sequence, 9);
+    assert_eq!(s.drops().back().unwrap().age_high_us, Some(335_001));
+    assert_eq!(s.drops().back().unwrap().arrival_age_high_us, Some(0));
+    assert_eq!(s.drops().back().unwrap().wait_us, Some(335_001));
+    assert!(s.samples().is_empty());
+    assert_eq!(s.counters.published, 0);
 }
