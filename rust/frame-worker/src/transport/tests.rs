@@ -225,5 +225,12 @@ fn write_deadline_failure_is_fatal_instead_of_an_idle_read() {
         tungstenite::protocol::Role::Server,
         None,
     ));
+    // Tungstenite can recover from an automatic Pong WouldBlock and return a
+    // buffered text message. Inject that successful lower-level read outcome.
+    assert!(
+        connection
+            .finish_receive(Ok(Message::Text("must not publish".into())))
+            .is_err()
+    );
     assert!(connection.receive().is_err());
 }

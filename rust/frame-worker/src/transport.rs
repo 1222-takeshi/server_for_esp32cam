@@ -172,16 +172,25 @@ impl Connection {
             return Err(invalid());
         }
         self.0.get_mut().deadline = Some(Instant::now() + Duration::from_millis(50));
-        match self.0.read() {
+        let received = self.0.read();
+        self.finish_receive(received)
+    }
+    fn finish_receive(
+        &mut self,
+        received: tungstenite::Result<Message>,
+    ) -> io::Result<Option<Message>> {
+        if self.0.get_mut().write_failed {
+            return Err(invalid());
+        }
+        match received {
             Ok(Message::Text(text)) if text.len() > TEXT_LIMIT => Err(invalid()),
             Ok(Message::Close(_)) => Err(io::ErrorKind::ConnectionAborted.into()),
             Ok(message) => Ok(Some(message)),
             Err(tungstenite::Error::Io(e))
-                if !self.0.get_mut().write_failed
-                    && matches!(
-                        e.kind(),
-                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                    ) =>
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) =>
             {
                 Ok(None)
             }
