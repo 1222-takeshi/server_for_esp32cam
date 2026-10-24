@@ -236,6 +236,7 @@ fn execute() -> Result<bool> {
             json!({
                 "boot_id":d.boot,"generation":d.generation,"sequence":d.sequence,"at_us":d.at_us,
                 "stage":d.stage,"age_high_us":d.age_high_us,"arrival_age_high_us":d.arrival_age_high_us,
+        "arrival_age_low_us":d.arrival_age_low_us,"capture_to_send_us":d.capture_to_send_us,
         "elapsed_since_arrival_us":d.wait_us,"compute_us":d.compute_us
             })
         })

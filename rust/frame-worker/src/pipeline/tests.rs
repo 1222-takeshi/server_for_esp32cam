@@ -305,6 +305,31 @@ fn drop_diagnostics_are_bounded_metadata_and_do_not_alter_publication() {
     assert_eq!(s.drops().back().unwrap().age_high_us, Some(335_001));
     assert_eq!(s.drops().back().unwrap().arrival_age_high_us, Some(0));
     assert_eq!(s.drops().back().unwrap().wait_us, Some(335_001));
+    assert_eq!(s.drops().back().unwrap().arrival_age_low_us, Some(0));
+    assert_eq!(s.drops().back().unwrap().capture_to_send_us, 0);
     assert!(s.samples().is_empty());
     assert_eq!(s.counters.published, 0);
+}
+
+#[test]
+fn drop_metadata_separates_device_staging_from_arrival_uncertainty() {
+    let (state, _, _) = setup();
+    let mut pending = job(&state, 1);
+    pending.frame.sent_us += 300_000;
+    let mut clock = SessionClock::default();
+    clock
+        .poll(100_000, false, || Ok("0123456789abcdef".into()))
+        .unwrap();
+    clock.pong(1, "0123456789abcdef", 2, 100_000).unwrap();
+    pending.arrival = clock.admit(&pending.frame, 400_000).unwrap();
+    state
+        .lock()
+        .unwrap()
+        .dropped(&pending, "age_before", 435_001, 0);
+    let s = state.lock().unwrap();
+    let event = &s.drops()[0];
+    assert_eq!(event.capture_to_send_us, 300_000);
+    assert_eq!(event.arrival_age_low_us, Some(300_000));
+    assert_eq!(event.arrival_age_high_us, Some(300_000));
+    assert_eq!(event.wait_us, Some(35_001));
 }

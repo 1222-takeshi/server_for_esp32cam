@@ -46,6 +46,8 @@ pub struct DropSample {
     pub stage: &'static str,
     pub age_high_us: Option<i128>,
     pub arrival_age_high_us: Option<i128>,
+    pub arrival_age_low_us: Option<i128>,
+    pub capture_to_send_us: u64,
     pub wait_us: Option<u64>,
     pub compute_us: u64,
 }
@@ -140,6 +142,11 @@ impl State {
                 .arrival
                 .age_bounds(&job.frame, job.arrival.received_us())
                 .map(|b| b.1),
+            arrival_age_low_us: job
+                .arrival
+                .age_bounds(&job.frame, job.arrival.received_us())
+                .map(|b| b.0),
+            capture_to_send_us: job.frame.sent_us.saturating_sub(job.frame.captured_us),
             wait_us: now.checked_sub(job.arrival.received_us()),
             compute_us,
         });
