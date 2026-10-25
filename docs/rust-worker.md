@@ -139,3 +139,8 @@ receiverの集計で確認し、停止時に未処理のまま残るqueue item�
 破棄metadataの`capture_to_send_us`はdevice上のcapture→send経過、`arrival_age_low_us`/
 `arrival_age_high_us`は到着時の保守的age区間です。device内の滞留とhost到着までの遅延を
 検討する材料であり、この区間だけで無線の原因を断定しません。
+
+## 有限Pi実機検証の記録
+
+#558の有限ライブ配線とeco→tracking→eco試験は[検証記録](rust-live-validation.md)を参照してください。
+4回中1回で60秒316件（5.2667Hz）を確認しました。失敗3回も保全し、継続安定性・原因解析は#573へ継続します。
