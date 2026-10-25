@@ -677,3 +677,27 @@ framebuffer timestamp、`sent_us` は送信直前の `esp_timer_get_time()` で�
 
 通信遅延と省電力の関係: [Espressif Wi-Fi power save](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/wifi-driver/wifi-performance-and-power-save.html)。
 設定だけで遅延改善を保証せず、元runを残して新しいbinary SHAごとに受入を判定します（#497）。
+
+### Client masking in the opt-in high-rate environments
+
+The pinned WebSockets 2.7.3 dependency is patched only in each environment's
+local `.pio/libdeps` copy by `scripts/patch_websockets.py`. SHA-256 guards reject
+unknown source versions; reapplying the patch is harmless. Shared dependencies
+outside this project are refused. Ordinary `main.cpp` environments are unchanged.
+
+Every client data/control frame obtains a fresh four-byte key from
+`esp_fill_random` (Wi-Fi must be active). Headroom buffers are masked in place;
+callers must refill them before reuse. Other nonempty client payloads are copied
+before masking, including low-heap/large frames; allocation failure returns false
+without sending. A partial write disconnects the client so a new frame cannot
+follow an incomplete one. Header-only client sends are refused because they
+cannot mask the later payload (Socket.IO streaming is outside these environments).
+
+CI compiles the actual patched dependency functions into a host harness with
+address/undefined-behavior sanitizers. It checks decoded bytes, boundary lengths,
+small/large and low-heap paths, control frames, fresh RNG calls, allocation failure
+and short writes. This preserves the ECF/JPEG application bytes; recognition
+accuracy and sustained capture rate still require their separate Pi validation.
+
+References: [RFC 6455 §5.3](https://www.rfc-editor.org/rfc/rfc6455.html#section-5.3),
+[ESP-IDF RNG](https://docs.espressif.com/projects/esp-idf/en/v4.4/esp32/api-reference/system/random.html).

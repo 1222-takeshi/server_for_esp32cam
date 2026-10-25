@@ -49,6 +49,8 @@ jobs:
               - 'examples/esp32cam_snapshot_upload/**'
               - '.github/workflows/ci.yml'
             operating_firmware:
+              - 'tests/test_websocket_masking_host.py'
+              - 'tests/firmware/websocket_masking.cpp'
               - 'firmware/esp32cam-http-upload/**'
               - '.github/workflows/ci.yml'
 
@@ -66,10 +68,15 @@ jobs:
         with:
           path: ~/.platformio
           key: platformio-operating-${{ hashFiles('firmware/esp32cam-http-upload/platformio.ini') }}
-      - run: pip install platformio==6.1.19
+      - run: pip install platformio==6.1.19 "pytest>=9.0.3,<10.0"
       - name: Compile ordinary HTTP, legacy experiment and common profiles without credentials
         working-directory: firmware/esp32cam-http-upload
         run: pio run -e esp32cam_http_upload_smoke -e esp32cam_high_rate_capture -e esp32cam_operating_profiles
+      - name: Verify actual client frame masking and decoded payloads
+        env:
+          ESP32CAM_WEBSOCKETS_SOURCE: firmware/esp32cam-http-upload/.pio/libdeps/esp32cam_operating_profiles/WebSockets/src/WebSockets.cpp
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: python -m pytest -q tests/test_websocket_masking_host.py
 
   test:
     runs-on: ubuntu-latest
