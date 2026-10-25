@@ -4,7 +4,7 @@ use crate::{
     control::{self, Control, SessionClock},
     decode,
     operating_mode::Mode,
-    pipeline::{Job, State, Submit, Worker},
+    pipeline::{Clock, Job, State, Submit, Worker},
     transport::{self, Connection, Message},
 };
 use serde_json::Value;
@@ -21,6 +21,7 @@ pub struct Limits {
     pub messages: u64,
     pub frames: u64,
     pub rate: u64,
+    pub tracking_ping_interval_us: u64,
 }
 impl Default for Limits {
     fn default() -> Self {
@@ -29,6 +30,7 @@ impl Default for Limits {
             messages: 20_000,
             frames: 7000,
             rate: 100,
+            tracking_ping_interval_us: 50_000,
         }
     }
 }
@@ -41,6 +43,9 @@ pub struct Stats {
     pub overwritten: u64,
     pub queue_busy: u64,
     pub rejected_ack: u64,
+    pub max_receive_call_us: u64,
+    pub max_control_send_us: u64,
+    pub max_admission_guard_us: u64,
     pub first_device: Option<[u64; 6]>,
     pub last_device: Option<[u64; 6]>,
 }
@@ -69,6 +74,7 @@ impl Drop for SocketShutdown<'_> {
 }
 pub struct Receiver<'a> {
     state: Arc<Mutex<State>>,
+    clock: Clock,
     worker: &'a Worker,
     limits: Limits,
 }
@@ -78,14 +84,40 @@ impl<'a> Receiver<'a> {
             || !(1..=20_000).contains(&limits.messages)
             || !(1..=7000).contains(&limits.frames)
             || !(1..=100).contains(&limits.rate)
+            || !(50_000..=2_000_000).contains(&limits.tracking_ping_interval_us)
         {
             return Err("invalid_limits");
         }
+        let state = worker.state();
+        let clock = worker.clock();
         Ok(Self {
-            state: worker.state(),
+            state,
+            clock,
             worker,
             limits,
         })
+    }
+    fn receive(
+        &self,
+        socket: &mut Connection,
+        stats: &mut Stats,
+    ) -> Result<Option<(Message, u64)>> {
+        let begun = (self.clock)();
+        let result = socket.receive().map_err(|_| "socket_failed");
+        // Capture immediately after receive, before acquiring the publication lock.
+        let received = (self.clock)();
+        stats.max_receive_call_us = stats
+            .max_receive_call_us
+            .max(received.saturating_sub(begun));
+        result.map(|message| message.map(|m| (m, received)))
+    }
+    fn send(&self, socket: &mut Connection, message: &str, stats: &mut Stats) -> Result<()> {
+        let begun = (self.clock)();
+        let result = socket.send_text(message).map_err(|_| "socket_failed");
+        stats.max_control_send_us = stats
+            .max_control_send_us
+            .max((self.clock)().saturating_sub(begun));
+        result
     }
     /// Controller runs under the mode mutex: bounded, RAM-only, no blocking IO.
     /// false ends normally. The socket closes before releasing the session lease.
@@ -176,21 +208,21 @@ impl<'a> Receiver<'a> {
                 (now, s.mode.requested() == Mode::Tracking, command)
             };
             if let Some(command) = command {
-                socket
-                    .send_text(&command.to_string())
-                    .map_err(|_| "socket_failed")?;
+                self.send(socket, &command.to_string(), stats)?;
             }
-            if let Some(ping) = clock.poll(now, tracking, || {
+            let interval = if tracking {
+                self.limits.tracking_ping_interval_us
+            } else {
+                2_000_000
+            };
+            if let Some(ping) = clock.poll_interval(now, interval, || {
                 transport::nonce().map_err(|_| "entropy_unavailable")
             })? {
-                socket
-                    .send_text(&ping.to_string())
-                    .map_err(|_| "socket_failed")?;
+                self.send(socket, &ping.to_string(), stats)?;
             }
-            let Some(message) = socket.receive().map_err(|_| "socket_failed")? else {
+            let Some((message, received)) = self.receive(socket, stats)? else {
                 continue;
             };
-            let received = self.state.lock().map_err(|_| "state_unavailable")?.now();
             if received.checked_sub(window).ok_or("invalid_host_clock")? >= 1_000_000 {
                 window = received;
                 rate = 0;
@@ -257,13 +289,17 @@ impl<'a> Receiver<'a> {
                         stats.dropped += 1;
                         continue;
                     }
-                    if !self
+                    let begun_guard = (self.clock)();
+                    let allowed = self
                         .state
                         .lock()
                         .map_err(|_| "state_unavailable")?
                         .mode
-                        .allows(&frame)
-                    {
+                        .allows(&frame);
+                    stats.max_admission_guard_us = stats
+                        .max_admission_guard_us
+                        .max((self.clock)().saturating_sub(begun_guard));
+                    if !allowed {
                         stats.dropped += 1;
                         continue;
                     }

@@ -19,6 +19,8 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+const TRACKING_PING_INTERVAL_US: u64 = 200_000;
+
 #[derive(Clone, Copy, Default)]
 struct Beat {
     alive: bool,
@@ -207,6 +209,7 @@ fn execute() -> Result<bool> {
         &worker,
         Limits {
             duration_us: 180_000_000,
+            tracking_ping_interval_us: TRACKING_PING_INTERVAL_US,
             ..Limits::default()
         },
     )
@@ -242,12 +245,14 @@ fn execute() -> Result<bool> {
         })
         .collect();
     let report = json!({"schema":1,"live_validation_only":true,"physical_motor_control":false,"global_acceptance":false,
-        "finite_live_gate_passed":passed,"reason":outcome.reason,"measurement":measurement.ok(),"measurement_error":measurement_error,"model_sha256":detector::MODEL_SHA,
+        "finite_live_gate_passed":passed,"tracking_ping_interval_us":TRACKING_PING_INTERVAL_US,"reason":outcome.reason,"measurement":measurement.ok(),"measurement_error":measurement_error,"model_sha256":detector::MODEL_SHA,
         "runtime_sha256":detector::RUNTIME_SHA,"runtime_build":ort::info(),"input_size":320,"threshold":0.5,"threads":3,
         "initial_eco":trial.initial,"tracking":trial.tracking,"final_eco":trial.final_eco,"session_final":outcome.final_status,
         "receiver":{"messages":outcome.stats.messages,"frames":outcome.stats.frames,"admitted":outcome.stats.admitted,"dropped":outcome.stats.dropped,
             "overwritten":outcome.stats.overwritten,"queue_busy":outcome.stats.queue_busy,"rejected_ack":outcome.stats.rejected_ack,
-            "first_device":outcome.stats.first_device,"last_device":outcome.stats.last_device},
+            "first_device":outcome.stats.first_device,"last_device":outcome.stats.last_device,
+            "max_receive_call_us":outcome.stats.max_receive_call_us,"max_control_send_us":outcome.stats.max_control_send_us,
+            "max_admission_guard_us":outcome.stats.max_admission_guard_us},
         "worker":{"inferred":s.counters.inferred,"published":s.counters.published,"dropped":s.counters.dropped,
             "failures":s.counters.failures,"evidence_lost":s.counters.evidence_lost},"process_before_worker_shutdown":usage,"samples":samples,"recent_worker_drops":drops});
     let raw = serde_json::to_vec(&report)?;

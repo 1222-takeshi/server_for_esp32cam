@@ -279,11 +279,26 @@ fn ending_session_fences_inflight_result_before_status_and_lease_release() {
         jpeg: vec![1],
     };
     let arrival = evidence.admit(&frame, clock()).unwrap();
-    worker.submit(Job {
-        frame,
-        arrival,
-        cancelled: token.clone(),
-    });
+    // LatestSlot submission is intentionally nonblocking: an empty queue can
+    // briefly return Busy while the worker checks it. Do not silently lose the job.
+    let submit_deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match worker.submit(Job {
+            frame: crate::Frame {
+                jpeg: vec![1],
+                ..frame
+            },
+            arrival,
+            cancelled: token.clone(),
+        }) {
+            Submit::Queued => break,
+            Submit::Busy => {
+                assert!(Instant::now() < submit_deadline);
+                thread::sleep(Duration::from_millis(1));
+            }
+            other => panic!("unexpected submission: {other:?}"),
+        }
+    }
     started.recv_timeout(Duration::from_secs(2)).unwrap();
     let receiver = Receiver::new(&worker, Limits::default()).unwrap();
     let snapshot = receiver.snapshot_and_cancel(&token);
@@ -298,5 +313,60 @@ fn ending_session_fences_inflight_result_before_status_and_lease_release() {
     assert_eq!(state.lock().unwrap().counters.published, 0);
     assert_eq!(state.lock().unwrap().counters.dropped, 1);
     state.lock().unwrap().release_session(&token);
+    worker.stop().unwrap();
+}
+
+#[test]
+fn receive_stamp_does_not_wait_for_the_mode_mutex() {
+    let (state, worker, _) = setup();
+    let (mut client, mut server) = pair();
+    let receiver = Receiver::new(&worker, Limits::default()).unwrap();
+    let guard = state.lock().unwrap();
+    client.send(Message::Text("payload".into())).unwrap();
+    let (sent, received) = std::sync::mpsc::channel();
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut stats = Stats::default();
+            let message = receiver.receive(&mut server, &mut stats).unwrap();
+            sent.send((message, stats.max_receive_call_us)).unwrap();
+        });
+        let result = received.recv_timeout(Duration::from_secs(1));
+        drop(guard); // Release before asserting, so a regression cannot deadlock the test.
+        let (message, elapsed) = result.expect("read receipt must not acquire the state lock");
+        assert!(
+            matches!(message, Some((Message::Text(text), stamp)) if text=="payload" && stamp>=100_000)
+        );
+        assert!(elapsed < 1_000_000);
+    });
+    worker.stop().unwrap();
+}
+
+#[test]
+fn probe_interval_limits_are_validated_before_socket_use() {
+    let (_, worker, _) = setup();
+    for interval in [0, 49_999, 2_000_001, u64::MAX] {
+        assert!(
+            Receiver::new(
+                &worker,
+                Limits {
+                    tracking_ping_interval_us: interval,
+                    ..Limits::default()
+                }
+            )
+            .is_err()
+        );
+    }
+    for interval in [50_000, 200_000, 2_000_000] {
+        assert!(
+            Receiver::new(
+                &worker,
+                Limits {
+                    tracking_ping_interval_us: interval,
+                    ..Limits::default()
+                }
+            )
+            .is_ok()
+        );
+    }
     worker.stop().unwrap();
 }

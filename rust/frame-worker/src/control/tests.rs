@@ -180,3 +180,54 @@ fn arrival_proof_cannot_be_reused_for_another_identity() {
     }
     assert!(proof.fits(&original, 100_000, 0));
 }
+
+#[test]
+fn explicit_probe_interval_reduces_traffic_with_original_timeout_and_bounds() {
+    let mut clock = SessionClock::default();
+    for bad in [0, 49_999, 2_000_001, u64::MAX] {
+        assert_eq!(
+            clock.poll_interval(100_000, bad, || panic!(
+                "invalid interval must not request entropy"
+            )),
+            Err("invalid_ping_interval")
+        );
+    }
+    assert!(
+        clock
+            .poll_interval(100_000, 200_000, || Ok("0123456789abcdef".into()))
+            .unwrap()
+            .is_some()
+    );
+    clock.pong(1, "0123456789abcdef", 100_001, 100_010).unwrap();
+    assert!(
+        clock
+            .poll_interval(299_999, 200_000, || panic!("not due"))
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        clock
+            .poll_interval(300_000, 200_000, || Ok("0123456789abcdee".into()))
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        clock
+            .poll_interval(1_300_000, 200_000, || panic!("pending"))
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        clock.poll_interval(1_300_001, 200_000, || panic!("expired")),
+        Err("clock_timeout")
+    );
+    // Eco and tracking interval endpoints remain accepted.
+    for interval in [50_000, 2_000_000] {
+        assert!(
+            SessionClock::default()
+                .poll_interval(1, interval, || Ok("0123456789abcdef".into()))
+                .unwrap()
+                .is_some()
+        );
+    }
+}
