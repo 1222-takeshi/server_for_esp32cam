@@ -132,6 +132,14 @@ fn execute() -> Result<bool> {
     if nonce.len() != 16 || !nonce.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err("invalid supervisor nonce".into());
     }
+    let duration = std::env::var("ESP32CAM_RUST_TRIAL_SECONDS")
+        .map(Some)
+        .or_else(|e| match e {
+            std::env::VarError::NotPresent => Ok(None),
+            _ => Err("invalid duration"),
+        })?;
+    let duration_us = trial::duration_us(duration.as_deref()).map_err(|_| "invalid duration")?;
+    let budget_seconds = duration_us / 1_000_000 + 120;
     let selected = key(
         camera,
         &std::env::var("ESP32CAM_DEVICE_API_KEY").unwrap_or_default(),
@@ -202,11 +210,13 @@ fn execute() -> Result<bool> {
             Err(e) => return Err(e.into()),
         }
     };
-    let mut trial = Trial::new(boot, 60_000_000).map_err(|_| "invalid trial")?;
+    let mut trial = Trial::new(boot, duration_us).map_err(|_| "invalid trial")?;
     let receiver = Receiver::new(
         &worker,
         Limits {
-            duration_us: 180_000_000,
+            duration_us: budget_seconds * 1_000_000,
+            frames: budget_seconds * 12,
+            messages: budget_seconds * 50,
             ..Limits::default()
         },
     )
@@ -259,7 +269,7 @@ fn execute() -> Result<bool> {
         "worker":{"inferred":s.counters.inferred,"published":s.counters.published,"dropped":s.counters.dropped,
             "failures":s.counters.failures,"evidence_lost":s.counters.evidence_lost},"process_before_worker_shutdown":usage,"samples":samples,"recent_worker_drops":drops,"transport_io":io_trace});
     let raw = serde_json::to_vec(&report)?;
-    if raw.len() > 2 * 1024 * 1024 {
+    if raw.len() > 16 * 1024 * 1024 {
         return Err("report limit".into());
     }
     io::stdout().lock().write_all(&raw)?;

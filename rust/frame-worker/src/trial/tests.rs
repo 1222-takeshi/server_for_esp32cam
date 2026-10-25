@@ -133,7 +133,12 @@ fn readiness_reboot_and_manual_latches_abort_without_tracking_retry() {
         assert_eq!(state.mode.requested(), Mode::Eco);
         assert!(trial.evaluate(&[]).is_err());
     }
-    for (boot, duration) in [(0, 10_000_000), (1, 0), (1, 10_000_001), (1, 130_000_000)] {
+    for (boot, duration) in [
+        (0, 10_000_000),
+        (1, 0),
+        (1, 10_000_001),
+        (1, MAX_DURATION_US + 10_000_000),
+    ] {
         assert!(Trial::new(boot, duration).is_err());
     }
 }
@@ -215,4 +220,58 @@ fn exact_five_hz_anchors_to_a_real_result_after_active_confirmation() {
     let report = trial.evaluate(state.samples()).unwrap();
     assert_eq!(report["window_results"], json!([50]));
     assert_eq!(report["recognition_hz"], json!(5.0));
+}
+
+#[test]
+fn duration_is_explicit_bounded_and_defaults_to_sixty_seconds() {
+    assert_eq!(duration_us(None), Ok(60_000_000));
+    for seconds in ["10", "60", "600", "3600"] {
+        let value = duration_us(Some(seconds)).unwrap();
+        assert!(Trial::new(1, value).is_ok());
+    }
+    for value in [
+        "",
+        "0",
+        "1",
+        "9",
+        "61",
+        "3601",
+        "3610",
+        "-60",
+        "+60",
+        " 60",
+        "60 ",
+        "060",
+        "99999999999999999",
+    ] {
+        assert!(duration_us(Some(value)).is_err(), "{value}");
+    }
+}
+
+#[test]
+fn hour_evidence_keeps_every_window_and_freshness_gate() {
+    let mut trial = Trial::new(1, MAX_DURATION_US).unwrap();
+    trial.phase = Phase::Done;
+    trial.start = Some(1);
+    trial.end = Some(1 + MAX_DURATION_US);
+    trial.generation = Some(2);
+    let mut samples: Vec<_> = (0..18_000)
+        .map(|i| Sample {
+            boot: 1,
+            generation: 2,
+            sequence: i + 1,
+            published_us: 1 + i * 200_000,
+            age_high_us: 500_000,
+            compute_us: 150_000,
+        })
+        .collect();
+    let report = trial.evaluate(&samples).unwrap();
+    assert_eq!(report["results"], 18_000);
+    assert_eq!(report["window_results"], json!(vec![50; 360]));
+    assert_eq!(report["max_gap_us"], 200_000);
+    samples[10_000].age_high_us = 500_001;
+    assert!(trial.evaluate(&samples).is_err());
+    samples[10_000].age_high_us = 500_000;
+    samples.drain(10_000..10_003);
+    assert_eq!(trial.evaluate(&samples), Err("tracking_below_target"));
 }

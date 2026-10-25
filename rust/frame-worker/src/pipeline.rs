@@ -20,7 +20,7 @@ use std::{
 };
 
 pub type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
-const MAX_SAMPLES: usize = 8192;
+pub const MAX_SAMPLES: usize = 65_536;
 pub struct Job {
     pub frame: Frame,
     pub arrival: Arrival,

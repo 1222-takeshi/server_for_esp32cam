@@ -97,9 +97,9 @@ pub struct Receiver<'a> {
 }
 impl<'a> Receiver<'a> {
     pub fn new(worker: &'a Worker, limits: Limits) -> Result<Self> {
-        if !(1..=600_000_000).contains(&limits.duration_us)
-            || !(1..=20_000).contains(&limits.messages)
-            || !(1..=7000).contains(&limits.frames)
+        if !(1..=3_720_000_000).contains(&limits.duration_us)
+            || !(1..=200_000).contains(&limits.messages)
+            || !(1..=50_000).contains(&limits.frames)
             || !(1..=100).contains(&limits.rate)
         {
             return Err("invalid_limits");

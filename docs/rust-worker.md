@@ -160,3 +160,23 @@ JPEG・キー・message本文は保持せず、frame単位disk logを追加し�
 
 送信候補の3回の有限5Hz試験と元FW復旧は[追加検証記録](rust-firmware-validation.md)を参照してください。
 候補3回は全て通過しましたが、元FWの事後referenceも通過し、因果・長時間安定性は未確定です。
+
+
+### Bounded longer live experiments
+
+`frame-live` keeps the sixty-second default. The private supervisor may explicitly
+set `ESP32CAM_RUST_TRIAL_SECONDS` to a multiple of ten from 10 through 3600
+(e.g. 600 for ten minutes). Invalid values fail before loading the model. The
+receiver budget is the requested duration plus 120 seconds for mode transitions;
+it remains capped at 3720 seconds, 50000 frames and 200000 messages, with the
+existing rate limit unchanged. Runtime frame/message budgets are smaller for
+shorter runs.
+
+Publication evidence is bounded at 65536 metadata records; overflow still fails
+the trial. The single final JSON report is capped at 16 MiB. No JPEGs or model
+outputs are added to these records. The supervisor must use matching finite
+process/file limits, check disk/thermal/memory readiness throughout, and restore
+the original firmware and eco mode on success or failure. Each ten-second window
+still requires 50 results; maximum age and result gap remain 500 ms. Expanding
+the experiment duration does not establish sustained performance, accuracy parity,
+10 Hz operation, or permission for permanent rollout.

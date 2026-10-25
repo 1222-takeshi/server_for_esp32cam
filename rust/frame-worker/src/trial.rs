@@ -1,10 +1,29 @@
 //! Finite observe-only trial policy. This never issues physical motor commands.
 use crate::{
     operating_mode::Mode,
-    pipeline::{Sample, State},
+    pipeline::{MAX_SAMPLES, Sample, State},
 };
 use serde_json::{Value, json};
+pub const MAX_DURATION_US: u64 = 3_600_000_000;
+
 type Result<T> = std::result::Result<T, &'static str>;
+/// Explicit experiment duration; the existing sixty-second default is unchanged.
+pub fn duration_us(value: Option<&str>) -> Result<u64> {
+    let raw = value.unwrap_or("60");
+    if raw.is_empty()
+        || raw.len() > 4
+        || raw.starts_with('0')
+        || !raw.bytes().all(|c| c.is_ascii_digit())
+    {
+        return Err("invalid_duration");
+    }
+    let micros = raw.parse::<u64>().map_err(|_| "invalid_duration")? * 1_000_000;
+    if !(10_000_000..=MAX_DURATION_US).contains(&micros) || !micros.is_multiple_of(10_000_000) {
+        return Err("invalid_duration");
+    }
+    Ok(micros)
+}
+
 #[derive(PartialEq, Eq)]
 enum Phase {
     InitialEco,
@@ -28,7 +47,7 @@ pub struct Trial {
 impl Trial {
     pub fn new(boot: u64, duration_us: u64) -> Result<Self> {
         if boot == 0
-            || !(10_000_000..=120_000_000).contains(&duration_us)
+            || !(10_000_000..=MAX_DURATION_US).contains(&duration_us)
             || !duration_us.is_multiple_of(10_000_000)
         {
             return Err("invalid_trial");
@@ -164,7 +183,7 @@ impl Trial {
             .iter()
             .filter(|s| start <= s.published_us && s.published_us < end)
             .collect();
-        if records.is_empty() || records.len() > 8192 {
+        if records.is_empty() || records.len() > MAX_SAMPLES {
             return Err("invalid_samples");
         }
         let mut counts = vec![0u64; (self.duration / 10_000_000) as usize];
