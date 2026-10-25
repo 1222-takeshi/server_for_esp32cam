@@ -157,3 +157,6 @@ wall timestampは通信ヘッダー採取との照合専用で、鮮度・制御
 JPEG・キー・message本文は保持せず、frame単位disk logを追加しません。call所要時間を
 純粋なnetwork latencyとは呼びません。clock200ms/TCP_QUICKACK案は実機で再発し不採用です。
 原因解析と改善受入は#573で継続し、#558のrawは変更しません。
+
+送信候補の3回の有限5Hz試験と元FW復旧は[追加検証記録](rust-firmware-validation.md)を参照してください。
+候補3回は全て通過しましたが、元FWの事後referenceも通過し、因果・長時間安定性は未確定です。
