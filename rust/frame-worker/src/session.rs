@@ -38,6 +38,17 @@ pub struct Receipt {
     pub received_us: u64,
     pub ws_complete_unix_us: Option<u64>,
 }
+pub struct Rejection {
+    pub boot: u64,
+    pub generation: Option<u64>,
+    pub sequence: u64,
+    pub captured_us: u64,
+    pub sent_us: u64,
+    pub received_us: u64,
+    pub stage: &'static str,
+    pub age_bounds: Option<crate::clock::AgeBounds>,
+    pub clock_exchanges: Vec<[u64; 4]>,
+}
 #[derive(Default)]
 pub struct Stats {
     pub messages: u64,
@@ -51,10 +62,45 @@ pub struct Stats {
     pub max_control_send_us: u64,
     pub max_admission_guard_us: u64,
     pub recent_receipts: VecDeque<Receipt>,
+    pub recent_rejections: VecDeque<Rejection>,
     pub first_device: Option<[u64; 6]>,
     pub last_device: Option<[u64; 6]>,
 }
 impl Stats {
+    fn reject(
+        &mut self,
+        frame: &crate::Frame,
+        received_us: u64,
+        stage: &'static str,
+        clock: &SessionClock,
+    ) {
+        self.dropped += 1;
+        let (age_bounds, clock_exchanges) = clock.diagnostic(frame, received_us);
+        let stage = if stage == "clock" {
+            if age_bounds.is_some() {
+                "age_limit"
+            } else {
+                "clock_unavailable"
+            }
+        } else {
+            stage
+        };
+        if self.recent_rejections.len() == 32 {
+            self.recent_rejections.pop_front();
+        }
+        self.recent_rejections.push_back(Rejection {
+            boot: frame.boot,
+            generation: frame.generation,
+            sequence: frame.sequence,
+            captured_us: frame.captured_us,
+            sent_us: frame.sent_us,
+            received_us,
+            stage,
+            age_bounds,
+            clock_exchanges,
+        });
+    }
+
     fn receipt(&mut self, sequence: u64, received_us: u64, ws_complete_unix_us: Option<u64>) {
         if self.recent_receipts.len() == 32 {
             self.recent_receipts.pop_front();
@@ -303,7 +349,7 @@ impl<'a> Receiver<'a> {
                         .and_then(|e| e.observed_unix_us);
                     stats.receipt(frame.sequence, received, wall);
                     if order.observe(&frame).is_err() {
-                        stats.dropped += 1;
+                        stats.reject(&frame, received, "order", &clock);
                         continue;
                     }
                     let begun_guard = (self.clock)();
@@ -317,11 +363,11 @@ impl<'a> Receiver<'a> {
                         .max_admission_guard_us
                         .max((self.clock)().saturating_sub(begun_guard));
                     if !allowed {
-                        stats.dropped += 1;
+                        stats.reject(&frame, received, "mode", &clock);
                         continue;
                     }
                     let Some(arrival) = clock.admit(&frame, received) else {
-                        stats.dropped += 1;
+                        stats.reject(&frame, received, "clock", &clock);
                         continue;
                     };
                     match self.worker.submit(Job {

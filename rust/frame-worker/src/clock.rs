@@ -80,6 +80,21 @@ impl ClockWindow {
         Ok(())
     }
 
+    /// Bounded numeric evidence only: boot, device, host sent, host received.
+    pub fn evidence(&self) -> Vec<[u64; 4]> {
+        self.samples
+            .iter()
+            .map(|s| {
+                [
+                    s.boot,
+                    s.device_us,
+                    (s.low + i128::from(s.device_us)) as u64,
+                    s.received_us,
+                ]
+            })
+            .collect()
+    }
+
     pub fn age_bounds(&self, frame: &Frame, now_us: u64) -> Option<AgeBounds> {
         let mut bounds: Option<AgeBounds> = None;
         for sample in &self.samples {
