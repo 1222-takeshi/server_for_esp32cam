@@ -269,7 +269,8 @@ fn execute() -> Result<bool> {
         "worker":{"inferred":s.counters.inferred,"published":s.counters.published,"dropped":s.counters.dropped,
             "failures":s.counters.failures,"evidence_lost":s.counters.evidence_lost},"process_before_worker_shutdown":usage,"samples":samples,"recent_worker_drops":drops,"transport_io":io_trace});
     let raw = serde_json::to_vec(&report)?;
-    if raw.len() > 16 * 1024 * 1024 {
+    // The on-disk cap includes the trailing newline.
+    if raw.len() >= 16 * 1024 * 1024 {
         return Err("report limit".into());
     }
     io::stdout().lock().write_all(&raw)?;
