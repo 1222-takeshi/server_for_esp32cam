@@ -192,7 +192,7 @@ fn limits_and_legacy_frames_fail_closed_with_a_reusable_lease() {
                 ..limits
             },
             Limits {
-                duration_us: 600_000_001,
+                duration_us: 3_720_000_001,
                 ..limits
             },
             Limits {
@@ -200,7 +200,7 @@ fn limits_and_legacy_frames_fail_closed_with_a_reusable_lease() {
                 ..limits
             },
             Limits {
-                frames: 7001,
+                frames: 50_001,
                 ..limits
             },
             Limits {
@@ -208,7 +208,7 @@ fn limits_and_legacy_frames_fail_closed_with_a_reusable_lease() {
                 ..limits
             },
             Limits {
-                messages: 20_001,
+                messages: 200_001,
                 ..limits
             },
             Limits { rate: 0, ..limits },
