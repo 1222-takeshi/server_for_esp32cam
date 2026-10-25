@@ -95,7 +95,7 @@ def test_profile_target_and_fresh_buffer_gate():
     assert "-D OPERATING_PROFILES=1" in section
     assert "esp32cam_operating_profiles" not in ini.split("default_envs =", 1)[1].split("\n", 1)[0]
     source = (FIRMWARE / "src" / "high_rate.cpp").read_text()
-    assert source.index("!profile.accepts(capturedUs)") < source.index("memcpy(packet")
+    assert source.index("!profile.accepts(capturedUs)") < source.index("memcpy(payload")
     loop = source.split("void loop() {", 1)[1]
     assert loop.index("ArduinoOTA.handle()") < loop.index("webSocket.loop()")
     assert loop.index("lastServerMs) >= 5000") < loop.index("captureAndSend()")

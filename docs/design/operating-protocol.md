@@ -27,6 +27,20 @@ ECF1は既存40byteのままです。ECF2はbig-endianの48byte headerで、順�
 JPEG上限128KiB、世代0のframeは送信/受入しません。Python decoderは`allow_profiles=True`でのみ
 ECF2を受け入れます。JPEGの受信時に現在の世代を付け直すことは禁止します。
 
+#573の送信候補は、既存の実機build記録と同じEspressif32 6.5.0 / WebSockets 2.7.3を固定し、
+ECF込み1400byte以上で14byteの前置領域と`sendBIN(..., true)`を使います。
+小さいframeは従来の`sendBIN(..., false)`経路を維持し、十分な空きheapがある場合の
+内部buffer/mask分岐も変えません。ライブラリの`headerToPayload`
+[契約](https://github.com/Links2004/arduinoWebSockets/blob/master/src/WebSockets.cpp)に従い、
+WS headerとECF/JPEGを一つのlibrary writeへ渡します。PSRAMの追加は14byteです。
+ECF1/ECF2と復号後のJPEG byte列、撮影間隔・画質・mode/ACK/watchdogは維持します。
+WS maskはapplication payloadと区別し、wire全体のbyte一致は主張しません。
+同版の大きいframeと低heap時などの小さいframeには既存の固定ゼロmask問題があり、
+[#576](https://github.com/1222-takeshi/server_for_esp32cam/issues/576)で別途追跡します。
+一つのwriteは一つのTCP segmentや無線再送の解消を保証しません。hostテスト・buildは
+配置/互換性の検証であり、実機での遅延改善・継続5Hzの受入は別です。
+FW OTAは承認後に、元firmwareへの復旧手順と有限試験guardを用意して実施します。
+
 `CaptureReceiver(profile=OperatingMode(), continuous=True, result_sink=...)` が対応経路です。
 受信loopは100ms以下の待ち時間でcommand/watchdogを処理し、helloなし5秒で切断します。
 ACK一致後のECF2だけを推論し、世代変更時は旧待ち画像を破棄、推論中の旧結果も公開前に拒否します。

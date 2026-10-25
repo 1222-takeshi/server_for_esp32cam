@@ -46,6 +46,7 @@ constexpr bool profilesEnabled =
     false;
 #endif
 constexpr size_t headerSize = profilesEnabled ? operating::kHeaderSize : high_rate::kHeaderSize;
+static_assert(WEBSOCKETS_MAX_HEADER_SIZE == 14, "Recheck WebSockets headerToPayload layout");
 operating::Profile profile;
 uint32_t lastServerMs = 0;
 WebSocketsClient webSocket;
@@ -186,17 +187,22 @@ void captureAndSend() {
     return;
   }
   const size_t jpegLength = fb->len;
-  memcpy(packet + headerSize, fb->buf, jpegLength);
+  // Reserve library headroom so WS header + ECF header + JPEG share one write.
+  uint8_t *const payload = packet + WEBSOCKETS_MAX_HEADER_SIZE;
+  memcpy(payload + headerSize, fb->buf, jpegLength);
   esp_camera_fb_return(fb);
   const uint64_t sentUs = static_cast<uint64_t>(esp_timer_get_time());
   const bool encoded = profilesEnabled ?
-      operating::encodeHeader(packet, bootId, frameSeq, capturedUs, sentUs, jpegLength, profile.generation) :
-      high_rate::encodeHeader(packet, bootId, frameSeq, capturedUs, sentUs, jpegLength);
+      operating::encodeHeader(payload, bootId, frameSeq, capturedUs, sentUs, jpegLength, profile.generation) :
+      high_rate::encodeHeader(payload, bootId, frameSeq, capturedUs, sentUs, jpegLength);
   if (!encoded) {
     ++sendFailures;
     return;
   }
-  if (webSocket.sendBIN(packet, headerSize + jpegLength)) ++sent;
+  const size_t length = headerSize + jpegLength;
+  // Small frames retain the library's existing internal-buffer/masking path.
+  const bool inlineHeader = length >= 1400;
+  if (webSocket.sendBIN(inlineHeader ? packet : payload, length, inlineHeader)) ++sent;
   else ++sendFailures;
 }
 }  // namespace
@@ -230,7 +236,7 @@ void setup() {
     Serial.println("High-rate camera initialization failed; OTA remains available.");
     return;
   }
-  packet = static_cast<uint8_t *>(ps_malloc(headerSize + high_rate::kMaxJpegBytes));
+  packet = static_cast<uint8_t *>(ps_malloc(WEBSOCKETS_MAX_HEADER_SIZE + headerSize + high_rate::kMaxJpegBytes));
   if (packet == nullptr) {
     Serial.println("High-rate packet allocation failed; OTA remains available.");
     esp_camera_deinit();

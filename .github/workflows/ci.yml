@@ -67,9 +67,9 @@ jobs:
           path: ~/.platformio
           key: platformio-operating-${{ hashFiles('firmware/esp32cam-http-upload/platformio.ini') }}
       - run: pip install platformio==6.1.19
-      - name: Compile legacy experiment and common profiles without credentials
+      - name: Compile ordinary HTTP, legacy experiment and common profiles without credentials
         working-directory: firmware/esp32cam-http-upload
-        run: pio run -e esp32cam_high_rate_capture -e esp32cam_operating_profiles
+        run: pio run -e esp32cam_http_upload_smoke -e esp32cam_high_rate_capture -e esp32cam_operating_profiles
 
   test:
     runs-on: ubuntu-latest
