@@ -76,7 +76,7 @@ jobs:
         env:
           ESP32CAM_WEBSOCKETS_SOURCE: firmware/esp32cam-http-upload/.pio/libdeps/esp32cam_operating_profiles/WebSockets/src/WebSockets.cpp
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
-        run: python -m pytest -q tests/test_websocket_masking_host.py
+        run: python -m pytest --noconftest -q tests/test_websocket_masking_host.py
 
   test:
     runs-on: ubuntu-latest
