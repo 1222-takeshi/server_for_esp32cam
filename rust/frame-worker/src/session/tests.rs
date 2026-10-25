@@ -340,33 +340,3 @@ fn receive_stamp_does_not_wait_for_the_mode_mutex() {
     });
     worker.stop().unwrap();
 }
-
-#[test]
-fn probe_interval_limits_are_validated_before_socket_use() {
-    let (_, worker, _) = setup();
-    for interval in [0, 49_999, 2_000_001, u64::MAX] {
-        assert!(
-            Receiver::new(
-                &worker,
-                Limits {
-                    tracking_ping_interval_us: interval,
-                    ..Limits::default()
-                }
-            )
-            .is_err()
-        );
-    }
-    for interval in [50_000, 200_000, 2_000_000] {
-        assert!(
-            Receiver::new(
-                &worker,
-                Limits {
-                    tracking_ping_interval_us: interval,
-                    ..Limits::default()
-                }
-            )
-            .is_ok()
-        );
-    }
-    worker.stop().unwrap();
-}

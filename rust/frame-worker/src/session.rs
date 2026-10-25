@@ -21,7 +21,6 @@ pub struct Limits {
     pub messages: u64,
     pub frames: u64,
     pub rate: u64,
-    pub tracking_ping_interval_us: u64,
 }
 impl Default for Limits {
     fn default() -> Self {
@@ -30,7 +29,6 @@ impl Default for Limits {
             messages: 20_000,
             frames: 7000,
             rate: 100,
-            tracking_ping_interval_us: 50_000,
         }
     }
 }
@@ -84,7 +82,6 @@ impl<'a> Receiver<'a> {
             || !(1..=20_000).contains(&limits.messages)
             || !(1..=7000).contains(&limits.frames)
             || !(1..=100).contains(&limits.rate)
-            || !(50_000..=2_000_000).contains(&limits.tracking_ping_interval_us)
         {
             return Err("invalid_limits");
         }
@@ -210,12 +207,7 @@ impl<'a> Receiver<'a> {
             if let Some(command) = command {
                 self.send(socket, &command.to_string(), stats)?;
             }
-            let interval = if tracking {
-                self.limits.tracking_ping_interval_us
-            } else {
-                2_000_000
-            };
-            if let Some(ping) = clock.poll_interval(now, interval, || {
+            if let Some(ping) = clock.poll(now, tracking, || {
                 transport::nonce().map_err(|_| "entropy_unavailable")
             })? {
                 self.send(socket, &ping.to_string(), stats)?;

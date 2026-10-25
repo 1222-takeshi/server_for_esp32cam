@@ -19,8 +19,6 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-const TRACKING_PING_INTERVAL_US: u64 = 200_000;
-
 #[derive(Clone, Copy, Default)]
 struct Beat {
     alive: bool,
@@ -189,7 +187,7 @@ fn execute() -> Result<bool> {
             return Err("camera connection timeout".into());
         }
         match listener.accept() {
-            Ok((tcp, _)) => match Connection::accept(tcp, &auth) {
+            Ok((tcp, _)) => match Connection::accept_with_quickack(tcp, &auth, true) {
                 Ok(socket) => break socket,
                 Err(_) => {
                     rejected += 1;
@@ -209,7 +207,6 @@ fn execute() -> Result<bool> {
         &worker,
         Limits {
             duration_us: 180_000_000,
-            tracking_ping_interval_us: TRACKING_PING_INTERVAL_US,
             ..Limits::default()
         },
     )
@@ -245,7 +242,7 @@ fn execute() -> Result<bool> {
         })
         .collect();
     let report = json!({"schema":1,"live_validation_only":true,"physical_motor_control":false,"global_acceptance":false,
-        "finite_live_gate_passed":passed,"tracking_ping_interval_us":TRACKING_PING_INTERVAL_US,"reason":outcome.reason,"measurement":measurement.ok(),"measurement_error":measurement_error,"model_sha256":detector::MODEL_SHA,
+        "finite_live_gate_passed":passed,"tracking_ping_interval_us":50_000,"quickack_requested":socket.quickack_requested(),"quickack_requests":socket.quickack_requests(),"reason":outcome.reason,"measurement":measurement.ok(),"measurement_error":measurement_error,"model_sha256":detector::MODEL_SHA,
         "runtime_sha256":detector::RUNTIME_SHA,"runtime_build":ort::info(),"input_size":320,"threshold":0.5,"threads":3,
         "initial_eco":trial.initial,"tracking":trial.tracking,"final_eco":trial.final_eco,"session_final":outcome.final_status,
         "receiver":{"messages":outcome.stats.messages,"frames":outcome.stats.frames,"admitted":outcome.stats.admitted,"dropped":outcome.stats.dropped,

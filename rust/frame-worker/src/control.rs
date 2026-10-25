@@ -170,18 +170,6 @@ impl SessionClock {
         tracking: bool,
         nonce: impl FnOnce() -> Result<String>,
     ) -> Result<Option<Value>> {
-        self.poll_interval(now, if tracking { 50_000 } else { 2_000_000 }, nonce)
-    }
-    /// Explicit probe cadence; does not change exchange timeout or age proof.
-    pub fn poll_interval(
-        &mut self,
-        now: u64,
-        interval: u64,
-        nonce: impl FnOnce() -> Result<String>,
-    ) -> Result<Option<Value>> {
-        if !(50_000..=2_000_000).contains(&interval) {
-            return Err("invalid_ping_interval");
-        }
         if now == 0 {
             return Err("invalid_host_clock");
         }
@@ -192,6 +180,7 @@ impl SessionClock {
         {
             return Err("clock_timeout");
         }
+        let interval = if tracking { 50_000 } else { 2_000_000 };
         let due = match self.last_ping {
             None => true,
             Some(last) => now.checked_sub(last).ok_or("invalid_host_clock")? >= interval,

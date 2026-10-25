@@ -65,6 +65,29 @@ struct BoundedStream {
     deadline: Option<Instant>,
     remaining: Option<usize>,
     write_failed: bool,
+    quickack: bool,
+    quickack_requests: u64,
+}
+impl BoundedStream {
+    fn quick_ack(&mut self) -> io::Result<()> {
+        if !self.quickack {
+            return Ok(());
+        }
+        #[cfg(target_os = "linux")]
+        {
+            // QUICKACK is not persistent: re-request after each positive TCP read.
+            // Convert errors to a fatal kind; bytes already consumed cannot be retried.
+            socket2::SockRef::from(&self.socket)
+                .set_tcp_quickack(true)
+                .map_err(|_| io::Error::other("TCP acknowledgement option failed"))?;
+            self.quickack_requests = self.quickack_requests.saturating_add(1);
+            Ok(())
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Err(io::ErrorKind::Unsupported.into())
+        }
+    }
 }
 impl Read for BoundedStream {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
@@ -85,6 +108,9 @@ impl Read for BoundedStream {
         let count = self.socket.read(&mut buffer[..length])?;
         if let Some(remaining) = self.remaining.as_mut() {
             *remaining -= count;
+        }
+        if count > 0 {
+            self.quick_ack()?;
         }
         Ok(count)
     }
@@ -126,15 +152,28 @@ impl Drop for Connection {
     }
 }
 impl Connection {
+    pub fn accept(socket: TcpStream, auth: &Auth) -> io::Result<Self> {
+        Self::accept_with_quickack(socket, auth, false)
+    }
     // Tungstenite Callback requires its unboxed HTTP ErrorResponse.
     #[allow(clippy::result_large_err)]
-    pub fn accept(socket: TcpStream, auth: &Auth) -> io::Result<Self> {
+    pub fn accept_with_quickack(
+        socket: TcpStream,
+        auth: &Auth,
+        quickack: bool,
+    ) -> io::Result<Self> {
+        #[cfg(not(target_os = "linux"))]
+        if quickack {
+            return Err(io::ErrorKind::Unsupported.into());
+        }
         socket.set_nodelay(true)?;
         let stream = BoundedStream {
             socket,
             deadline: Some(Instant::now() + HANDSHAKE_TIMEOUT),
             remaining: Some(HANDSHAKE_LIMIT),
             write_failed: false,
+            quickack,
+            quickack_requests: 0,
         };
         let config = WebSocketConfig::default()
             .read_buffer_size(4096)
@@ -165,6 +204,12 @@ impl Connection {
             .socket
             .set_read_timeout(Some(Duration::from_millis(50)))?;
         Ok(Self(socket))
+    }
+    pub fn quickack_requested(&self) -> bool {
+        self.0.get_ref().quickack
+    }
+    pub fn quickack_requests(&self) -> u64 {
+        self.0.get_ref().quickack_requests
     }
     /// None is a 50ms absolute receive wakeup, not EOF. Drop on any error.
     pub fn receive(&mut self) -> io::Result<Option<Message>> {

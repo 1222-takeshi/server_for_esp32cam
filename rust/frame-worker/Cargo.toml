@@ -12,7 +12,7 @@ required-features = ["jpeg"]
 
 [features]
 jpeg = ["dep:turbojpeg"]
-transport = ["dep:tungstenite", "dep:subtle", "dep:getrandom"]
+transport = ["dep:tungstenite", "dep:subtle", "dep:getrandom", "dep:socket2"]
 
 [dependencies]
 ort = { version = "=2.0.0-rc.11", default-features = false, features = ["std", "load-dynamic"] }
@@ -29,3 +29,6 @@ getrandom = { version = "=0.4.3", features = ["std"], optional = true }
 name = "frame-live"
 path = "src/live_main.rs"
 required-features = ["jpeg", "transport"]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+socket2 = { version = "=0.6.3", features = ["all"], optional = true }
