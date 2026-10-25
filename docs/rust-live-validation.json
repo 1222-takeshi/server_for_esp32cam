@@ -1,0 +1,130 @@
+{
+  "schema": 1,
+  "issue": 558,
+  "follow_up_issue": 573,
+  "scope": "finite_live_validation_only",
+  "global_acceptance": false,
+  "physical_motor_control": false,
+  "platform": "Raspberry Pi 4 / ARM64 / 4 GB",
+  "inference_on_mac": false,
+  "source_commit": "8a6e467d11a43b99e952bbaca1cefd54f8782fe0",
+  "merge_commit": "2da84ef2c3d98556bf88b35efa259f964acacb21",
+  "binary_sha256": "e1f0203c23e516a679d0bad040775053fc34f5a513c4bdb79fa730c0d36cdd19",
+  "guardian_sha256": "e0a412ce7982941d513598c195edc15ed97df8b6d0325acfa6d30e41d9a35e59",
+  "model_sha256": "ff1013da8734fe2b8ede5f34a2124855d447fbefd248d148e9f29e7f8e28c9c4",
+  "runtime_sha256": "ab8c4363e06ac80b3d1279ea55ebea44e906c5b131ba783ff684a067540c0e94",
+  "runtime_build": "ORT Build Info: git-branch=HEAD, git-commit-id=a83fc4d58c, build type=Release",
+  "fixed_inference": {
+    "input_size": 320,
+    "precision": "FP32",
+    "intra_threads": 3,
+    "inter_threads": 1,
+    "execution": "sequential",
+    "spinning": false,
+    "score_threshold": 0.5,
+    "class_aware_nms_iou": 0.7,
+    "max_detections_all_classes": 300,
+    "jpeg": "libjpeg-turbo 3.1.4.1"
+  },
+  "safety_gates_us": {
+    "result_age": 500000,
+    "result_gap": 500000,
+    "inference_reserve": 165000
+  },
+  "successful_measurement": {
+    "age_max_us": 406969,
+    "age_p95_us": 225429,
+    "boot_id": 14507871396716366643,
+    "compute_p95_us": 161904,
+    "duration_us": 60000000,
+    "end_us": 87745772,
+    "generation": 1030124371315,
+    "max_gap_us": 401165,
+    "recognition_hz": 5.266666666666667,
+    "results": 316,
+    "start_us": 27745772,
+    "window_results": [
+      53,
+      53,
+      52,
+      53,
+      53,
+      52
+    ]
+  },
+  "successful_trial_resources": {
+    "vitals_samples": 102,
+    "max_temperature_millic": 63783,
+    "throttled_all_zero": true,
+    "minimum_free_bytes": 22962982912,
+    "peak_rss_kib": 50140,
+    "report_bytes": 56877,
+    "vitals_bytes": 11424,
+    "native_output_hard_limit_per_file_bytes": 2097152
+  },
+  "attempts": [
+    {
+      "run": "rust-live-20261024T143019Z-46cdbf48",
+      "finite_gate_passed": false,
+      "reason": "mode_degraded",
+      "report_sha256": "98425cfde2c3cbe5ff560700c0fd8f8150c9fddd850747df9f1dee1f2b96369e",
+      "manifest_sha256": "21cd5cd0587cbcb7c8cde42fb8c56b67057ffbf2d7965f69312451799dad16b7",
+      "python_restored": true,
+      "camera_boot_changed": false,
+      "source_commit": "4e2ce353192ff13f36b3c8c4bb8c4a9f6a340605",
+      "binary_sha256": "09ab2715085ca5e2cfe32c3522aa79553641a2cbf299710371e6639a140006b5"
+    },
+    {
+      "run": "rust-live-20261024T143928Z-b84c2957",
+      "finite_gate_passed": false,
+      "reason": "mode_degraded",
+      "report_sha256": "17531a4850b1a5b26c242f261b1909028293e13c0854e3d80375227e3513a76d",
+      "manifest_sha256": "d66c41fb53f8a1cb84231dc7ff9406b27778e295ab65fed6e8f1e4c74e82d25f",
+      "python_restored": true,
+      "camera_boot_changed": false,
+      "source_commit": "7ae1767b0f9ff3365bd6e6ee200dddf67cfe549d",
+      "binary_sha256": "f5c64fd642ae26d9c5c2536f3c7ab916f85a93d4e61caaa10feda15a1788aed3"
+    },
+    {
+      "run": "rust-live-20261024T144417Z-9eb13c8e",
+      "finite_gate_passed": false,
+      "reason": "mode_degraded",
+      "report_sha256": "109d7e096021a930d4b0c793c8ca2405c1f2a23a179a882835eed9e1fec2f1cf",
+      "manifest_sha256": "300707143c108025c6537174ae9fd4c698416aed12dc5eef0824c3f9bf183454",
+      "python_restored": true,
+      "camera_boot_changed": false,
+      "source_commit": "7ae1767b0f9ff3365bd6e6ee200dddf67cfe549d",
+      "binary_sha256": "f5c64fd642ae26d9c5c2536f3c7ab916f85a93d4e61caaa10feda15a1788aed3"
+    },
+    {
+      "run": "rust-live-20261025T002105Z-74dd8598",
+      "finite_gate_passed": true,
+      "reason": "completed",
+      "report_sha256": "9d742c5c3e89ef4b671c10a9f507968a004f45d88f5b289febf67a9a3e67cc9e",
+      "manifest_sha256": "1b763d24343c82280dd1af76294dc5a4f28d4f7be47f17e68cfe8a83a9337c16",
+      "python_restored": true,
+      "camera_boot_changed": false,
+      "source_commit": "8a6e467d11a43b99e952bbaca1cefd54f8782fe0",
+      "binary_sha256": "e1f0203c23e516a679d0bad040775053fc34f5a513c4bdb79fa730c0d36cdd19"
+    }
+  ],
+  "post_trial": {
+    "production_source": "613d29326a2cd787ac239a7f10525faf7e7aab5d",
+    "mode": "eco",
+    "state": "active",
+    "acknowledged": true,
+    "actuation_state": "hold",
+    "health": "ready",
+    "old_guard_enabled": true,
+    "trial_guard_disabled": true,
+    "camera_boot_changed": false,
+    "verification_snapshot_sha256": "4eae59b3dec70025fbae4f80a3fb0c49de4745069a5d670e0bb6dfee9fa91c7a",
+    "verification_manifest_sha256": "31cba16a9cd4881e2f7448513af594e46958e39e65602d49b5355bb5f15aff44"
+  },
+  "limitations": [
+    "Three previous finite trials failed; sustained stability and root cause remain open in #573.",
+    "Trials occurred at different times; wireless conditions are not controlled.",
+    "Offline compatibility from #553 is preserved; live ground-truth accuracy was not measured.",
+    "10 Hz, watts, 24-hour stability, and permanent Python UI/storage/notification replacement are not accepted."
+  ]
+}
