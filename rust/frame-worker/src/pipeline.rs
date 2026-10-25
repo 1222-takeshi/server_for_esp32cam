@@ -176,6 +176,8 @@ pub enum Submit {
     Invalid,
 }
 pub struct Worker {
+    #[cfg(feature = "transport")]
+    clock: Clock,
     state: Arc<Mutex<State>>,
     queue: Arc<LatestSlot<Job>>,
     stopped: Arc<AtomicBool>,
@@ -195,6 +197,8 @@ impl Worker {
         let stopped = Arc::new(AtomicBool::new(false));
         let (waiting, stop) = (queue.clone(), stopped.clone());
         let owner_state = state.clone();
+        #[cfg(feature = "transport")]
+        let owner_clock = clock.clone();
         let handle = thread::Builder::new()
             .name("frame-inference".into())
             .spawn(move || {
@@ -328,11 +332,17 @@ impl Worker {
                 stop.store(true, Ordering::Release);
             })?;
         Ok(Self {
+            #[cfg(feature = "transport")]
+            clock: owner_clock,
             state: owner_state,
             queue,
             stopped,
             thread: Some(handle),
         })
+    }
+    #[cfg(feature = "transport")]
+    pub(crate) fn clock(&self) -> Clock {
+        self.clock.clone()
     }
     pub fn state(&self) -> Arc<Mutex<State>> {
         self.state.clone()

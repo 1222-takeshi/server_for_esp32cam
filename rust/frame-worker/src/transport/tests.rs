@@ -106,6 +106,7 @@ fn handshake_byte_and_absolute_deadline_budgets() {
             deadline: Some(Instant::now() + Duration::from_millis(30)),
             remaining: Some(8),
             write_failed: false,
+            trace: VecDeque::with_capacity(32),
         };
         let start = Instant::now();
         if oversized {
@@ -214,6 +215,7 @@ fn write_deadline_failure_is_fatal_instead_of_an_idle_read() {
         deadline: Some(Instant::now()),
         remaining: None,
         write_failed: false,
+        trace: VecDeque::with_capacity(32),
     };
     assert_eq!(
         stream.write(b"pong").unwrap_err().kind(),
@@ -233,4 +235,37 @@ fn write_deadline_failure_is_fatal_instead_of_an_idle_read() {
             .is_err()
     );
     assert!(connection.receive().is_err());
+}
+
+#[test]
+fn io_trace_has_a_fixed_capacity_and_never_keeps_payloads() {
+    let (client, owner) = peer("/ws/cameras/cam-1/live", &["test-key"]);
+    let mut client = client.unwrap();
+    let mut server = owner.join().unwrap().unwrap();
+    for _ in 0..40 {
+        client
+            .send(Message::Text("private-payload".into()))
+            .unwrap();
+        assert!(
+            matches!(server.receive().unwrap(), Some(Message::Text(t)) if t=="private-payload")
+        );
+    }
+    assert_eq!(server.io_trace().len(), 32);
+    let complete = server.io_trace().back().unwrap();
+    assert_eq!(
+        (complete.kind, complete.status, complete.bytes),
+        ("text", "complete", 15)
+    );
+    assert!(complete.observed_unix_us.is_some_and(|t| t > 0));
+    assert_eq!(complete.elapsed_us, None);
+    assert!(server.receive().unwrap().is_none());
+    assert_eq!(server.io_trace().len(), 32);
+    assert!(
+        server
+            .io_trace()
+            .iter()
+            .any(|e| e.kind == "read" && e.status == "timeout")
+    );
+    let trace = format!("{:?}", server.io_trace());
+    assert!(!trace.contains("private-payload") && !trace.contains("test-key"));
 }

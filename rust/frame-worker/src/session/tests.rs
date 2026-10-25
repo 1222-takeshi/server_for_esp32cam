@@ -99,6 +99,14 @@ fn firmware_clock_hello_ack_and_result_cross_the_real_socket() {
     let outcome = receiver.run(&mut server, |s, _| Ok(s.counters.published == 0));
     assert_eq!(outcome.reason, "completed");
     assert_eq!(outcome.stats.admitted, 1);
+    assert_eq!(outcome.stats.recent_receipts.len(), 1);
+    assert_eq!(outcome.stats.recent_receipts[0].sequence, 1);
+    assert!(outcome.stats.recent_receipts[0].received_us >= 100_000);
+    assert!(
+        outcome.stats.recent_receipts[0]
+            .ws_complete_unix_us
+            .is_some()
+    );
     assert!(outcome.final_status["acknowledged"].as_bool().unwrap());
     assert!(!state.lock().unwrap().mode.connected());
     drop(server);
@@ -279,11 +287,26 @@ fn ending_session_fences_inflight_result_before_status_and_lease_release() {
         jpeg: vec![1],
     };
     let arrival = evidence.admit(&frame, clock()).unwrap();
-    worker.submit(Job {
-        frame,
-        arrival,
-        cancelled: token.clone(),
-    });
+    // LatestSlot submission is intentionally nonblocking: an empty queue can
+    // briefly return Busy while the worker checks it. Do not silently lose the job.
+    let submit_deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match worker.submit(Job {
+            frame: crate::Frame {
+                jpeg: vec![1],
+                ..frame
+            },
+            arrival,
+            cancelled: token.clone(),
+        }) {
+            Submit::Queued => break,
+            Submit::Busy => {
+                assert!(Instant::now() < submit_deadline);
+                thread::sleep(Duration::from_millis(1));
+            }
+            other => panic!("unexpected submission: {other:?}"),
+        }
+    }
     started.recv_timeout(Duration::from_secs(2)).unwrap();
     let receiver = Receiver::new(&worker, Limits::default()).unwrap();
     let snapshot = receiver.snapshot_and_cancel(&token);
@@ -299,4 +322,45 @@ fn ending_session_fences_inflight_result_before_status_and_lease_release() {
     assert_eq!(state.lock().unwrap().counters.dropped, 1);
     state.lock().unwrap().release_session(&token);
     worker.stop().unwrap();
+}
+
+#[test]
+fn receive_stamp_does_not_wait_for_the_mode_mutex() {
+    let (state, worker, _) = setup();
+    let (mut client, mut server) = pair();
+    let receiver = Receiver::new(&worker, Limits::default()).unwrap();
+    let guard = state.lock().unwrap();
+    client.send(Message::Text("payload".into())).unwrap();
+    let (sent, received) = std::sync::mpsc::channel();
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut stats = Stats::default();
+            let message = receiver.receive(&mut server, &mut stats).unwrap();
+            sent.send((message, stats.max_receive_call_us)).unwrap();
+        });
+        let result = received.recv_timeout(Duration::from_secs(1));
+        drop(guard); // Release before asserting, so a regression cannot deadlock the test.
+        let (message, elapsed) = result.expect("read receipt must not acquire the state lock");
+        assert!(
+            matches!(message, Some((Message::Text(text), stamp)) if text=="payload" && stamp>=100_000)
+        );
+        assert!(elapsed < 1_000_000);
+    });
+    worker.stop().unwrap();
+}
+
+#[test]
+fn receipt_metadata_is_bounded_and_does_not_require_wall_time() {
+    let mut stats = Stats::default();
+    for sequence in 1..=40 {
+        stats.receipt(sequence, sequence * 1000, None);
+    }
+    assert_eq!(stats.recent_receipts.len(), 32);
+    assert_eq!(stats.recent_receipts.front().unwrap().sequence, 9);
+    assert_eq!(stats.recent_receipts.back().unwrap().received_us, 40_000);
+    assert_eq!(
+        stats.recent_receipts.back().unwrap().ws_complete_unix_us,
+        None
+    );
+    assert_eq!(stats.admitted, 0);
 }
