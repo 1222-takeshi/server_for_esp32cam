@@ -3,9 +3,10 @@
 use crate::{MAX_GENERATION, MAX_JPEG};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::VecDeque,
     io::{self, Read, Write},
     net::{Shutdown, TcpStream},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use subtle::ConstantTimeEq;
 pub use tungstenite::Message;
@@ -60,37 +61,63 @@ impl Auth {
     }
 }
 
+/// Bounded metadata only. Wall time is for packet correlation, never a safety clock.
+#[derive(Clone, Debug)]
+pub struct IoSample {
+    pub kind: &'static str,
+    pub status: &'static str,
+    pub observed_unix_us: Option<u64>,
+    pub elapsed_us: Option<u64>,
+    pub bytes: usize,
+}
 struct BoundedStream {
     socket: TcpStream,
     deadline: Option<Instant>,
     remaining: Option<usize>,
     write_failed: bool,
-    quickack: bool,
-    quickack_requests: u64,
+    trace: VecDeque<IoSample>,
 }
 impl BoundedStream {
-    fn quick_ack(&mut self) -> io::Result<()> {
-        if !self.quickack {
-            return Ok(());
+    fn note(
+        &mut self,
+        kind: &'static str,
+        status: &'static str,
+        begun: Option<Instant>,
+        bytes: usize,
+    ) {
+        if self.trace.len() == 32 {
+            self.trace.pop_front();
         }
-        #[cfg(target_os = "linux")]
-        {
-            // QUICKACK is not persistent: re-request after each positive TCP read.
-            // Convert errors to a fatal kind; bytes already consumed cannot be retried.
-            socket2::SockRef::from(&self.socket)
-                .set_tcp_quickack(true)
-                .map_err(|_| io::Error::other("TCP acknowledgement option failed"))?;
-            self.quickack_requests = self.quickack_requests.saturating_add(1);
-            Ok(())
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            Err(io::ErrorKind::Unsupported.into())
-        }
+        let observed_unix_us = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .and_then(|d| d.as_micros().try_into().ok());
+        let elapsed_us = begun.map(|t| t.elapsed().as_micros().try_into().unwrap_or(u64::MAX));
+        self.trace.push_back(IoSample {
+            kind,
+            status,
+            bytes,
+            elapsed_us,
+            observed_unix_us,
+        });
     }
-}
-impl Read for BoundedStream {
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+    fn note_io(&mut self, kind: &'static str, begun: Instant, result: &io::Result<usize>) {
+        let (status, bytes) = match result {
+            Ok(0) if kind == "read" => ("eof", 0),
+            Ok(n) => ("ok", *n),
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) =>
+            {
+                ("timeout", 0)
+            }
+            Err(_) => ("error", 0),
+        };
+        self.note(kind, status, Some(begun), bytes);
+    }
+    fn read_inner(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         let length = if let Some(deadline) = self.deadline {
             let remaining = deadline
                 .checked_duration_since(Instant::now())
@@ -109,14 +136,20 @@ impl Read for BoundedStream {
         if let Some(remaining) = self.remaining.as_mut() {
             *remaining -= count;
         }
-        if count > 0 {
-            self.quick_ack()?;
-        }
         Ok(count)
+    }
+}
+impl Read for BoundedStream {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let begun = Instant::now();
+        let result = self.read_inner(buffer);
+        self.note_io("read", begun, &result);
+        result
     }
 }
 impl Write for BoundedStream {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        let begun = Instant::now();
         let result = (|| {
             let timeout = if let Some(deadline) = self.deadline {
                 deadline
@@ -130,6 +163,7 @@ impl Write for BoundedStream {
             self.socket.set_write_timeout(Some(timeout))?;
             self.socket.write(buffer)
         })();
+        self.note_io("write", begun, &result);
         if result.as_ref().is_err_and(|e| {
             matches!(
                 e.kind(),
@@ -152,28 +186,16 @@ impl Drop for Connection {
     }
 }
 impl Connection {
-    pub fn accept(socket: TcpStream, auth: &Auth) -> io::Result<Self> {
-        Self::accept_with_quickack(socket, auth, false)
-    }
     // Tungstenite Callback requires its unboxed HTTP ErrorResponse.
     #[allow(clippy::result_large_err)]
-    pub fn accept_with_quickack(
-        socket: TcpStream,
-        auth: &Auth,
-        quickack: bool,
-    ) -> io::Result<Self> {
-        #[cfg(not(target_os = "linux"))]
-        if quickack {
-            return Err(io::ErrorKind::Unsupported.into());
-        }
+    pub fn accept(socket: TcpStream, auth: &Auth) -> io::Result<Self> {
         socket.set_nodelay(true)?;
         let stream = BoundedStream {
             socket,
             deadline: Some(Instant::now() + HANDSHAKE_TIMEOUT),
             remaining: Some(HANDSHAKE_LIMIT),
             write_failed: false,
-            quickack,
-            quickack_requests: 0,
+            trace: VecDeque::with_capacity(32),
         };
         let config = WebSocketConfig::default()
             .read_buffer_size(4096)
@@ -205,11 +227,8 @@ impl Connection {
             .set_read_timeout(Some(Duration::from_millis(50)))?;
         Ok(Self(socket))
     }
-    pub fn quickack_requested(&self) -> bool {
-        self.0.get_ref().quickack
-    }
-    pub fn quickack_requests(&self) -> u64 {
-        self.0.get_ref().quickack_requests
+    pub fn io_trace(&self) -> &VecDeque<IoSample> {
+        &self.0.get_ref().trace
     }
     /// None is a 50ms absolute receive wakeup, not EOF. Drop on any error.
     pub fn receive(&mut self) -> io::Result<Option<Message>> {
@@ -230,7 +249,15 @@ impl Connection {
         match received {
             Ok(Message::Text(text)) if text.len() > TEXT_LIMIT => Err(invalid()),
             Ok(Message::Close(_)) => Err(io::ErrorKind::ConnectionAborted.into()),
-            Ok(message) => Ok(Some(message)),
+            Ok(message) => {
+                let (kind, bytes) = match &message {
+                    Message::Binary(v) => ("binary", v.len()),
+                    Message::Text(v) => ("text", v.len()),
+                    _ => ("control", 0),
+                };
+                self.0.get_mut().note(kind, "complete", None, bytes);
+                Ok(Some(message))
+            }
             Err(tungstenite::Error::Io(e))
                 if matches!(
                     e.kind(),

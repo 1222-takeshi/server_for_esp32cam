@@ -8,6 +8,7 @@ use crate::{
     transport::{self, Connection, Message},
 };
 use serde_json::Value;
+use std::collections::VecDeque;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{
     Arc, Mutex,
@@ -32,6 +33,11 @@ impl Default for Limits {
         }
     }
 }
+pub struct Receipt {
+    pub sequence: u64,
+    pub received_us: u64,
+    pub ws_complete_unix_us: Option<u64>,
+}
 #[derive(Default)]
 pub struct Stats {
     pub messages: u64,
@@ -44,8 +50,21 @@ pub struct Stats {
     pub max_receive_call_us: u64,
     pub max_control_send_us: u64,
     pub max_admission_guard_us: u64,
+    pub recent_receipts: VecDeque<Receipt>,
     pub first_device: Option<[u64; 6]>,
     pub last_device: Option<[u64; 6]>,
+}
+impl Stats {
+    fn receipt(&mut self, sequence: u64, received_us: u64, ws_complete_unix_us: Option<u64>) {
+        if self.recent_receipts.len() == 32 {
+            self.recent_receipts.pop_front();
+        }
+        self.recent_receipts.push_back(Receipt {
+            sequence,
+            received_us,
+            ws_complete_unix_us,
+        });
+    }
 }
 pub struct Outcome {
     pub reason: &'static str,
@@ -277,6 +296,12 @@ impl<'a> Receiver<'a> {
                         return Err("profile_required");
                     }
                     clock.bind(frame.boot)?;
+                    let wall = socket
+                        .io_trace()
+                        .back()
+                        .filter(|e| e.kind == "binary" && e.status == "complete")
+                        .and_then(|e| e.observed_unix_us);
+                    stats.receipt(frame.sequence, received, wall);
                     if order.observe(&frame).is_err() {
                         stats.dropped += 1;
                         continue;

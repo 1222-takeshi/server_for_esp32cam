@@ -99,6 +99,14 @@ fn firmware_clock_hello_ack_and_result_cross_the_real_socket() {
     let outcome = receiver.run(&mut server, |s, _| Ok(s.counters.published == 0));
     assert_eq!(outcome.reason, "completed");
     assert_eq!(outcome.stats.admitted, 1);
+    assert_eq!(outcome.stats.recent_receipts.len(), 1);
+    assert_eq!(outcome.stats.recent_receipts[0].sequence, 1);
+    assert!(outcome.stats.recent_receipts[0].received_us >= 100_000);
+    assert!(
+        outcome.stats.recent_receipts[0]
+            .ws_complete_unix_us
+            .is_some()
+    );
     assert!(outcome.final_status["acknowledged"].as_bool().unwrap());
     assert!(!state.lock().unwrap().mode.connected());
     drop(server);
@@ -339,4 +347,20 @@ fn receive_stamp_does_not_wait_for_the_mode_mutex() {
         assert!(elapsed < 1_000_000);
     });
     worker.stop().unwrap();
+}
+
+#[test]
+fn receipt_metadata_is_bounded_and_does_not_require_wall_time() {
+    let mut stats = Stats::default();
+    for sequence in 1..=40 {
+        stats.receipt(sequence, sequence * 1000, None);
+    }
+    assert_eq!(stats.recent_receipts.len(), 32);
+    assert_eq!(stats.recent_receipts.front().unwrap().sequence, 9);
+    assert_eq!(stats.recent_receipts.back().unwrap().received_us, 40_000);
+    assert_eq!(
+        stats.recent_receipts.back().unwrap().ws_complete_unix_us,
+        None
+    );
+    assert_eq!(stats.admitted, 0);
 }

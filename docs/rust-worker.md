@@ -145,11 +145,15 @@ receiverの集計で確認し、停止時に未処理のまま残るqueue item�
 #558の有限ライブ配線とeco→tracking→eco試験は[検証記録](rust-live-validation.md)を参照してください。
 4回中1回で60秒316件（5.2667Hz）を確認しました。失敗3回も保全し、継続安定性・原因解析は#573へ継続します。
 
-#573の有限Linux CLIはTCP read後に`TCP_QUICKACK`を要求する比較候補です。
-このoptionは永続ではないため正数read後ごとに再要求し、回数をreportへ記録します。
-追加ACKによる通信量増加の可能性があり、実機の比較で効果を確認するまで改善受入は行いません。
-libraryの既定は無効、非Linuxでの有効要求は明示的に拒否します。clock probe50ms・
-receive wake50ms・pong1秒・時計8件/10秒/200ppm・500ms/165ms gateを維持します。
-受信直後にworker由来の同じ時計でstampし、mode mutex待ちで到着時刻を更新しません。
-公開時までの経過は既存Arrivalで加算します。reportの最大receive/send/admission guard時間は
-call/lockと判定の経過であり、純粋なnetwork latencyではありません。#558のrawは変更しません。
+#573の受信診断はWebSocket受信直後・mode mutex取得前に、worker由来の同じ時計でstampします。
+公開までの経過は既存Arrivalで加算し、500ms/165ms gateを緩和しません。clock probeも50msです。
+reportはreceive/send call・admission guardの最大所要usと、直近32件のtransport I/O metadata
+（read/write/message完了、byte数、所要us、wall timestamp、timeout等）を保持します。
+直近32件のframe sequenceにWS完了のwall stampと、その後に採った受信mono stampを記録します。
+採時点が異なり、スケジューラ待ちも含むため、両者を同時刻のclock変換対とは扱いません。
+observed_unix_usはuserspaceでの観測時刻で、kernelのpacket到着時刻ではありません。
+elapsed_usはread/write wrapperの経過（処理・待機・scheduler等を含む）で、message完了markerはnullです。
+wall timestampは通信ヘッダー採取との照合専用で、鮮度・制御の判定には使いません。
+JPEG・キー・message本文は保持せず、frame単位disk logを追加しません。call所要時間を
+純粋なnetwork latencyとは呼びません。clock200ms/TCP_QUICKACK案は実機で再発し不採用です。
+原因解析と改善受入は#573で継続し、#558のrawは変更しません。

@@ -187,7 +187,7 @@ fn execute() -> Result<bool> {
             return Err("camera connection timeout".into());
         }
         match listener.accept() {
-            Ok((tcp, _)) => match Connection::accept_with_quickack(tcp, &auth, true) {
+            Ok((tcp, _)) => match Connection::accept(tcp, &auth) {
                 Ok(socket) => break socket,
                 Err(_) => {
                     rejected += 1;
@@ -241,17 +241,23 @@ fn execute() -> Result<bool> {
             })
         })
         .collect();
+    let io_trace: Vec<_> = socket.io_trace().iter().map(|e| json!({
+        "kind":e.kind,"status":e.status,"observed_unix_us":e.observed_unix_us,"elapsed_us":e.elapsed_us,"bytes":e.bytes,
+    })).collect();
+    let receipts: Vec<_> = outcome.stats.recent_receipts.iter().map(|r| json!({
+        "sequence":r.sequence,"received_us":r.received_us,"ws_complete_unix_us":r.ws_complete_unix_us,
+    })).collect();
     let report = json!({"schema":1,"live_validation_only":true,"physical_motor_control":false,"global_acceptance":false,
-        "finite_live_gate_passed":passed,"tracking_ping_interval_us":50_000,"quickack_requested":socket.quickack_requested(),"quickack_requests":socket.quickack_requests(),"reason":outcome.reason,"measurement":measurement.ok(),"measurement_error":measurement_error,"model_sha256":detector::MODEL_SHA,
+        "finite_live_gate_passed":passed,"tracking_ping_interval_us":50_000,"reason":outcome.reason,"measurement":measurement.ok(),"measurement_error":measurement_error,"model_sha256":detector::MODEL_SHA,
         "runtime_sha256":detector::RUNTIME_SHA,"runtime_build":ort::info(),"input_size":320,"threshold":0.5,"threads":3,
         "initial_eco":trial.initial,"tracking":trial.tracking,"final_eco":trial.final_eco,"session_final":outcome.final_status,
         "receiver":{"messages":outcome.stats.messages,"frames":outcome.stats.frames,"admitted":outcome.stats.admitted,"dropped":outcome.stats.dropped,
             "overwritten":outcome.stats.overwritten,"queue_busy":outcome.stats.queue_busy,"rejected_ack":outcome.stats.rejected_ack,
             "first_device":outcome.stats.first_device,"last_device":outcome.stats.last_device,
             "max_receive_call_us":outcome.stats.max_receive_call_us,"max_control_send_us":outcome.stats.max_control_send_us,
-            "max_admission_guard_us":outcome.stats.max_admission_guard_us},
+            "max_admission_guard_us":outcome.stats.max_admission_guard_us,"recent_receipts":receipts},
         "worker":{"inferred":s.counters.inferred,"published":s.counters.published,"dropped":s.counters.dropped,
-            "failures":s.counters.failures,"evidence_lost":s.counters.evidence_lost},"process_before_worker_shutdown":usage,"samples":samples,"recent_worker_drops":drops});
+            "failures":s.counters.failures,"evidence_lost":s.counters.evidence_lost},"process_before_worker_shutdown":usage,"samples":samples,"recent_worker_drops":drops,"transport_io":io_trace});
     let raw = serde_json::to_vec(&report)?;
     if raw.len() > 2 * 1024 * 1024 {
         return Err("report limit".into());

@@ -60,8 +60,6 @@ fn bounded_bidirectional_messages_and_idle_wakeup() {
     let (client, owner) = peer("/ws/cameras/cam-1/live", &["test-key"]);
     let mut client = client.unwrap();
     let mut server = owner.join().unwrap().unwrap();
-    assert!(!server.quickack_requested());
-    assert_eq!(server.quickack_requests(), 0);
     assert!(server.receive().unwrap().is_none());
     server.send_text("clock.ping").unwrap();
     assert_eq!(client.read().unwrap().into_text().unwrap(), "clock.ping");
@@ -108,8 +106,7 @@ fn handshake_byte_and_absolute_deadline_budgets() {
             deadline: Some(Instant::now() + Duration::from_millis(30)),
             remaining: Some(8),
             write_failed: false,
-            quickack: false,
-            quickack_requests: 0,
+            trace: VecDeque::with_capacity(32),
         };
         let start = Instant::now();
         if oversized {
@@ -218,8 +215,7 @@ fn write_deadline_failure_is_fatal_instead_of_an_idle_read() {
         deadline: Some(Instant::now()),
         remaining: None,
         write_failed: false,
-        quickack: false,
-        quickack_requests: 0,
+        trace: VecDeque::with_capacity(32),
     };
     assert_eq!(
         stream.write(b"pong").unwrap_err().kind(),
@@ -241,52 +237,35 @@ fn write_deadline_failure_is_fatal_instead_of_an_idle_read() {
     assert!(connection.receive().is_err());
 }
 
-#[cfg(target_os = "linux")]
 #[test]
-fn quickack_is_reapplied_after_positive_reads_and_keeps_the_borrowed_socket_open() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let owner = thread::spawn(move || {
-        Connection::accept_with_quickack(
-            listener.accept().unwrap().0,
-            &Auth::new("cam", b"test-key").unwrap(),
-            true,
-        )
-        .unwrap()
-    });
-    let mut request = format!("ws://{address}/ws/cameras/cam/live")
-        .into_client_request()
-        .unwrap();
-    request
-        .headers_mut()
-        .insert("X-API-Key", "test-key".parse().unwrap());
-    let mut client = tungstenite::client(request, TcpStream::connect(address).unwrap())
-        .unwrap()
-        .0;
-    let mut server = owner.join().unwrap();
-    assert!(server.quickack_requested());
-    assert!(server.quickack_requests() > 0); // Handshake reads are covered too.
-    for text in ["one", "two"] {
-        let before = server.quickack_requests();
-        client.send(Message::Text(text.into())).unwrap();
-        assert!(matches!(server.receive().unwrap(), Some(Message::Text(t)) if t==text));
-        assert!(server.quickack_requests() > before);
-        server.send_text("ack").unwrap();
-        assert_eq!(client.read().unwrap().into_text().unwrap(), "ack");
+fn io_trace_has_a_fixed_capacity_and_never_keeps_payloads() {
+    let (client, owner) = peer("/ws/cameras/cam-1/live", &["test-key"]);
+    let mut client = client.unwrap();
+    let mut server = owner.join().unwrap().unwrap();
+    for _ in 0..40 {
+        client
+            .send(Message::Text("private-payload".into()))
+            .unwrap();
+        assert!(
+            matches!(server.receive().unwrap(), Some(Message::Text(t)) if t=="private-payload")
+        );
     }
-}
-
-#[cfg(not(target_os = "linux"))]
-#[test]
-fn unsupported_quickack_is_rejected_before_handshake() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let _peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-    assert!(
-        Connection::accept_with_quickack(
-            listener.accept().unwrap().0,
-            &Auth::new("cam", b"key").unwrap(),
-            true
-        )
-        .is_err()
+    assert_eq!(server.io_trace().len(), 32);
+    let complete = server.io_trace().back().unwrap();
+    assert_eq!(
+        (complete.kind, complete.status, complete.bytes),
+        ("text", "complete", 15)
     );
+    assert!(complete.observed_unix_us.is_some_and(|t| t > 0));
+    assert_eq!(complete.elapsed_us, None);
+    assert!(server.receive().unwrap().is_none());
+    assert_eq!(server.io_trace().len(), 32);
+    assert!(
+        server
+            .io_trace()
+            .iter()
+            .any(|e| e.kind == "read" && e.status == "timeout")
+    );
+    let trace = format!("{:?}", server.io_trace());
+    assert!(!trace.contains("private-payload") && !trace.contains("test-key"));
 }
