@@ -1,0 +1,203 @@
+{
+  "schema": 1,
+  "issue": 573,
+  "scope": "three_separate_finite_trials",
+  "finite_tracking_gate_passed": true,
+  "causal_improvement_proven": false,
+  "global_acceptance": false,
+  "physical_motor_control": false,
+  "platform": "Raspberry Pi 4 / ARM64 / 4 GB",
+  "inference_on_mac": false,
+  "firmware_change_pr": 577,
+  "firmware_merge": "2be9024d6188dd7b93ab987e4c1c4c4fce386d24",
+  "candidate_firmware_sha256": "a6e78793e466c402837df01499076d48baca5e5c5609bfbe7bff1e8afaa1dc52",
+  "original_firmware_sha256": "feed55ed25546792676ce756cea605a447fba720d10649b8648d2765083f5c4b",
+  "native_binary_sha256": "746c3d44a452d453a5ee617f250ae22b631e963ccf81228fdf13a9deaa319da9",
+  "guardian_sha256": "2f2e1770a3e7d2071e4bc253b86ea7dc8566677a952c9341afa594e9bbc0b8b7",
+  "guardian_tests_host_pi_act": [
+    42,
+    42,
+    42
+  ],
+  "model_sha256": "ff1013da8734fe2b8ede5f34a2124855d447fbefd248d148e9f29e7f8e28c9c4",
+  "runtime_sha256": "ab8c4363e06ac80b3d1279ea55ebea44e906c5b131ba783ff684a067540c0e94",
+  "fixed_inference_reference": "rust-live-validation.json#/fixed_inference",
+  "gates_us": {
+    "age": 500000,
+    "gap": 500000,
+    "inference_reserve": 165000,
+    "clock_probe": 50000
+  },
+  "trials": [
+    {
+      "label": "B1",
+      "measurement": {
+        "age_max_us": 301654,
+        "age_p95_us": 215116,
+        "boot_id": 8955721313471258027,
+        "compute_p95_us": 165430,
+        "duration_us": 60000000,
+        "end_us": 87126883,
+        "generation": 1093536244625,
+        "max_gap_us": 285348,
+        "recognition_hz": 5.266666666666667,
+        "results": 316,
+        "start_us": 27126883,
+        "window_results": [
+          53,
+          53,
+          52,
+          53,
+          53,
+          52
+        ]
+      },
+      "resources": {
+        "max_temperature_millic": 62809,
+        "peak_rss_kib": 50144,
+        "report_bytes": 61104,
+        "vitals_bytes": 11424
+      },
+      "report_sha256": "16f7216d49ddc3f9b0de85cd64a84f148389851eff784908022b688f36b55c00",
+      "vitals_sha256": "99dea04393682de630b2360d2620625af7ca3a64e6ff557872271ce4cb041cd1"
+    },
+    {
+      "label": "B2",
+      "measurement": {
+        "age_max_us": 363504,
+        "age_p95_us": 248053,
+        "boot_id": 8955721313471258027,
+        "compute_p95_us": 169113,
+        "duration_us": 60000000,
+        "end_us": 87206073,
+        "generation": 1093536244629,
+        "max_gap_us": 315381,
+        "recognition_hz": 5.266666666666667,
+        "results": 316,
+        "start_us": 27206073,
+        "window_results": [
+          53,
+          53,
+          52,
+          53,
+          53,
+          52
+        ]
+      },
+      "resources": {
+        "max_temperature_millic": 65244,
+        "peak_rss_kib": 50140,
+        "report_bytes": 61215,
+        "vitals_bytes": 11424
+      },
+      "report_sha256": "61c840fdf3d91f5edfde35445716234d659ceb773bb0e1f416178305b4f581b9",
+      "vitals_sha256": "6c8d1433ee1bd29e733f70e7794c3dce787bea3a5b9693737ddcb7904adedd0b"
+    },
+    {
+      "label": "B3",
+      "measurement": {
+        "age_max_us": 291832,
+        "age_p95_us": 209880,
+        "boot_id": 8955721313471258027,
+        "compute_p95_us": 160072,
+        "duration_us": 60000000,
+        "end_us": 87788535,
+        "generation": 1093536244633,
+        "max_gap_us": 279639,
+        "recognition_hz": 5.266666666666667,
+        "results": 316,
+        "start_us": 27788535,
+        "window_results": [
+          53,
+          53,
+          52,
+          53,
+          53,
+          52
+        ]
+      },
+      "resources": {
+        "max_temperature_millic": 65731,
+        "peak_rss_kib": 50144,
+        "report_bytes": 61389,
+        "vitals_bytes": 11424
+      },
+      "report_sha256": "1bdf923f04de5e5281bdcfb0e6458414bb3fff155c5c1a309630b4c1cdd8a5e4",
+      "vitals_sha256": "9286e21814e748b47982d766deaa6fa03d803f2925e4afeb4f5e4e27f647a0a8"
+    }
+  ],
+  "original_post_reference": {
+    "label": "A1",
+    "measurement": {
+      "age_max_us": 333195,
+      "age_p95_us": 217225,
+      "boot_id": 9516933621516812073,
+      "compute_p95_us": 158533,
+      "duration_us": 60000000,
+      "end_us": 87353864,
+      "generation": 921771039506,
+      "max_gap_us": 306494,
+      "recognition_hz": 5.266666666666667,
+      "results": 316,
+      "start_us": 27353864,
+      "window_results": [
+        53,
+        53,
+        52,
+        53,
+        53,
+        52
+      ]
+    },
+    "resources": {
+      "max_temperature_millic": 64757,
+      "peak_rss_kib": 50136,
+      "report_bytes": 60749,
+      "vitals_bytes": 11424
+    },
+    "report_sha256": "f2a294c6589dabaadace6ed2fe61e53b9fd13dec273e96843c3a7c57b0267388",
+    "vitals_sha256": "2e789248003d1c1f29e2946abf603fd4605c17bf3d4d69ff13c97edb40c98c17"
+  },
+  "original_pre_reference": {
+    "label": "A0",
+    "native_started": false,
+    "kind": "setup_abort_exit137",
+    "run": "rust-live-20261025T082857Z-78fd87cf"
+  },
+  "boot_ids": {
+    "before": 14507871396716366643,
+    "candidate": 8955721313471258027,
+    "rollback_anchor": 16554954983341825648,
+    "after": 9516933621516812073
+  },
+  "recovery": {
+    "runner_exit_status": 1,
+    "guard_exit_status": 0,
+    "guard_restart_count": 3,
+    "rollback_transfer_stages": 2,
+    "retry_cause_confirmed": false,
+    "follow_up_issue": 578
+  },
+  "post_trial": {
+    "production_source": "613d29326a2cd787ac239a7f10525faf7e7aab5d",
+    "original_firmware_restored": true,
+    "health": "ready",
+    "state": "active",
+    "mode": "eco",
+    "acknowledged": true,
+    "actuation": "hold",
+    "unit_unchanged": true,
+    "unit_sha256": "4c6e6d6533b89d20260a9a7665a6520e9b9f569e692746eb4d997dd4d66fb7a6",
+    "old_guard_enabled": true,
+    "temporary_guards_disabled": true
+  },
+  "evidence_manifest_sha256": "995e8a147e896df8db018726163ebce63ff9987d5505656296c95cf7aa78ce81",
+  "reference_manifest_sha256": "211f4f90bead9ea89f49a1c3ed32f58d3a2605ab1aeb50cba7c326d88c0255e6",
+  "limitations": [
+    "Original A1 also passed; wireless conditions were not controlled and causal improvement is unproven.",
+    "Three separate60s windows do not demonstrate24h stability or10Hz.",
+    "Inference/image conditions are unchanged; live GT accuracy was not measured.",
+    "OTA image hashes refer to transferred files, not flash readback attestation.",
+    "Recovery retried; root cause remains open in#578. Existing mask issue#576 remains open."
+  ]
+}
