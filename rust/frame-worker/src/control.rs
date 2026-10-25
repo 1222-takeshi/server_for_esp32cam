@@ -207,6 +207,13 @@ impl SessionClock {
         self.pending = None;
         Ok(())
     }
+    /// Called only on rejection; it cannot change or renew clock evidence.
+    pub fn diagnostic(&self, frame: &Frame, received: u64) -> (Option<AgeBounds>, Vec<[u64; 4]>) {
+        (
+            self.window.age_bounds(frame, received),
+            self.window.evidence(),
+        )
+    }
     pub fn admit(&self, frame: &Frame, received: u64) -> Option<Arrival> {
         if self.boot != Some(frame.boot) {
             return None;

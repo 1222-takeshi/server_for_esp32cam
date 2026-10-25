@@ -364,3 +364,57 @@ fn receipt_metadata_is_bounded_and_does_not_require_wall_time() {
     );
     assert_eq!(stats.admitted, 0);
 }
+
+#[test]
+fn rejection_diagnostics_are_bounded_and_preserve_clock_gate() {
+    let mut clock = SessionClock::default();
+    let mut stats = Stats::default();
+    let mut frame = crate::decode(&envelope(1, 1, 1, 1), true).unwrap();
+    stats.reject(&frame, 2, "clock", &clock);
+    assert_eq!(
+        stats.recent_rejections.back().unwrap().stage,
+        "clock_unavailable"
+    );
+    for i in 1..=12 {
+        let at = i * 2_000_000;
+        clock
+            .poll(at, false, || Ok("0123456789abcdef".into()))
+            .unwrap();
+        clock.pong(1, "0123456789abcdef", at, at + 10).unwrap();
+    }
+    frame.captured_us = 23_999_990;
+    frame.sent_us = 24_000_000;
+    let before = clock
+        .admit(&frame, 24_000_020)
+        .unwrap()
+        .age_bounds(&frame, 24_000_020);
+    for seq in 1..=40 {
+        frame.sequence = seq;
+        stats.reject(&frame, 24_000_020, "order", &clock);
+    }
+    assert_eq!(stats.dropped, 41);
+    assert_eq!(stats.recent_rejections.len(), 32);
+    let first = stats.recent_rejections.front().unwrap();
+    assert_eq!(first.sequence, 9);
+    assert_eq!(first.clock_exchanges.len(), 8);
+    assert_eq!(
+        first.clock_exchanges[0],
+        [1, 10_000_000, 10_000_000, 10_000_010]
+    );
+    assert_eq!(first.age_bounds, before);
+    assert_eq!(
+        clock
+            .admit(&frame, 24_000_020)
+            .unwrap()
+            .age_bounds(&frame, 24_000_020),
+        before
+    );
+    frame.captured_us = 23_000_000;
+    frame.sent_us = 23_000_000;
+    assert!(clock.admit(&frame, 24_000_020).is_none());
+    stats.reject(&frame, 24_000_020, "clock", &clock);
+    assert_eq!(stats.recent_rejections.back().unwrap().stage, "age_limit");
+    assert!(clock.admit(&frame, 24_000_020).is_none());
+    stats.reject(&frame, 24_000_020, "mode", &clock);
+    assert_eq!(stats.recent_rejections.back().unwrap().stage, "mode");
+}

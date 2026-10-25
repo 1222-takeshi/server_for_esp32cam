@@ -180,3 +180,6 @@ the original firmware and eco mode on success or failure. Each ten-second window
 still requires 50 results; maximum age and result gap remain 500 ms. Expanding
 the experiment duration does not establish sustained performance, accuracy parity,
 10 Hz operation, or permission for permanent rollout.
+
+10分追試の中断と復旧、受信除外の診断は
+[rust-long-trial-validation.md](rust-long-trial-validation.md)を参照してください。

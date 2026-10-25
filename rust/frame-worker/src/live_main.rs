@@ -257,6 +257,18 @@ fn execute() -> Result<bool> {
     let receipts: Vec<_> = outcome.stats.recent_receipts.iter().map(|r| json!({
         "sequence":r.sequence,"received_us":r.received_us,"ws_complete_unix_us":r.ws_complete_unix_us,
     })).collect();
+    let rejections: Vec<_> = outcome
+        .stats
+        .recent_rejections
+        .iter()
+        .map(|r| {
+            json!({
+                "boot_id":r.boot,"generation":r.generation,"sequence":r.sequence,
+                "captured_us":r.captured_us,"sent_us":r.sent_us,"received_us":r.received_us,
+                "stage":r.stage,"age_bounds_us":r.age_bounds.map(|(low,high)| [low.to_string(),high.to_string()]),"clock_exchanges":r.clock_exchanges,
+            })
+        })
+        .collect();
     let report = json!({"schema":1,"live_validation_only":true,"physical_motor_control":false,"global_acceptance":false,
         "finite_live_gate_passed":passed,"tracking_ping_interval_us":50_000,"reason":outcome.reason,"measurement":measurement.ok(),"measurement_error":measurement_error,"model_sha256":detector::MODEL_SHA,
         "runtime_sha256":detector::RUNTIME_SHA,"runtime_build":ort::info(),"input_size":320,"threshold":0.5,"threads":3,
@@ -265,7 +277,7 @@ fn execute() -> Result<bool> {
             "overwritten":outcome.stats.overwritten,"queue_busy":outcome.stats.queue_busy,"rejected_ack":outcome.stats.rejected_ack,
             "first_device":outcome.stats.first_device,"last_device":outcome.stats.last_device,
             "max_receive_call_us":outcome.stats.max_receive_call_us,"max_control_send_us":outcome.stats.max_control_send_us,
-            "max_admission_guard_us":outcome.stats.max_admission_guard_us,"recent_receipts":receipts},
+            "max_admission_guard_us":outcome.stats.max_admission_guard_us,"recent_receipts":receipts,"recent_rejections":rejections},
         "worker":{"inferred":s.counters.inferred,"published":s.counters.published,"dropped":s.counters.dropped,
             "failures":s.counters.failures,"evidence_lost":s.counters.evidence_lost},"process_before_worker_shutdown":usage,"samples":samples,"recent_worker_drops":drops,"transport_io":io_trace});
     let raw = serde_json::to_vec(&report)?;
