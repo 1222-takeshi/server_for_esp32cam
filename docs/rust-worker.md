@@ -234,3 +234,6 @@ simulation as live performance acceptance.
 The supervisor copy must explicitly pass the flag in its child environment and
 verify `adaptive_inference_reserve=true` in the resulting report. Archive its
 source/configuration separately from the fixed-policy baseline before a trial.
+
+固定/適応予約での10分・1時間指定試験の結果は
+[rust-duration-validation.md](rust-duration-validation.md)を参照してください。

@@ -1,0 +1,236 @@
+{
+  "schema": 1,
+  "issue": 573,
+  "candidate_firmware_sha256": "4c839b0b048eb63ec0d46034390d88a8a391ac1cfd8bbf8e0970c861dc5be50c",
+  "model_sha256": "ff1013da8734fe2b8ede5f34a2124855d447fbefd248d148e9f29e7f8e28c9c4",
+  "runtime_sha256": "ab8c4363e06ac80b3d1279ea55ebea44e906c5b131ba783ff684a067540c0e94",
+  "fixed": {
+    "input_size": 320,
+    "threads": 3,
+    "threshold": 0.5,
+    "nms": 0.7,
+    "age_gap_us": 500000,
+    "camera": "QVGA/JPEG12",
+    "physical_motor_control": false,
+    "minimum_inference_reserve_us": 165000
+  },
+  "earlier_failed_attempt": "rust-long-trial-validation.json",
+  "trials": [
+    {
+      "duration_s": 600,
+      "run": "long-trial-20261025T235655Z-2f250f00",
+      "passed": true,
+      "results": 3158,
+      "recognition_hz": 5.263333333333334,
+      "window_count": 60,
+      "minimum_window_results": 52,
+      "maximum_window_results": 54,
+      "max_gap_us": 327615,
+      "age_p95_us": 217503,
+      "age_max_us": 341867,
+      "compute_p95_us": 165366,
+      "boot_id": 11776964575787027388,
+      "generation": 579186166728,
+      "receiver": {
+        "frames": 3218,
+        "admitted": 3218,
+        "dropped": 0,
+        "overwritten": 0,
+        "queue_busy": 0,
+        "rejected_ack": 0
+      },
+      "worker": {
+        "dropped": 1,
+        "evidence_lost": 0,
+        "failures": 0,
+        "inferred": 3218,
+        "published": 3217
+      },
+      "worker_drop_stages": {
+        "mode_after": 1
+      },
+      "max_temperature_millic": 74010,
+      "throttle_values": [
+        "throttled=0x0"
+      ],
+      "peak_rss_kib": 50092,
+      "resource_samples": 635,
+      "native_report_bytes": 461410,
+      "native_report_sha256": "1d3738e5c32009068301afacf2913a412136ebb00e2aa65bd9dcfb6f8cd29226",
+      "raw_manifest_sha256": "a195277d874a7070ff1e5fdced623cae464d35ee1a9187f28d466e91d2ae4d4b",
+      "raw_selected_bytes": 552820,
+      "original_firmware_restored": true,
+      "restored_boot_id": 15677507249970412880,
+      "restored_mode": "eco",
+      "restored_ack": true,
+      "restored_actuation": "hold",
+      "guard_cleaned": true,
+      "ota_stages": [
+        {
+          "stage": "candidate",
+          "port": 58119,
+          "exit_code": 0
+        },
+        {
+          "stage": "rollback",
+          "port": 34113,
+          "exit_code": 0
+        },
+        {
+          "stage": "confirm",
+          "port": 34397,
+          "exit_code": 0
+        }
+      ],
+      "native_sha256": "bb5b17123b8990f737e572541494f9ed7a3fbab89d27d299980807e3ae1b5d5e",
+      "reservation_policy": "fixed_165_ms"
+    },
+    {
+      "duration_s": 3600,
+      "run": "long-trial-20261026T001049Z-71430bd5",
+      "passed": false,
+      "reason": "mode_degraded",
+      "protective_reason": "frames_expired",
+      "native_sha256": "bb5b17123b8990f737e572541494f9ed7a3fbab89d27d299980807e3ae1b5d5e",
+      "reservation_policy": "fixed_165_ms",
+      "resource_samples": 1135,
+      "receiver": {
+        "frames": 5960,
+        "admitted": 5960,
+        "dropped": 3,
+        "overwritten": 3,
+        "queue_busy": 0,
+        "rejected_ack": 0
+      },
+      "receiver_rejections": [],
+      "worker": {
+        "dropped": 2,
+        "evidence_lost": 0,
+        "failures": 0,
+        "inferred": 5956,
+        "published": 5954
+      },
+      "worker_drops": [
+        {
+          "age_high_us": 514322,
+          "arrival_age_high_us": 52001,
+          "arrival_age_low_us": 46081,
+          "at_us": 1149279862,
+          "boot_id": 1812921851746196613,
+          "capture_to_send_us": 39062,
+          "compute_us": 299172,
+          "elapsed_since_arrival_us": 462321,
+          "generation": 1038429229852,
+          "sequence": 5960,
+          "stage": "publication_gate"
+        },
+        {
+          "age_high_us": 392331,
+          "arrival_age_high_us": 49252,
+          "arrival_age_low_us": 43155,
+          "at_us": 1149537610,
+          "boot_id": 1812921851746196613,
+          "capture_to_send_us": 39172,
+          "compute_us": 257739,
+          "elapsed_since_arrival_us": 343079,
+          "generation": 1038429229852,
+          "sequence": 5962,
+          "stage": "cancelled_after"
+        }
+      ],
+      "last_published": {
+        "age_high_us": 395080,
+        "boot_id": 1812921851746196613,
+        "compute_us": 274715,
+        "generation": 1038429229852,
+        "published_us": 1148980676,
+        "sequence": 5959
+      },
+      "max_temperature_millic": 76445,
+      "throttle_values": [
+        "throttled=0x0"
+      ],
+      "peak_rss_kib": 50604,
+      "native_report_bytes": 847101,
+      "native_report_sha256": "238c06b0ea97e844c677e78f9a03a814ab0b32f5b63e81d86310eebe988d2983",
+      "raw_manifest_sha256": "d2b22d275ead77b1cba7680290c863a7c3d0159d324cb439e632e0c4fe0de58f",
+      "raw_selected_bytes": 994449,
+      "original_firmware_restored": true,
+      "restored_boot_id": 14723285664607539804,
+      "restored_mode": "eco",
+      "restored_ack": true,
+      "restored_actuation": "hold",
+      "guard_cleaned": true
+    },
+    {
+      "duration_s": 600,
+      "run": "long-trial-20261026T005405Z-fb6e54ca",
+      "passed": false,
+      "reason": "mode_degraded",
+      "protective_reason": "frames_expired",
+      "native_sha256": "e5e069bf7092cbcfe6a91836727ba8c178f7a34a94982e3baaacf7f3d333c12a",
+      "reservation_policy": "adaptive",
+      "adaptive_reserve": {
+        "window_us": 2000000,
+        "max_observations": 32,
+        "margin_percent": 25,
+        "min_us": 165000,
+        "max_us": 400000
+      },
+      "resource_samples": 49,
+      "receiver": {
+        "frames": 170,
+        "admitted": 170,
+        "dropped": 0,
+        "overwritten": 0,
+        "queue_busy": 0,
+        "rejected_ack": 0,
+        "max_receive_call_us": 53344
+      },
+      "worker": {
+        "dropped": 0,
+        "evidence_lost": 0,
+        "failures": 0,
+        "inferred": 170,
+        "published": 170
+      },
+      "receiver_rejections": [],
+      "last_published": {
+        "age_high_us": 194728,
+        "boot_id": 1810949108152139037,
+        "compute_us": 151443,
+        "generation": 1060971975712,
+        "published_us": 48500100,
+        "sequence": 173
+      },
+      "observation": {
+        "partial_websocket_tcp_reads_bytes": [
+          1436,
+          1436,
+          1436,
+          1436
+        ],
+        "subsequent_no_more_bytes_approx_ms": 503,
+        "wifi_or_device_cause_identified": false
+      },
+      "max_temperature_millic": 59887,
+      "throttle_values": [
+        "throttled=0x0"
+      ],
+      "peak_rss_kib": 50084,
+      "native_report_bytes": 31239,
+      "native_report_sha256": "10b4053bb5393d27627f9fe7707369b06e884647e0178be56090e57163946be5",
+      "raw_manifest_sha256": "bb912644a5ce37e72e2929f63d16edff4475d6222518fb7a7786901672003b34",
+      "raw_selected_bytes": 56967,
+      "original_firmware_restored": true,
+      "restored_boot_id": 3188178388099511687,
+      "restored_mode": "eco",
+      "restored_ack": true,
+      "restored_actuation": "hold",
+      "guard_cleaned": true
+    }
+  ],
+  "causal_improvement_proven": false,
+  "accuracy_gt_evaluated": false,
+  "global_acceptance": false
+}
