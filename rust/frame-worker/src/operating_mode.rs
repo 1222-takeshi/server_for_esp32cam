@@ -57,6 +57,7 @@ pub struct OperatingMode {
     auto_recover_tracking: bool,
     tracking_recoverable: bool,
     tracking_hold_started: Option<u64>,
+    last_tracking_hold: Option<(u64, u64)>,
     tracking_hold_total: u64,
     tracking_hold_events: u64,
     tracking_automatic_recoveries: u64,
@@ -105,6 +106,7 @@ impl OperatingMode {
             auto_recover_tracking,
             tracking_recoverable: false,
             tracking_hold_started: None,
+            last_tracking_hold: None,
             tracking_hold_total: 0,
             tracking_hold_events: 0,
             tracking_automatic_recoveries: 0,
@@ -139,10 +141,18 @@ impl OperatingMode {
 
     fn finish_tracking_hold(&mut self) {
         if let Some(start) = self.tracking_hold_started.take() {
+            let end = self.now();
+            self.last_tracking_hold = Some((start, end));
             self.tracking_hold_total = self
                 .tracking_hold_total
-                .saturating_add(self.now().saturating_sub(start));
+                .saturating_add(end.saturating_sub(start));
         }
+    }
+    pub fn tracking_hold_started(&self) -> Option<u64> {
+        self.tracking_hold_started
+    }
+    pub fn last_tracking_hold(&self) -> Option<(u64, u64)> {
+        self.last_tracking_hold
     }
     fn change(&mut self, mode: Mode, reason: Option<&'static str>) -> Result<()> {
         self.finish_tracking_hold();
