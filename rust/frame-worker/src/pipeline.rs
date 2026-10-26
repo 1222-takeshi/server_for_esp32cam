@@ -107,8 +107,15 @@ pub struct State {
 }
 impl State {
     pub fn new(generation: u64, clock: Clock) -> Result<Self, ModeError> {
+        Self::new_with_tracking_recovery(generation, clock, false)
+    }
+    pub fn new_with_tracking_recovery(
+        generation: u64,
+        clock: Clock,
+        auto: bool,
+    ) -> Result<Self, ModeError> {
         let copy = clock.clone();
-        let mode = OperatingMode::new(generation, move || copy())?;
+        let mode = OperatingMode::new_with_tracking_recovery(generation, move || copy(), auto)?;
         Ok(Self {
             clock,
             #[cfg(feature = "transport")]
@@ -194,6 +201,24 @@ impl State {
             .as_ref()
             .filter(|r| self.mode.allows(&r.frame) && r.arrival.fits(&r.frame, now, 0))
             .cloned())
+    }
+    /// Opt-in live owner calls this before granting recovery, with readiness false.
+    /// Frozen capture age, rather than publication gap alone, controls the hold.
+    pub fn tracking_capture_deadline(&mut self) -> Result<Option<u64>, ModeError> {
+        if !self.mode.connected() || self.mode.requested() != crate::operating_mode::Mode::Tracking
+        {
+            return Ok(None);
+        }
+        let now = self.now();
+        let Some(result) = self.latest.as_ref().filter(|r| self.mode.allows(&r.frame)) else {
+            return Ok(None);
+        };
+        if !result.arrival.fits(&result.frame, now, 0) {
+            self.mode.protect("frames_expired")?;
+            return Ok(None);
+        }
+        let high = u64::try_from(result.age_bounds(now).unwrap().1).unwrap();
+        Ok(now.checked_add(500_000 - high))
     }
     /// Fence cancellation and disconnect with the same lock as publication.
     pub fn disconnect(&mut self, token: &AtomicBool) -> Result<(), ModeError> {

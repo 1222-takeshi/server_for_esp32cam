@@ -8,7 +8,17 @@ Issue #588でmodeライブラリに`OperatingMode::new_with_tracking_recovery(..
 呼出側はState mutexと資源permitを保持し、現在の撮影鮮度を検証した間だけ
 `set_recovery_ready(true)`を許可し、Stateを解放する前にfalseへ戻す必要があります。
 既存18本の参照traceは変更せず、別の27本でPythonの新方針との一致を検証します。
-このPR段階では`frame-live`の既定試験制御は変更せず、連続運転用controllerは別途実装します。
+`frame-live`は`ESP32CAM_RUST_TRIAL_AUTO_RECOVERY=1`を明示すると連続復帰用controllerを使います。
+省略/0は従来のstrict試験です。`ESP32CAM_RUST_TRIAL_INJECT_HOLD=1`を併用すると、60秒以上の
+実験で計測開始30秒後に一度holdを注入し、新ACKからの復帰を確認します（注入を報告に明記）。
+回復待ちは1回30秒・128回まで、手動eco・terminal異常で試験を終了し、最後はactive確認後ecoへ戻します。
+復帰許可はState mutexとsupervisor ticketのguardを保持した間だけ有効です。現在の撮影鮮度と
+ticket期限を合成したdeadlineを復帰commitでも再確認し、workerにcached許可を残しません。
+連続試験は平均5Hz以上・公開結果すべて500ms以内・全holdの復帰を必要とします。
+`continuous_tracking_gate_passed`と、従来の`finite_live_gate_passed`を分け、後者を連続試験の
+成功でtrueにしません。measurementの`strict_rate_gate_passed`は全10秒50件/gap500ms、
+`strict_single_generation_gate_passed`は単一世代という従来指標です。hold秒数はwarmup/終了待ちを
+含むtracking期間の累積値で、実機での物理モーター制御や恒久導入の受入結果ではありません。
 
 `frame-worker`はIssue #553のオフライン互換・性能検証用です。ECF2をstdinから有限回再生し、認識結果と計測値を
 JSON Linesでstdoutへ返します。実行中は1画像・待ちqueueなし、最大120画像・出力1行64KiBです。
