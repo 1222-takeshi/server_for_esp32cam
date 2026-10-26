@@ -19,6 +19,9 @@ ticket期限を合成したdeadlineを復帰commitでも再確認し、workerに
 成功でtrueにしません。measurementの`strict_rate_gate_passed`は全10秒50件/gap500ms、
 `strict_single_generation_gate_passed`は単一世代という従来指標です。hold秒数はwarmup/終了待ちを
 含むtracking期間の累積値で、実機での物理モーター制御や恒久導入の受入結果ではありません。
+`tracking_holds`は最大128件の`[generation, started_us, recovered_us]`で各回の30秒上限を検証します。
+`injected_hold_at`は`[started_us, generation]`です。注入前後の世代の結果が測定区間内に存在することも
+必要とし、`strict_single_generation_gate_passed`は測定区間の実sample世代から計算します。
 
 `frame-worker`はIssue #553のオフライン互換・性能検証用です。ECF2をstdinから有限回再生し、認識結果と計測値を
 JSON Linesでstdoutへ返します。実行中は1画像・待ちqueueなし、最大120画像・出力1行64KiBです。

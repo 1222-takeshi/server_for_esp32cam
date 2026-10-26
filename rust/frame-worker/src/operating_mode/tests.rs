@@ -332,6 +332,8 @@ fn recovery_requires_owner_permit_and_never_reuses_an_old_ack() {
     assert_eq!(status["actuation_state"], "observe_only");
     assert_eq!(status["tracking_automatic_recoveries"], 1);
     assert_eq!(status["tracking_hold_seconds"], 10.26);
+    assert_eq!(mode.last_tracking_hold(), Some((1, 10_260_001)));
+    assert_eq!(mode.tracking_hold_started(), None);
     time.fetch_add(500_001, Ordering::SeqCst);
     assert_eq!(mode.status().unwrap()["actuation_state"], "hold");
     let generation = mode.generation();

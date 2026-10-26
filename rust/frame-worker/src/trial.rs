@@ -48,6 +48,8 @@ pub struct Trial {
     holding_since: Option<u64>,
     inject_hold: bool,
     injected: bool,
+    injected_at: Option<(u64, u64)>,
+    holds: Vec<(u64, u64, u64)>,
 }
 impl Trial {
     pub fn new(boot: u64, duration_us: u64) -> Result<Self> {
@@ -73,6 +75,8 @@ impl Trial {
             holding_since: None,
             inject_hold: false,
             injected: false,
+            injected_at: None,
+            holds: Vec::new(),
         })
     }
     pub fn new_continuous(boot: u64, duration_us: u64, inject_hold: bool) -> Result<Self> {
@@ -123,13 +127,39 @@ impl Trial {
                 status["reason"].as_str(),
                 Some("frames_expired" | "cadence_low")
             );
+        // status() can create or finish a hold after the caller's earlier stamp.
+        let proof_now = if self.continuous { state.now() } else { now };
         if recovering {
-            let began = *self.holding_since.get_or_insert(now);
-            if now.checked_sub(began).is_none_or(|age| age > 30_000_000) {
+            let began = state
+                .mode
+                .tracking_hold_started()
+                .ok_or("missing_hold_start")?;
+            self.holding_since.get_or_insert(began);
+            if self.holding_since != Some(began) {
+                return Err("hold_start_changed");
+            }
+            if proof_now
+                .checked_sub(began)
+                .is_none_or(|age| age > 30_000_000)
+            {
                 return Err("tracking_recovery_timeout");
             }
-        } else {
-            self.holding_since = None;
+        } else if let Some(began) = self.holding_since.take()
+            && status["reason"].is_null()
+            && state.mode.requested() == Mode::Tracking
+        {
+            let (start, end) = state.mode.last_tracking_hold().ok_or("missing_hold_end")?;
+            if start != began
+                || end < start
+                || end > proof_now
+                || end - start > 30_000_000
+                || self.holds.len() >= 128
+                || status["tracking_automatic_recoveries"].as_u64()
+                    != Some(self.holds.len() as u64 + 1)
+            {
+                return Err("invalid_hold_period");
+            }
+            self.holds.push((state.mode.generation(), start, end));
         }
         if (self.phase != Phase::InitialEco || connected)
             && !status["reason"].is_null()
@@ -157,7 +187,7 @@ impl Trial {
             Phase::Warmup | Phase::Tracking => {
                 if Some(state.mode.generation()) != self.generation && recovering {
                     self.recovery_epoch(
-                        now,
+                        proof_now,
                         state.mode.generation(),
                         status["tracking_hold_events"].as_u64(),
                     )?;
@@ -203,6 +233,13 @@ impl Trial {
                             .mode
                             .protect("frames_expired")
                             .map_err(|_| "mode_failed")?;
+                        self.injected_at = Some((
+                            state
+                                .mode
+                                .tracking_hold_started()
+                                .ok_or("missing_hold_start")?,
+                            state.mode.generation(),
+                        ));
                         return Ok(true);
                     }
                     if now
@@ -298,11 +335,26 @@ impl Trial {
                 && (records.len() as u64 * 1_000_000 < self.duration * 5
                     || self.tracking["tracking_hold_events"]
                         != self.tracking["tracking_automatic_recoveries"]
+                    || self.tracking["tracking_hold_events"].as_u64()
+                        != Some(self.holds.len() as u64)
                     || (self.inject_hold && !self.injected)))
         {
             return Err("tracking_below_target");
         }
         ages.sort_unstable();
+        if self.continuous && self.inject_hold {
+            let (at, injected_generation) = self.injected_at.ok_or("missing_injection_evidence")?;
+            let verified = (start..end).contains(&at)
+                && records
+                    .iter()
+                    .any(|s| s.generation == injected_generation && s.published_us >= at)
+                && records
+                    .iter()
+                    .any(|s| s.generation != injected_generation && s.published_us < at);
+            if !verified {
+                return Err("missing_in_window_recovery");
+            }
+        }
         compute.sort_unstable();
         let p95 = (records.len() * 95).div_ceil(100) - 1;
         let mut report = json!({"duration_us":self.duration,"results":records.len(),"recognition_hz":records.len() as f64*1_000_000./self.duration as f64,
@@ -314,10 +366,16 @@ impl Trial {
             fields.insert("strict_rate_gate_passed".into(), json!(strict_rate));
             fields.insert(
                 "strict_single_generation_gate_passed".into(),
-                json!(self.epochs.len() == 1),
+                json!(
+                    records
+                        .iter()
+                        .all(|s| s.generation == records[0].generation)
+                ),
             );
             fields.insert("generation_epochs".into(), json!(self.epochs));
             fields.insert("injected_hold".into(), json!(self.injected));
+            fields.insert("injected_hold_at".into(), json!(self.injected_at));
+            fields.insert("tracking_holds".into(), json!(self.holds));
             fields.insert(
                 "tracking_hold_seconds".into(),
                 self.tracking["tracking_hold_seconds"].clone(),

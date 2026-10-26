@@ -8,9 +8,23 @@ fn setup() -> (Trial, State, Arc<AtomicU64>) {
     setup_policy(false, 10_000_000, false)
 }
 fn setup_policy(continuous: bool, duration: u64, inject: bool) -> (Trial, State, Arc<AtomicU64>) {
+    setup_clock_policy(continuous, duration, inject, false)
+}
+fn setup_clock_policy(
+    continuous: bool,
+    duration: u64,
+    inject: bool,
+    stepping: bool,
+) -> (Trial, State, Arc<AtomicU64>) {
     let time = Arc::new(AtomicU64::new(1));
     let copy = time.clone();
-    let clock: Clock = Arc::new(move || copy.load(Ordering::SeqCst));
+    let clock: Clock = Arc::new(move || {
+        if stepping {
+            copy.fetch_add(1, Ordering::SeqCst)
+        } else {
+            copy.load(Ordering::SeqCst)
+        }
+    });
     let mut state = State::new_with_tracking_recovery(10, clock, continuous).unwrap();
     state.mode.hello(1, 0).unwrap();
     state
@@ -287,7 +301,7 @@ fn hour_evidence_keeps_every_window_and_freshness_gate() {
 
 #[test]
 fn continuous_run_exercises_new_ack_recovery_and_retains_strict_metrics() {
-    let (mut trial, mut state, time) = setup_policy(true, 60_000_000, true);
+    let (mut trial, mut state, time) = setup_clock_policy(true, 60_000_000, true, true);
     for i in 1..=3 {
         time.store(i * 5_000_000, Ordering::SeqCst);
         publish(&mut state, i);
@@ -309,6 +323,9 @@ fn continuous_run_exercises_new_ack_recovery_and_retains_strict_metrics() {
             break;
         }
         if state.mode.command().unwrap().is_some() {
+            // Receiver polls the controller again before receiving the new ACK.
+            let now = state.now();
+            trial.poll(&mut state, now, true).unwrap();
             state
                 .mode
                 .acknowledge(1, state.mode.generation(), Mode::Tracking, 1)
@@ -336,6 +353,21 @@ fn continuous_run_exercises_new_ack_recovery_and_retains_strict_metrics() {
     assert_eq!(report["strict_rate_gate_passed"], true);
     assert_eq!(report["generation_epochs"].as_array().unwrap().len(), 2);
     assert!(report["tracking_hold_seconds"].as_f64().unwrap() >= 10.);
+    let holds = report["tracking_holds"].as_array().unwrap();
+    assert_eq!(holds.len(), 1);
+    assert_eq!(holds[0][0], report["injected_hold_at"][1]);
+    assert_eq!(holds[0][1], report["injected_hold_at"][0]);
+    assert!(
+        (10_000_000..=30_000_000)
+            .contains(&(holds[0][2].as_u64().unwrap() - holds[0][1].as_u64().unwrap()))
+    );
+    let injected = trial.injected_at;
+    trial.injected_at = Some((trial.end.unwrap(), 999));
+    assert_eq!(
+        trial.evaluate(state.samples()),
+        Err("missing_in_window_recovery")
+    );
+    trial.injected_at = injected;
     let mut stale = state.samples().to_vec();
     stale.iter_mut().for_each(|s| s.age_high_us = 500_001);
     assert_eq!(trial.evaluate(&stale), Err("invalid_samples"));
@@ -436,4 +468,33 @@ fn recovery_epoch_limit_accepts_128_and_rejects_the_129th_or_skipped_generation(
         trial.recovery_epoch(130, 139, Some(129)),
         Err("invalid_recovery_epoch")
     );
+}
+
+#[test]
+fn single_generation_metric_excludes_a_recovery_before_the_measured_window() {
+    let mut trial = Trial::new_continuous(1, 10_000_000, false).unwrap();
+    trial.phase = Phase::Done;
+    trial.start = Some(30_000_000);
+    trial.end = Some(40_000_000);
+    trial.generation = Some(2);
+    trial.epochs = vec![(1, 1), (10_000_000, 2)];
+    trial.holds = vec![(2, 10_000_000, 20_000_000)];
+    trial.tracking = json!({"tracking_hold_events":1,"tracking_automatic_recoveries":1,"tracking_hold_seconds":10.});
+    let samples: Vec<_> = (0..50)
+        .map(|i| Sample {
+            boot: 1,
+            generation: 2,
+            sequence: i + 1,
+            published_us: 30_000_000 + i * 200_000,
+            age_high_us: 100_000,
+            compute_us: 50_000,
+        })
+        .collect();
+    let report = trial.evaluate(&samples).unwrap();
+    assert_eq!(report["generation_epochs"].as_array().unwrap().len(), 2);
+    assert_eq!(report["strict_single_generation_gate_passed"], true);
+    trial.inject_hold = true;
+    trial.injected = true;
+    trial.injected_at = Some((10_000_000, 2));
+    assert_eq!(trial.evaluate(&samples), Err("missing_in_window_recovery"));
 }

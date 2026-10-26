@@ -158,8 +158,13 @@ fn continuous_poll(
                 .mono
                 .saturating_add(2_000_000)
                 .min(now.saturating_add((1500 - unix.abs_diff(cached.wall)) * 1000));
-            s.mode
-                .set_recovery_valid_until(capture_end.map(|end| end.min(resource_end)));
+            s.mode.set_recovery_valid_until(capture_end.map(|end| {
+                end.min(resource_end).min(
+                    s.mode
+                        .tracking_hold_started()
+                        .map_or(u64::MAX, |at| at.saturating_add(30_000_000)),
+                )
+            }));
             s.mode.set_recovery_ready(capture_end.is_some());
         }
     }
