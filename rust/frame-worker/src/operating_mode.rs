@@ -52,11 +52,25 @@ pub struct OperatingMode {
     recovery_ready: bool,
     eco_confirmed: bool,
     automatic_recoveries: u64,
+    auto_recover_tracking: bool,
+    tracking_recoverable: bool,
+    tracking_hold_started: Option<u64>,
+    tracking_hold_total: u64,
+    tracking_hold_events: u64,
+    tracking_automatic_recoveries: u64,
 }
 
 impl OperatingMode {
     /// Runtime supplies a CSPRNG initial generation in 1..=MAX_GENERATION.
     pub fn new(version: u64, clock: impl Fn() -> u64 + Send + Sync + 'static) -> Result<Self> {
+        Self::new_with_tracking_recovery(version, clock, false)
+    }
+    /// Opt-in policy fixed before connection. No physical motor control exists.
+    pub fn new_with_tracking_recovery(
+        version: u64,
+        clock: impl Fn() -> u64 + Send + Sync + 'static,
+        auto_recover_tracking: bool,
+    ) -> Result<Self> {
         if !(1..=MAX_GENERATION).contains(&version) {
             return Err(ModeError(400));
         }
@@ -84,6 +98,12 @@ impl OperatingMode {
             recovery_ready: false,
             eco_confirmed: false,
             automatic_recoveries: 0,
+            auto_recover_tracking,
+            tracking_recoverable: false,
+            tracking_hold_started: None,
+            tracking_hold_total: 0,
+            tracking_hold_events: 0,
+            tracking_automatic_recoveries: 0,
         })
     }
     fn now(&self) -> u64 {
@@ -98,11 +118,23 @@ impl OperatingMode {
     pub fn connected(&self) -> bool {
         self.connected
     }
+    /// For tracking recovery, true is a scoped permit, not a cached observation:
+    /// the owner must hold its resource guard and validate current capture age
+    /// throughout the recovery commit, then reset false before unlocking State.
     pub fn set_recovery_ready(&mut self, ready: bool) {
         self.recovery_ready = ready;
     }
 
+    fn finish_tracking_hold(&mut self) {
+        if let Some(start) = self.tracking_hold_started.take() {
+            self.tracking_hold_total = self
+                .tracking_hold_total
+                .saturating_add(self.now().saturating_sub(start));
+        }
+    }
     fn change(&mut self, mode: Mode, reason: Option<&'static str>) -> Result<()> {
+        self.finish_tracking_hold();
+        self.tracking_recoverable = false;
         if self.version >= MAX_GENERATION {
             self.connected = false;
             self.state = "degraded";
@@ -147,6 +179,8 @@ impl OperatingMode {
             self.state = "unknown";
             return Ok(());
         }
+        self.finish_tracking_hold();
+        self.tracking_recoverable = false;
         self.connected = false;
         if self.version < MAX_GENERATION {
             self.change(Mode::Eco, Some("disconnected"))?;
@@ -182,12 +216,28 @@ impl OperatingMode {
         }
         self.tick()
     }
-    /// Internal static fault codes only. Tracking faults always latch in eco.
+    /// Internal static fault codes. Only opt-in transient holds retain tracking.
     pub fn protect(&mut self, reason: &'static str) -> Result<()> {
+        let transient = matches!(reason, "frames_expired" | "cadence_low");
+        if self.requested == Mode::Tracking && self.auto_recover_tracking && transient {
+            if !self.tracking_recoverable {
+                self.change(Mode::Tracking, Some(reason))?;
+                self.tracking_recoverable = true;
+                self.tracking_hold_started = Some(self.now());
+                self.tracking_hold_events = self.tracking_hold_events.saturating_add(1);
+            } else {
+                self.frames.clear();
+                self.cadence_at = None;
+                self.cadence_rate = None;
+                self.cadence_count = 0;
+                self.state = "degraded";
+                self.reason = Some(reason);
+            }
+            return Ok(());
+        }
         if self.requested == Mode::Tracking {
             return self.change(Mode::Eco, Some(reason));
         }
-        let transient = matches!(reason, "frames_expired" | "cadence_low");
         if transient && self.reason.is_some() && !self.eco_recoverable {
             return Ok(());
         }
@@ -308,14 +358,29 @@ impl OperatingMode {
     }
     fn reconcile(&mut self) {
         if self.connected
-            && self.eco_recoverable
+            && (self.eco_recoverable || self.tracking_recoverable)
             && self.recovery_ready
             && self.ack.is_some()
             && self.cadence()
         {
-            self.reason = None;
-            self.eco_recoverable = false;
-            self.automatic_recoveries = self.automatic_recoveries.saturating_add(1);
+            if self.eco_recoverable {
+                self.reason = None;
+                self.eco_recoverable = false;
+                self.automatic_recoveries = self.automatic_recoveries.saturating_add(1);
+            } else if self.requested == Mode::Tracking
+                && self.frames.back().is_some_and(|s| {
+                    self.now()
+                        .checked_sub(s.at)
+                        .is_some_and(|gap| gap <= 500_000)
+                })
+            {
+                self.finish_tracking_hold();
+                self.reason = None;
+                self.tracking_recoverable = false;
+                self.automatic_recoveries = self.automatic_recoveries.saturating_add(1);
+                self.tracking_automatic_recoveries =
+                    self.tracking_automatic_recoveries.saturating_add(1);
+            }
         }
         if self.connected && self.reason.is_none() {
             self.state = if self.ack.is_some() && self.cadence() {
@@ -411,16 +476,37 @@ impl OperatingMode {
             && self.reason.is_none()
             && ((self.eco_confirmed && !self.cadence())
                 || now - self.frames.back().map_or(self.ack_at.unwrap(), |s| s.at) > 7_000_000);
-        Ok(
-            json!({"schema":2,"version":self.version,"boot_id":self.boot,"requested_mode":self.requested.name(),
+        let mut result = json!({"schema":2,"version":self.version,"boot_id":self.boot,"requested_mode":self.requested.name(),
             "effective_mode":if self.ack.is_some() && !self.frames.is_empty() { Some(self.requested.name()) } else { None },
             "state":self.state,"reason":self.reason,"connected":self.connected,"eco_warning":warning,
             "eco_auto_recovery_pending":self.eco_recoverable,"automatic_recoveries":self.automatic_recoveries,
             "actuation_state":if self.state == "active" && self.requested == Mode::Tracking { "observe_only" } else { "hold" },
             "acknowledged":self.ack.is_some(),"last_result_age_seconds":self.frames.back().map(|s| (now-s.at) as f64 / 1_000_000.),
             "recognition_hz":rate,"cadence_samples":self.frames.len(),"transitions":self.transitions,
-            "rejected_ack":self.rejected_ack,"rejected_result":self.rejected_result}),
-        )
+            "rejected_ack":self.rejected_ack,"rejected_result":self.rejected_result});
+        if self.auto_recover_tracking {
+            let elapsed = self
+                .tracking_hold_started
+                .map_or(0, |start| now.saturating_sub(start));
+            let fields = result.as_object_mut().unwrap();
+            fields.insert(
+                "tracking_auto_recovery_pending".into(),
+                json!(self.tracking_recoverable),
+            );
+            fields.insert(
+                "tracking_hold_events".into(),
+                json!(self.tracking_hold_events),
+            );
+            fields.insert(
+                "tracking_automatic_recoveries".into(),
+                json!(self.tracking_automatic_recoveries),
+            );
+            fields.insert(
+                "tracking_hold_seconds".into(),
+                json!(self.tracking_hold_total.saturating_add(elapsed) as f64 / 1_000_000.),
+            );
+        }
+        Ok(result)
     }
 }
 
