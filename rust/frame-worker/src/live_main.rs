@@ -120,6 +120,15 @@ fn refresh_ready(
     }
     cached.ready(mono(), wall())
 }
+fn adaptive_reserve(value: std::result::Result<String, std::env::VarError>) -> Result<bool> {
+    match value {
+        Err(std::env::VarError::NotPresent) => Ok(false),
+        Ok(value) if value == "0" => Ok(false),
+        Ok(value) if value == "1" => Ok(true),
+        _ => Err("invalid adaptive reservation".into()),
+    }
+}
+
 fn execute() -> Result<bool> {
     let args: Vec<_> = std::env::args_os().collect();
     if args.len() != 5 {
@@ -140,6 +149,7 @@ fn execute() -> Result<bool> {
         })?;
     let duration_us = trial::duration_us(duration.as_deref()).map_err(|_| "invalid duration")?;
     let budget_seconds = duration_us / 1_000_000 + 120;
+    let adaptive = adaptive_reserve(std::env::var("ESP32CAM_RUST_TRIAL_ADAPTIVE_RESERVE"))?;
     let selected = key(
         camera,
         &std::env::var("ESP32CAM_DEVICE_API_KEY").unwrap_or_default(),
@@ -174,12 +184,16 @@ fn execute() -> Result<bool> {
         State::new(transport::initial_generation()?, clock.clone())
             .map_err(|_| "invalid initial mode")?,
     ));
-    let worker = Worker::start(state.clone(), move |jpeg_bytes| {
-        let (rgb, height) = jpeg::decode(jpeg_bytes).map_err(|_| "jpeg_failed")?;
-        let tensor = detector::prepare_rgb(&rgb, height).map_err(|_| "prepare_failed")?;
-        let raw = detector.infer(&tensor).map_err(|_| "infer_failed")?;
-        detector::postprocess(&raw, height).map_err(|_| "postprocess_failed")
-    })?;
+    let worker = Worker::start_with_adaptive_reserve(
+        state.clone(),
+        move |jpeg_bytes| {
+            let (rgb, height) = jpeg::decode(jpeg_bytes).map_err(|_| "jpeg_failed")?;
+            let tensor = detector::prepare_rgb(&rgb, height).map_err(|_| "prepare_failed")?;
+            let raw = detector.infer(&tensor).map_err(|_| "infer_failed")?;
+            detector::postprocess(&raw, height).map_err(|_| "postprocess_failed")
+        },
+        adaptive,
+    )?;
     let listener = TcpListener::bind(address)?;
     listener.set_nonblocking(true)?;
     let begun = clock();
@@ -247,7 +261,7 @@ fn execute() -> Result<bool> {
                 "boot_id":d.boot,"generation":d.generation,"sequence":d.sequence,"at_us":d.at_us,
                 "stage":d.stage,"age_high_us":d.age_high_us,"arrival_age_high_us":d.arrival_age_high_us,
         "arrival_age_low_us":d.arrival_age_low_us,"capture_to_send_us":d.capture_to_send_us,
-        "elapsed_since_arrival_us":d.wait_us,"compute_us":d.compute_us
+        "elapsed_since_arrival_us":d.wait_us,"compute_us":d.compute_us,"reserve_us":d.reserve_us
             })
         })
         .collect();
@@ -270,7 +284,7 @@ fn execute() -> Result<bool> {
         })
         .collect();
     let report = json!({"schema":1,"live_validation_only":true,"physical_motor_control":false,"global_acceptance":false,
-        "finite_live_gate_passed":passed,"tracking_ping_interval_us":50_000,"reason":outcome.reason,"measurement":measurement.ok(),"measurement_error":measurement_error,"model_sha256":detector::MODEL_SHA,
+        "adaptive_inference_reserve":adaptive,"finite_live_gate_passed":passed,"tracking_ping_interval_us":50_000,"reason":outcome.reason,"measurement":measurement.ok(),"measurement_error":measurement_error,"model_sha256":detector::MODEL_SHA,
         "runtime_sha256":detector::RUNTIME_SHA,"runtime_build":ort::info(),"input_size":320,"threshold":0.5,"threads":3,
         "initial_eco":trial.initial,"tracking":trial.tracking,"final_eco":trial.final_eco,"session_final":outcome.final_status,
         "receiver":{"messages":outcome.stats.messages,"frames":outcome.stats.frames,"admitted":outcome.stats.admitted,"dropped":outcome.stats.dropped,
@@ -305,6 +319,16 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn adaptive_policy_is_explicit_and_invalid_values_fail() {
+        assert!(!adaptive_reserve(Err(std::env::VarError::NotPresent)).unwrap());
+        assert!(!adaptive_reserve(Ok("0".into())).unwrap());
+        assert!(adaptive_reserve(Ok("1".into())).unwrap());
+        for value in ["", "true", "01", " 1", "2"] {
+            assert!(adaptive_reserve(Ok(value.into())).is_err());
+        }
+        assert!(adaptive_reserve(Err(std::env::VarError::NotUnicode("bad".into()))).is_err());
+    }
     #[test]
     fn key_mapping_and_supervisor_cache_fail_closed() {
         assert_eq!(

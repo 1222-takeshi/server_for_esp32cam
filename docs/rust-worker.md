@@ -183,3 +183,29 @@ the experiment duration does not establish sustained performance, accuracy parit
 
 10分追試の中断と復旧、受信除外の診断は
 [rust-long-trial-validation.md](rust-long-trial-validation.md)を参照してください。
+
+### Opt-in load-aware inference reservation (#584)
+
+For a new finite experiment only, the supervisor may set
+`ESP32CAM_RUST_TRIAL_ADAPTIVE_RESERVE=1`. Missing/`0` keeps the fixed 165 ms
+reservation; other values fail before loading the model. `Worker::start` also
+keeps the existing fixed policy by default.
+
+The candidate uses the largest compute duration observed in the last two seconds
+(at most 32 observations), plus 25%, clamped to 165–400 ms. It discards a waiting
+image before inference when arrival age + elapsed time + this estimate exceeds
+500 ms. Old observations expire; backwards time cannot expire them early. This
+is a conservative estimate, not a deadline guarantee. The unchanged publication
+gate still rejects every result older than 500 ms.
+
+No detector, model, thread count, precision, input/JPEG setting or mode watchdog
+changes. The latest-one queue remains bounded; the estimate adds at most 32
+numeric pairs in RAM. The final report states whether the candidate was enabled,
+and drop metadata includes the reserve used. Acceptance still requires 50 results
+in every ten-second window and all age/gap limits, first for ten minutes and then
+one hour. Preserve fixed-policy and failed raw evidence; do not treat regression
+simulation as live performance acceptance.
+
+The supervisor copy must explicitly pass the flag in its child environment and
+verify `adaptive_inference_reserve=true` in the resulting report. Archive its
+source/configuration separately from the fixed-policy baseline before a trial.
