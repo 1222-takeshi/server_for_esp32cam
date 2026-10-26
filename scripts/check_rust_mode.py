@@ -12,6 +12,7 @@ from script.frame_protocol import CameraFrame  # noqa: E402
 from script.operating_mode import ModeError, OperatingMode  # noqa: E402
 
 FIXTURE = ROOT / "rust/frame-worker/fixtures/mode.jsonl"
+RECOVERY_FIXTURE = FIXTURE.with_name("mode-recovery.jsonl")
 
 
 def event(op, **args):
@@ -54,6 +55,31 @@ def scenarios():
          event("ack", boot=2), event("frame", boot=1, seq=1), event("frame", boot=2, seq=2)],
         [event("hello", floor=2**53-1), event("disconnect")],
         [event("hello", floor=2**53-2), ack, event("request", mode="tracking"), event("disconnect")],
+    ]
+
+
+def recovery_scenarios():
+    tracking = [event("hello"), event("ack"), event("request", mode="tracking"),
+                event("ack"), event("ready", value=True)]
+    held = [*tracking, event("burst", count=55, step=190_000),
+            event("tick", at=10_950_001)]
+    return [
+        *scenarios(),
+        [*held, event("ack", version=12), event("frame", version=12, seq=100),
+         event("command"), event("ack"), event("burst", seq=100, count=54, step=190_000)],
+        [*held, event("ack"), event("burst", seq=100, count=10, step=190_000),
+         event("tick", at=13_350_002), event("command"),
+         event("burst", seq=110, count=54, step=190_000)],
+        [*held, event("ack"), event("ready", value=False),
+         event("burst", seq=100, count=54, step=190_000),
+         event("ready", value=True), event("tick")],
+        [*held, event("request", mode="eco"), event("ack"),
+         event("burst", seq=100, count=3, step=5_000_000)],
+        [*held, event("disconnect"), event("hello", boot=2), event("ack", boot=2)],
+        [*held, event("tick", at=15_950_001), event("ack")],
+        *[[*held, event("protect", reason=reason), event("ack"),
+           event("burst", seq=100, count=3, step=5_000_000)]
+          for reason in ("inference_failed", "publication_failed", "resource_thermal_fault")],
     ]
 
 
@@ -105,11 +131,12 @@ def apply(mode, action, time):
     return args, None
 
 
-def render():
+def render(*, recovery=False):
     rows = []
-    for actions in scenarios():
+    for actions in recovery_scenarios() if recovery else scenarios():
         time = [0]
-        mode = OperatingMode(clock=lambda time=time: time[0] / 1_000_000)
+        mode = OperatingMode(clock=lambda time=time: time[0] / 1_000_000,
+                             auto_recover_tracking=recovery)
         mode.version = 10
         trace = []
         for action in actions:
@@ -124,6 +151,7 @@ def render():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--write", action="store_true")
+    parser.add_argument("--write-recovery", action="store_true")
     args = parser.parse_args()
     content = render()
     if args.write:
@@ -132,3 +160,9 @@ if __name__ == "__main__":
     elif FIXTURE.read_text() != content:
         raise SystemExit("Rust mode fixture differs from Python reference")
     print(f"Mode reference: {len(content.splitlines())} traces verified")
+    recovery = render(recovery=True)
+    if args.write_recovery:
+        RECOVERY_FIXTURE.write_text(recovery)
+    elif RECOVERY_FIXTURE.read_text() != recovery:
+        raise SystemExit("Rust recovery fixture differs from Python reference")
+    print(f"Recovery reference: {len(recovery.splitlines())} traces verified")

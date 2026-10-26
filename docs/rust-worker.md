@@ -1,5 +1,15 @@
 # Rust frame workers
 
+Issue #588でmodeライブラリに`OperatingMode::new_with_tracking_recovery(..., true)`を追加しました。
+既定の`new()`は従来どおり手動復帰です。明示的に有効にした場合のみ、鮮度切れ・周期不足で
+認識をtrackingのままholdにし、世代更新、新ACK、10秒50件、資源許可後に復帰します。
+繰り返すgapは周期証拠だけをリセットし、ACK/世代更新を連打しません。資源・推論・公開異常、
+切断、ACK期限切れ、手動ecoは従来の退避を優先します。hold回数・累積秒・復帰回数も記録します。
+呼出側はState mutexと資源permitを保持し、現在の撮影鮮度を検証した間だけ
+`set_recovery_ready(true)`を許可し、Stateを解放する前にfalseへ戻す必要があります。
+既存18本の参照traceは変更せず、別の27本でPythonの新方針との一致を検証します。
+このPR段階では`frame-live`の既定試験制御は変更せず、連続運転用controllerは別途実装します。
+
 `frame-worker`はIssue #553のオフライン互換・性能検証用です。ECF2をstdinから有限回再生し、認識結果と計測値を
 JSON Linesでstdoutへ返します。実行中は1画像・待ちqueueなし、最大120画像・出力1行64KiBです。
 不正/途中EOF/重複/逆順/モデル故障/出力故障で非0終了し、無限retryしません。

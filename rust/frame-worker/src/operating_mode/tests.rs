@@ -88,9 +88,25 @@ fn assert_json(actual: &Value, expected: &Value) {
 
 #[test]
 fn python_controller_traces() {
-    for line in include_str!("../../fixtures/mode.jsonl").lines() {
+    check_traces(include_str!("../../fixtures/mode.jsonl"), false);
+}
+
+#[test]
+fn python_tracking_recovery_traces() {
+    check_traces(include_str!("../../fixtures/mode-recovery.jsonl"), true);
+}
+
+fn check_traces(input: &str, recovery: bool) {
+    for line in input.lines() {
         let trace: Vec<Value> = serde_json::from_str(line).unwrap();
-        let (mut mode, time) = setup();
+        let time = Arc::new(AtomicU64::new(0));
+        let copy = time.clone();
+        let mut mode = OperatingMode::new_with_tracking_recovery(
+            10,
+            move || copy.load(Ordering::SeqCst),
+            recovery,
+        )
+        .unwrap();
         for event in trace {
             let a = &event["args"];
             time.store(event["at"].as_u64().unwrap(), Ordering::SeqCst);
@@ -121,6 +137,9 @@ fn python_controller_traces() {
                     .protect(match a["reason"].as_str().unwrap() {
                         "disk_low" => "disk_low",
                         "frames_expired" => "frames_expired",
+                        "inference_failed" => "inference_failed",
+                        "publication_failed" => "publication_failed",
+                        "resource_thermal_fault" => "resource_thermal_fault",
                         _ => panic!(),
                     })
                     .map(|_| Value::Null),
@@ -270,4 +289,58 @@ fn paused_guard_uses_its_original_watchdog_stamp() {
     assert_eq!(status["requested_mode"], "eco");
     assert_eq!(status["reason"], "frames_expired");
     assert_eq!(status["actuation_state"], "hold");
+}
+
+#[test]
+fn recovery_requires_owner_permit_and_never_reuses_an_old_ack() {
+    let time = Arc::new(AtomicU64::new(1));
+    let copy = time.clone();
+    let mut mode =
+        OperatingMode::new_with_tracking_recovery(10, move || copy.load(Ordering::SeqCst), true)
+            .unwrap();
+    mode.hello(1, 0).unwrap();
+    mode.request(Mode::Tracking, mode.generation(), true)
+        .unwrap();
+    let old_generation = mode.generation();
+    mode.acknowledge(1, old_generation, Mode::Tracking, 100)
+        .unwrap();
+    let old = frame(&mode, 1);
+    mode.protect("frames_expired").unwrap();
+    assert!(
+        !mode
+            .acknowledge(1, old_generation, Mode::Tracking, 100)
+            .unwrap()
+    );
+    assert!(
+        !mode
+            .publish_result(&old, || panic!("old generation"))
+            .unwrap()
+    );
+    mode.acknowledge(1, mode.generation(), Mode::Tracking, 100)
+        .unwrap();
+    for seq in 1..=54 {
+        time.fetch_add(190_000, Ordering::SeqCst);
+        assert!(mode.publish_result(&frame(&mode, seq), || true).unwrap());
+    }
+    assert_eq!(mode.status().unwrap()["tracking_automatic_recoveries"], 0);
+    mode.set_recovery_ready(true); // Test owner holds its synthetic resource permit.
+    let status = mode.status().unwrap();
+    mode.set_recovery_ready(false);
+    assert_eq!(status["actuation_state"], "observe_only");
+    assert_eq!(status["tracking_automatic_recoveries"], 1);
+    assert_eq!(status["tracking_hold_seconds"], 10.26);
+    time.fetch_add(500_001, Ordering::SeqCst);
+    assert_eq!(mode.status().unwrap()["actuation_state"], "hold");
+    let generation = mode.generation();
+    for _ in 0..10 {
+        mode.protect("frames_expired").unwrap();
+    }
+    assert_eq!(mode.generation(), generation);
+    assert_eq!(mode.status().unwrap()["tracking_hold_events"], 2);
+    mode.protect("resource_thermal_fault").unwrap();
+    assert_eq!(mode.requested(), Mode::Eco);
+    assert_eq!(
+        mode.status().unwrap()["tracking_auto_recovery_pending"],
+        false
+    );
 }
