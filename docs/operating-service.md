@@ -150,3 +150,19 @@ source/boot/mode/WLANの行数、保護・不明sample、DB/WAL/logの観測最�
 完了時の集計を予約する場合は、auditの終了予定後に `--require-complete` を実行する
 一回のuser timerを使います。未完了exit3のみ有限回retryし、既存output/不正入力のexit2は
 停止させます。observer自体の再起動・mode変更・raw削除や通知送信は行いません。
+
+### 任意のtracking自動復帰
+
+`ESP32CAM_OPERATING_TRACKING_AUTO_RECOVERY=true`を明示した場合、同一接続・同一bootの
+`frames_expired`/`cadence_low`では、撮影・認識をtrackingのまま続け、actuationはholdへ移ります。
+最初の異常で世代を更新し、新しいACKと旧結果の排除を必須にします。資源正常を確認し、
+時計/500ms鮮度検証を通った結果が10秒50件以上揃ってから自動復帰します。
+回復待ち中の再度のgapは周期確認をやり直し、世代・ACK要求を連打しません。
+
+既定のfalseは従来の手動復帰です。切断・boot変更・ACK timeout・推論/公開/資源異常・
+世代枯渇は、自動復帰設定でもecoで手動復帰を待ちます。手動のeco要求は常に優先します。
+有効時のAPI/minute summaryに`tracking_auto_recovery_pending`、`tracking_hold_events`、
+`tracking_automatic_recoveries`、`tracking_hold_seconds`を追加します。履歴配列や画像ログは増やしません。
+このmode classはモーターを動かす命令を発行せず、物理制御は別の受入が必要です。
+復帰の確定はmode lockと資源guardのRAM-only permit内で行い、保存workerの非同期障害と
+競合してもpaused状態を見落としません。ロック取得後の画像鮮度も再確認します。

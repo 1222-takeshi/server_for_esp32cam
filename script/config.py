@@ -97,6 +97,7 @@ def gunicorn_worker_count(
 
 
 class Config:
+    OPERATING_TRACKING_AUTO_RECOVERY = _env_bool("ESP32CAM_OPERATING_TRACKING_AUTO_RECOVERY")
     OPERATING_SOCKET = os.getenv("ESP32CAM_OPERATING_SOCKET", "")
     OPERATING_CAMERA_ID = os.getenv("ESP32CAM_OPERATING_CAMERA_ID", "esp32cam-01")
     BASE_DIR = Path(__file__).resolve().parent.parent

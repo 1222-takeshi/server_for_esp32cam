@@ -10,6 +10,7 @@ import resource
 import subprocess
 import time
 from collections import deque
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Event, Lock, Thread
@@ -49,7 +50,9 @@ class OperatingRuntime:
         self.app, self.camera_id, self.clock = app, camera_id, clock
         self.sampler, self.hardware = sampler, hardware or HardwareProbe()
         self.diagnostic_dir = Path(diagnostic_dir)
-        self.mode = OperatingMode(clock=clock)
+        self.mode = OperatingMode(clock=clock, auto_recover_tracking=
+                                  app.config.get("OPERATING_TRACKING_AUTO_RECOVERY", False),
+                                  recovery_guard=self._tracking_recovery_permit)
         self.guard = ResourceGuard(clock=clock)
         self.ram_lock, self.diagnostic_lock = Lock(), Lock()
         self.latest = None
@@ -78,6 +81,24 @@ class OperatingRuntime:
                     inference_reserve_ms=165,
                     tracking_ping_interval_ms=50,
                     clock_us=lambda: int(clock() * 1_000_000))
+
+    @contextmanager
+    def _tracking_recovery_permit(self):
+        # Caller owns mode.lock; resource writers never acquire mode.lock while
+        # holding guard.lock. All gate inputs stay stable through the commit.
+        with self.guard.recovery_permit() as permitted:
+            fresh = self._tracking_freshness()
+            yield bool(permitted and not self.closed and self.vitals["thermal_ok"]
+                       and self.retention_ok is True and fresh is True)
+
+    def _tracking_freshness(self):
+        # Caller owns mode.lock. None means no result in the current generation.
+        with self.ram_lock:
+            latest = self.latest
+        if latest is None or latest[:2] != (self.mode.boot, self.mode.version):
+            return None
+        elapsed = int(self.clock() * 1_000_000) - latest[5]
+        return elapsed >= 0 and latest[6] + elapsed <= 500_000
 
     def _event(self, event):
         try:
@@ -116,7 +137,8 @@ class OperatingRuntime:
             detections = tuple(self._tracker.update(self.camera_id, list(detections)))
         captured_host_us = event["host_received_us"] - (event["age_low_us"] + event["age_high_us"]) // 2
         with self.ram_lock:
-            self.latest = (frame.boot_id, frame.mode_generation, frame.sequence, frame.jpeg, self.clock())
+            self.latest = (frame.boot_id, frame.mode_generation, frame.sequence, frame.jpeg,
+                           self.clock(), event["host_received_us"], event["age_high_us"])
         self.writer.submit(self.camera_id, frame.jpeg, detections,
                            (frame.boot_id, frame.mode_generation, frame.sequence, captured_host_us))
 
@@ -159,25 +181,31 @@ class OperatingRuntime:
             self.guard.observe(self.sampler(self.app.config["UPLOAD_DIR"], self.app.config["DB_PATH"]))
             temperature, throttled = self.hardware()
             thermal_ok = 0 < temperature < 80 and throttled == 0
-            self.vitals.update(temperature_c=temperature, throttled=throttled, thermal_ok=thermal_ok)
-            if not thermal_ok:
-                self.guard.pause("thermal_fault")
-            if self.retention_ok is False:
-                self.guard.monitor_failed()
+            with self.mode.lock:
+                self.vitals.update(temperature_c=temperature, throttled=throttled, thermal_ok=thermal_ok)
+                if not thermal_ok:
+                    self.guard.pause("thermal_fault")
+                if self.retention_ok is False:
+                    self.guard.monitor_failed()
             self._protect()  # Update the recovery gate before tick can clear an eco latch.
             mode = self.mode.status()
             if (mode["reason"] in {"frames_expired", "cadence_low", "publication_failed", "ack_timeout"}
-                    and not mode["eco_auto_recovery_pending"] and not self.guard.status()["paused"]):
+                    and not mode["eco_auto_recovery_pending"]
+                    and not mode.get("tracking_auto_recovery_pending", False)
+                    and not self.guard.status()["paused"]):
                 self.guard.pause("pipeline_fault")
         except (OSError, ValueError, IndexError, subprocess.SubprocessError):
             self.guard.monitor_failed()
         self._protect()
 
     def _protect(self):
-        guard = self.guard.status()
         with self.mode.lock:
+            guard = self.guard.status()
             self.mode.eco_recovery_ready = (not guard["paused"] and self.vitals["thermal_ok"]
                                             and self.retention_ok is True)
+            if (not guard["paused"] and self.mode.auto_recover_tracking and self.mode.connected
+                    and self.mode.requested == "tracking" and self._tracking_freshness() is False):
+                self.mode.protect("frames_expired")
             if guard["paused"] and (self.mode.reason is None or self.mode.requested == "tracking"
                                      or self.mode.eco_recoverable):
                 self.mode.protect(f"resource_{guard['reason']}")
@@ -224,11 +252,13 @@ class OperatingRuntime:
             with self.app.app_context():
                 apply_scheduled_retention()
         except Exception:
-            self.retention_ok = False
-            self.guard.monitor_failed()
+            with self.mode.lock:
+                self.retention_ok = False
+                self.guard.monitor_failed()
             self._protect()
             raise
-        self.retention_ok = True
+        with self.mode.lock:
+            self.retention_ok = True
 
     def _maintenance_loop(self):
         while not self.stop.is_set():
@@ -303,7 +333,7 @@ class OperatingRuntime:
             return {"error": str(exc), "status_code": exc.status}
 
     def close(self):
-        with self.ram_lock:
+        with self.mode.lock, self.ram_lock:
             if self.closed:
                 return
             self.closed = True
