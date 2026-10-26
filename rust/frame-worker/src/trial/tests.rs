@@ -368,6 +368,25 @@ fn continuous_run_exercises_new_ack_recovery_and_retains_strict_metrics() {
         Err("missing_in_window_recovery")
     );
     trial.injected_at = injected;
+    let recovered = trial.holds[0].2;
+    trial.holds[0].2 = trial.end.unwrap() + 1;
+    assert_eq!(
+        trial.evaluate(state.samples()),
+        Err("missing_in_window_recovery")
+    );
+    trial.holds[0].2 = state
+        .samples()
+        .iter()
+        .rev()
+        .find(|s| s.published_us < trial.end.unwrap())
+        .unwrap()
+        .published_us
+        + 1;
+    assert_eq!(
+        trial.evaluate(state.samples()),
+        Err("missing_in_window_recovery")
+    );
+    trial.holds[0].2 = recovered;
     let mut stale = state.samples().to_vec();
     stale.iter_mut().for_each(|s| s.age_high_us = 500_001);
     assert_eq!(trial.evaluate(&stale), Err("invalid_samples"));

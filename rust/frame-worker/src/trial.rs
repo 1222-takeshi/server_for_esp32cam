@@ -344,10 +344,19 @@ impl Trial {
         ages.sort_unstable();
         if self.continuous && self.inject_hold {
             let (at, injected_generation) = self.injected_at.ok_or("missing_injection_evidence")?;
-            let verified = (start..end).contains(&at)
+            if !(start..end).contains(&at) {
+                return Err("missing_in_window_recovery");
+            }
+            let recovered = self
+                .holds
+                .iter()
+                .find(|(g, began, _)| *g == injected_generation && *began == at)
+                .map(|(_, _, end)| *end)
+                .ok_or("missing_injection_evidence")?;
+            let verified = recovered < end
                 && records
                     .iter()
-                    .any(|s| s.generation == injected_generation && s.published_us >= at)
+                    .any(|s| s.generation == injected_generation && s.published_us >= recovered)
                 && records
                     .iter()
                     .any(|s| s.generation != injected_generation && s.published_us < at);
@@ -376,6 +385,10 @@ impl Trial {
             fields.insert("injected_hold".into(), json!(self.injected));
             fields.insert("injected_hold_at".into(), json!(self.injected_at));
             fields.insert("tracking_holds".into(), json!(self.holds));
+            fields.insert(
+                "tracking_hold_statistics_scope".into(),
+                json!("full_tracking_phase"),
+            );
             fields.insert(
                 "tracking_hold_seconds".into(),
                 self.tracking["tracking_hold_seconds"].clone(),
