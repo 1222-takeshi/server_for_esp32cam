@@ -332,8 +332,11 @@ class CaptureReceiver:
 
                             if self.profile is None:
                                 publish()
-                            elif not self.profile.publish_result(frame, publish):
-                                emit_counted("inferred", "dropped", status="dropped", reason="profile_changed",
+                            elif not self.profile.publish_result(frame, publish, eligible=lambda metadata=metadata:
+                                    age_high_now(metadata, self.clock_us()) <= self.max_age_us):
+                                reason = ("expired_result" if age_high_now(metadata, self.clock_us())
+                                          > self.max_age_us else "profile_changed")
+                                emit_counted("inferred", "dropped", status="dropped", reason=reason,
                                              infer_started_us=started, infer_finished_us=finished, **metadata)
             except SinkFailure:
                 stopping.set()

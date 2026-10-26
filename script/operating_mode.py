@@ -5,6 +5,7 @@ from __future__ import annotations
 import secrets
 import time
 from collections import deque
+from contextlib import nullcontext
 from threading import RLock
 
 MAX_VERSION = 2**53 - 1
@@ -22,7 +23,13 @@ class ModeError(ValueError):
 
 
 class OperatingMode:
-    def __init__(self, *, clock=time.monotonic):
+    def __init__(self, *, clock=time.monotonic, auto_recover_tracking=False,
+                 recovery_guard=None):
+        if type(auto_recover_tracking) is not bool:
+            raise ValueError("Tracking recovery policy must be boolean")
+        if recovery_guard is not None and not callable(recovery_guard):
+            raise ValueError("Recovery guard must supply a bounded RAM-only context")
+        self.recovery_guard = recovery_guard or (lambda: nullcontext(True))
         self.clock = clock
         self.lock = RLock()
         self.version = secrets.randbits(40) + 1
@@ -44,8 +51,20 @@ class OperatingMode:
         self.transitions = 0
         self.eco_recoverable = self.eco_recovery_ready = self.eco_confirmed = False
         self.automatic_recoveries = 0
+        self.auto_recover_tracking = auto_recover_tracking
+        self.tracking_recoverable = False
+        self.tracking_hold_started = None
+        self.tracking_hold_total = 0.0
+        self.tracking_hold_events = self.tracking_automatic_recoveries = 0
+
+    def _finish_tracking_hold(self):
+        if self.tracking_hold_started is not None:
+            self.tracking_hold_total += max(0, self.clock() - self.tracking_hold_started)
+            self.tracking_hold_started = None
 
     def _change(self, mode, *, reason=None):
+        self._finish_tracking_hold()
+        self.tracking_recoverable = False
         if self.version >= MAX_VERSION:
             self.connected, self.state, self.reason = False, "degraded", "version_exhausted"
             self.ack = None
@@ -81,6 +100,8 @@ class OperatingMode:
             if not self.connected and self.requested == "eco" and self.ack is None:
                 self.state = "unknown"
                 return
+            self._finish_tracking_hold()
+            self.tracking_recoverable = False
             self.connected = False
             if self.version < MAX_VERSION:
                 self._change("eco", reason="disconnected")
@@ -105,6 +126,20 @@ class OperatingMode:
     def protect(self, reason):
         """Call on real-time faults, independently of logs and device ACK."""
         with self.lock:
+            transient = reason in {"frames_expired", "cadence_low"}
+            if self.requested == "tracking" and self.auto_recover_tracking and transient:
+                if not self.tracking_recoverable:
+                    self._change("tracking", reason=reason)  # New ACK, never an old result.
+                    self.tracking_recoverable = True
+                    self.tracking_hold_started = self.clock()
+                    self.tracking_hold_events += 1
+                else:
+                    # Repeated gaps restart proof, not the generation/ACK deadline.
+                    self.frames.clear()
+                    self.cadence_at = self.cadence_rate = None
+                    self.cadence_count = 0
+                    self.state, self.reason = "degraded", reason
+                return
             if self.requested == "tracking":
                 self._change("eco", reason=reason)
             else:
@@ -137,7 +172,7 @@ class OperatingMode:
             return (self.connected and self.ack is not None and frame.boot_id == self.boot
                     and frame.mode_generation == self.version and frame.captured_us > self.ack)
 
-    def publish_result(self, frame, publish):
+    def publish_result(self, frame, publish, *, eligible=None):
         """Fence both result publication and mode changes with the same lock.
 
         publish must be bounded, nonblocking, and must not call external IO.
@@ -153,6 +188,9 @@ class OperatingMode:
                 return False
             now = self.clock()
             try:
+                if eligible is not None and eligible() is not True:
+                    self.rejected_result += 1
+                    return False
                 publish()
             except Exception:
                 self.protect("publication_failed")
@@ -182,10 +220,24 @@ class OperatingMode:
                         for a, b in zip(recent, recent[1:], strict=False)))
 
     def _reconcile(self):
-        if (self.connected and self.eco_recoverable and self.eco_recovery_ready
-                and self.ack is not None and self._cadence()):
-            self.reason, self.eco_recoverable = None, False
-            self.automatic_recoveries += 1
+        # The legacy readiness field is a shared resource gate for both policies.
+        if (self.connected and (self.eco_recoverable or self.tracking_recoverable)
+                and self.eco_recovery_ready and self.ack is not None
+                and self._cadence()):
+            if self.eco_recoverable:
+                self.reason, self.eco_recoverable = None, False
+                self.automatic_recoveries += 1
+            elif self.tracking_recoverable and self.requested == "tracking":
+                try:
+                    with self.recovery_guard() as permitted:
+                        fresh = self.frames and 0 <= self.clock() - self.frames[-1][0] <= .5
+                        if permitted is True and fresh:
+                            self._finish_tracking_hold()
+                            self.reason, self.tracking_recoverable = None, False
+                            self.automatic_recoveries += 1
+                            self.tracking_automatic_recoveries += 1
+                except Exception:
+                    self.protect("recovery_guard_failed")
         if self.connected and self.reason is None:
             self.state = "active" if self.ack is not None and self._cadence() else "pending"
             if self.requested == "eco" and self.state == "active":
@@ -241,7 +293,7 @@ class OperatingMode:
             warning = (self.requested == "eco" and self.ack is not None and self.reason is None
                        and ((self.eco_confirmed and not self._cadence())
                             or now - (self.frames[-1][0] if self.frames else self.ack_at) > 7))
-            return {"schema": 2, "version": self.version, "boot_id": self.boot,
+            result = {"schema": 2, "version": self.version, "boot_id": self.boot,
                     "requested_mode": self.requested,
                     "effective_mode": self.requested if self.ack is not None and self.frames else None,
                     "state": self.state, "reason": self.reason, "connected": self.connected,
@@ -253,3 +305,11 @@ class OperatingMode:
                     "recognition_hz": rate,
                     "cadence_samples": len(self.frames), "transitions": self.transitions,
                     "rejected_ack": self.rejected_ack, "rejected_result": self.rejected_result}
+            if self.auto_recover_tracking:
+                elapsed = (max(0, now - self.tracking_hold_started)
+                           if self.tracking_hold_started is not None else 0)
+                result.update(tracking_auto_recovery_pending=self.tracking_recoverable,
+                              tracking_hold_events=self.tracking_hold_events,
+                              tracking_automatic_recoveries=self.tracking_automatic_recoveries,
+                              tracking_hold_seconds=self.tracking_hold_total + elapsed)
+            return result

@@ -10,6 +10,7 @@ import math
 import shutil
 import time
 from collections import deque
+from contextlib import contextmanager
 from itertools import islice
 from pathlib import Path
 from queue import Empty, Full, Queue
@@ -112,6 +113,13 @@ class ResourceGuard:
             else:
                 self.healthy_since = None
             self._started = True
+
+    @contextmanager
+    def recovery_permit(self):
+        """Hold the cached resource state stable through a mode recovery commit."""
+        with self.lock:
+            self._fresh(self.clock())
+            yield not self.paused
 
     def monitor_failed(self):
         self.pause("monitor_error")
