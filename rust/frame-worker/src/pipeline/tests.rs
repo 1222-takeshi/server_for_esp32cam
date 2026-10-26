@@ -296,7 +296,7 @@ fn drop_diagnostics_are_bounded_metadata_and_do_not_alter_publication() {
         state
             .lock()
             .unwrap()
-            .dropped(&pending, "age_before", 435_001, 0);
+            .dropped(&pending, "age_before", 435_001, 0, 165_000);
     }
     let s = state.lock().unwrap();
     assert_eq!(s.counters.dropped, 40);
@@ -325,11 +325,118 @@ fn drop_metadata_separates_device_staging_from_arrival_uncertainty() {
     state
         .lock()
         .unwrap()
-        .dropped(&pending, "age_before", 435_001, 0);
+        .dropped(&pending, "age_before", 435_001, 0, 165_000);
     let s = state.lock().unwrap();
     let event = &s.drops()[0];
     assert_eq!(event.capture_to_send_us, 300_000);
     assert_eq!(event.arrival_age_low_us, Some(300_000));
     assert_eq!(event.arrival_age_high_us, Some(300_000));
     assert_eq!(event.wait_us, Some(35_001));
+}
+
+#[test]
+fn compute_reservation_has_fixed_floor_cap_expiry_and_bounded_history() {
+    let mut budget = ComputeReserve::default();
+    assert_eq!(budget.at(1), 165_000);
+    budget.observe(0, 1);
+    budget.observe(1, 0);
+    assert!(budget.0.is_empty());
+    budget.observe(10, 150_000);
+    assert_eq!(budget.at(10), 187_500);
+    assert_eq!(budget.at(2_000_010), 187_500);
+    assert_eq!(budget.at(2_000_011), 165_000);
+    budget.observe(3_000_000, u64::MAX);
+    assert_eq!(budget.at(3_000_000), 400_000);
+    budget.observe(2_999_999, 1); // Out-of-order observations cannot reduce a reserve.
+    assert_eq!(budget.0.len(), 1);
+    assert_eq!(budget.at(1), 400_000); // A backwards clock cannot expire the evidence.
+    assert_eq!(budget.at(5_000_001), 165_000);
+    for i in 1..=40 {
+        budget.observe(i, 1);
+    }
+    assert_eq!(budget.0.len(), 32);
+    assert_eq!(budget.0.front().unwrap().0, 9);
+    assert_eq!(budget.at(40), 165_000);
+}
+
+#[test]
+fn observed_slow_compute_skips_old_waiting_frame_and_processes_fresh_frame() {
+    let (state, _clock, time) = setup();
+    let make = |seq, received: u64, age: u64| {
+        let captured = received - age;
+        let frame = Frame {
+            boot: 1,
+            sequence: seq,
+            captured_us: captured,
+            sent_us: captured,
+            generation: Some(state.lock().unwrap().mode.generation()),
+            jpeg: vec![seq as u8],
+        };
+        let mut c = SessionClock::default();
+        c.poll(received - age, false, || Ok("0123456789abcdef".into()))
+            .unwrap();
+        c.pong(1, "0123456789abcdef", captured, received - age)
+            .unwrap();
+        let arrival = c.admit(&frame, received).unwrap();
+        Job {
+            frame,
+            arrival,
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }
+    };
+    time.store(1_000_000, Ordering::SeqCst);
+    let (begun, started) = mpsc::channel();
+    let (release, blocked) = mpsc::channel();
+    let copy = time.clone();
+    let worker = Worker::start_with_adaptive_reserve(
+        state.clone(),
+        move |jpeg| {
+            match jpeg[0] {
+                1 => {
+                    begun.send(()).unwrap();
+                    blocked.recv().unwrap();
+                    copy.store(1_274_715, Ordering::SeqCst);
+                }
+                3 => {
+                    copy.fetch_add(257_739, Ordering::SeqCst);
+                }
+                _ => panic!("old waiting image must not enter inference"),
+            }
+            Ok(vec![])
+        },
+        true,
+    )
+    .unwrap();
+    worker.submit(make(1, 1_000_000, 50_000));
+    started.recv_timeout(Duration::from_secs(2)).unwrap();
+    let pending = make(2, 1_111_566, 52_001);
+    assert!(pending.arrival.fits(&pending.frame, 1_274_715, 165_000));
+    worker.submit(pending);
+    time.store(1_111_566, Ordering::SeqCst);
+    release.send(()).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while state.lock().unwrap().counters.dropped == 0 {
+        assert!(std::time::Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(1));
+    }
+    {
+        let s = state.lock().unwrap();
+        assert_eq!(s.counters.inferred, 1);
+        assert_eq!(s.drops()[0].stage, "age_before");
+        assert_eq!(s.drops()[0].sequence, 2);
+        assert_eq!(s.drops()[0].reserve_us, 343_394);
+    }
+    time.store(1_302_337, Ordering::SeqCst);
+    worker.submit(make(3, 1_302_337, 50_000));
+    wait(&state, 2);
+    worker.stop().unwrap();
+    let s = state.lock().unwrap();
+    assert_eq!(s.counters.failures, 0);
+    assert_eq!(s.counters.published, 2);
+    assert_eq!(
+        s.samples().iter().map(|v| v.sequence).collect::<Vec<_>>(),
+        vec![1, 3]
+    );
+    assert!(s.samples()[1].published_us - s.samples()[0].published_us < 500_000);
+    assert!(s.samples().iter().all(|v| v.age_high_us <= 500_000));
 }

@@ -20,6 +20,32 @@ use std::{
 };
 
 pub type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
+
+/// Experimental conservative estimate; post-inference freshness remains authoritative.
+#[derive(Default)]
+struct ComputeReserve(std::collections::VecDeque<(u64, u64)>);
+impl ComputeReserve {
+    fn observe(&mut self, finished: u64, compute: u64) {
+        if finished == 0 || compute == 0 || self.0.back().is_some_and(|v| finished < v.0) {
+            return;
+        }
+        if self.0.len() == 32 {
+            self.0.pop_front();
+        }
+        self.0.push_back((finished, compute));
+    }
+    fn at(&mut self, now: u64) -> u64 {
+        self.0
+            .retain(|v| now.checked_sub(v.0).is_none_or(|age| age <= 2_000_000));
+        self.0
+            .iter()
+            .map(|v| v.1.saturating_add(v.1.div_ceil(4)))
+            .max()
+            .unwrap_or(165_000)
+            .clamp(165_000, 400_000)
+    }
+}
+
 pub const MAX_SAMPLES: usize = 65_536;
 pub struct Job {
     pub frame: Frame,
@@ -50,6 +76,7 @@ pub struct DropSample {
     pub capture_to_send_us: u64,
     pub wait_us: Option<u64>,
     pub compute_us: u64,
+    pub reserve_us: u64,
 }
 #[derive(Default)]
 pub struct Counters {
@@ -126,7 +153,14 @@ impl State {
     pub fn drops(&self) -> &std::collections::VecDeque<DropSample> {
         &self.drops
     }
-    fn dropped(&mut self, job: &Job, stage: &'static str, now: u64, compute_us: u64) {
+    fn dropped(
+        &mut self,
+        job: &Job,
+        stage: &'static str,
+        now: u64,
+        compute_us: u64,
+        reserve_us: u64,
+    ) {
         self.counters.dropped = self.counters.dropped.saturating_add(1);
         if self.drops.len() == 32 {
             self.drops.pop_front();
@@ -149,6 +183,7 @@ impl State {
             capture_to_send_us: job.frame.sent_us.saturating_sub(job.frame.captured_us),
             wait_us: now.checked_sub(job.arrival.received_us()),
             compute_us,
+            reserve_us,
         });
     }
     pub fn latest(&mut self) -> Result<Option<Arc<Completed>>, ModeError> {
@@ -186,7 +221,15 @@ pub struct Worker {
 impl Worker {
     pub fn start(
         state: Arc<Mutex<State>>,
+        infer: impl FnMut(&[u8]) -> Result<Vec<Detection>, &'static str> + Send + 'static,
+    ) -> io::Result<Self> {
+        Self::start_with_adaptive_reserve(state, infer, false)
+    }
+
+    pub fn start_with_adaptive_reserve(
+        state: Arc<Mutex<State>>,
         mut infer: impl FnMut(&[u8]) -> Result<Vec<Detection>, &'static str> + Send + 'static,
+        adaptive: bool,
     ) -> io::Result<Self> {
         let clock = state
             .lock()
@@ -202,10 +245,16 @@ impl Worker {
         let handle = thread::Builder::new()
             .name("frame-inference".into())
             .spawn(move || {
+                let mut budget = ComputeReserve::default();
                 while !stop.load(Ordering::Acquire) {
                     let Some(job) = waiting.take() else {
                         thread::park_timeout(Duration::from_millis(100));
                         continue;
+                    };
+                    let reserve_us = if adaptive {
+                        budget.at(clock())
+                    } else {
+                        165_000
                     };
                     {
                         let Ok(mut s) = state.lock() else {
@@ -216,13 +265,13 @@ impl Worker {
                             Some("cancelled_before")
                         } else if !s.mode.allows(&job.frame) {
                             Some("mode_before")
-                        } else if !job.arrival.fits(&job.frame, now, 165_000) {
+                        } else if !job.arrival.fits(&job.frame, now, reserve_us) {
                             Some("age_before")
                         } else {
                             None
                         };
                         if let Some(reason) = reason {
-                            s.dropped(&job, reason, now, 0);
+                            s.dropped(&job, reason, now, 0, reserve_us);
                             continue;
                         }
                     }
@@ -230,7 +279,11 @@ impl Worker {
                     let output = catch_unwind(AssertUnwindSafe(|| infer(&job.frame.jpeg)))
                         .ok()
                         .and_then(Result::ok);
-                    let compute_us = clock().saturating_sub(begun);
+                    let finished = clock();
+                    let compute_us = finished.saturating_sub(begun);
+                    if adaptive {
+                        budget.observe(finished, compute_us);
+                    }
                     let Ok(mut s) = state.lock() else {
                         break;
                     };
@@ -246,7 +299,7 @@ impl Worker {
                         } else {
                             "mode_after"
                         };
-                        s.dropped(&job, reason, clock(), compute_us);
+                        s.dropped(&job, reason, clock(), compute_us, reserve_us);
                         continue;
                     }
                     let Some(detections) = output.filter(|v| {
@@ -326,7 +379,7 @@ impl Worker {
                         } else {
                             clock()
                         };
-                        s.dropped(&job, "publication_gate", now, compute_us);
+                        s.dropped(&job, "publication_gate", now, compute_us, reserve_us);
                     }
                 }
                 stop.store(true, Ordering::Release);
