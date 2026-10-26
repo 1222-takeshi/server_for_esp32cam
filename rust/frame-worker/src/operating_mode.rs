@@ -50,6 +50,8 @@ pub struct OperatingMode {
     transitions: u64,
     eco_recoverable: bool,
     recovery_ready: bool,
+    recovery_valid_until: Option<u64>,
+    recovery_guard: Option<Box<dyn Fn() -> bool + Send + Sync>>,
     eco_confirmed: bool,
     automatic_recoveries: u64,
     auto_recover_tracking: bool,
@@ -96,6 +98,8 @@ impl OperatingMode {
             transitions: 0,
             eco_recoverable: false,
             recovery_ready: false,
+            recovery_valid_until: None,
+            recovery_guard: None,
             eco_confirmed: false,
             automatic_recoveries: 0,
             auto_recover_tracking,
@@ -123,6 +127,14 @@ impl OperatingMode {
     /// throughout the recovery commit, then reset false before unlocking State.
     pub fn set_recovery_ready(&mut self, ready: bool) {
         self.recovery_ready = ready;
+    }
+    /// Owner's conservative resource/capture deadline, checked at commit time.
+    pub fn set_recovery_valid_until(&mut self, deadline: Option<u64>) {
+        self.recovery_valid_until = deadline;
+    }
+    /// Bounded owner check at commit, e.g. a supervisor wall-clock ticket.
+    pub fn set_recovery_guard(&mut self, guard: Option<Box<dyn Fn() -> bool + Send + Sync>>) {
+        self.recovery_guard = guard;
     }
 
     fn finish_tracking_hold(&mut self) {
@@ -368,6 +380,13 @@ impl OperatingMode {
                 self.eco_recoverable = false;
                 self.automatic_recoveries = self.automatic_recoveries.saturating_add(1);
             } else if self.requested == Mode::Tracking
+                && self
+                    .recovery_guard
+                    .as_ref()
+                    .is_none_or(|check| catch_unwind(AssertUnwindSafe(check)).unwrap_or(false))
+                && self
+                    .recovery_valid_until
+                    .is_none_or(|end| self.now() <= end)
                 && self.frames.back().is_some_and(|s| {
                     self.now()
                         .checked_sub(s.at)

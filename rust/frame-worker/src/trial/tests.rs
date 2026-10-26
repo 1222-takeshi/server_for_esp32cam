@@ -5,16 +5,25 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 fn setup() -> (Trial, State, Arc<AtomicU64>) {
+    setup_policy(false, 10_000_000, false)
+}
+fn setup_policy(continuous: bool, duration: u64, inject: bool) -> (Trial, State, Arc<AtomicU64>) {
     let time = Arc::new(AtomicU64::new(1));
     let copy = time.clone();
     let clock: Clock = Arc::new(move || copy.load(Ordering::SeqCst));
-    let mut state = State::new(10, clock).unwrap();
+    let mut state = State::new_with_tracking_recovery(10, clock, continuous).unwrap();
     state.mode.hello(1, 0).unwrap();
     state
         .mode
         .acknowledge(1, state.mode.generation(), Mode::Eco, 1)
         .unwrap();
-    (Trial::new(1, 10_000_000).unwrap(), state, time)
+    let trial = if continuous {
+        Trial::new_continuous(1, duration, inject)
+    } else {
+        Trial::new(1, duration)
+    }
+    .unwrap();
+    (trial, state, time)
 }
 fn publish(state: &mut State, seq: u64) {
     let frame = Frame {
@@ -274,4 +283,157 @@ fn hour_evidence_keeps_every_window_and_freshness_gate() {
     samples[10_000].age_high_us = 500_000;
     samples.drain(10_000..10_003);
     assert_eq!(trial.evaluate(&samples), Err("tracking_below_target"));
+}
+
+#[test]
+fn continuous_run_exercises_new_ack_recovery_and_retains_strict_metrics() {
+    let (mut trial, mut state, time) = setup_policy(true, 60_000_000, true);
+    for i in 1..=3 {
+        time.store(i * 5_000_000, Ordering::SeqCst);
+        publish(&mut state, i);
+        let now = state.now();
+        trial.poll(&mut state, now, true).unwrap();
+    }
+    state
+        .mode
+        .acknowledge(1, state.mode.generation(), Mode::Tracking, 1)
+        .unwrap();
+    for seq in 4..600 {
+        time.fetch_add(190_000, Ordering::SeqCst);
+        publish(&mut state, seq);
+        state.mode.set_recovery_ready(true);
+        let now = state.now();
+        trial.poll(&mut state, now, true).unwrap();
+        state.mode.set_recovery_ready(false);
+        if state.mode.requested() == Mode::Eco {
+            break;
+        }
+        if state.mode.command().unwrap().is_some() {
+            state
+                .mode
+                .acknowledge(1, state.mode.generation(), Mode::Tracking, 1)
+                .unwrap();
+        }
+    }
+    assert_eq!(state.mode.requested(), Mode::Eco);
+    state
+        .mode
+        .acknowledge(1, state.mode.generation(), Mode::Eco, 1)
+        .unwrap();
+    let base = state.now();
+    for i in 1..=3 {
+        let now = base + i * 5_000_000;
+        time.store(now, Ordering::SeqCst);
+        publish(&mut state, 1000 + i);
+        assert_eq!(trial.poll(&mut state, now, true).unwrap(), i != 3);
+    }
+    let report = trial.evaluate(state.samples()).unwrap();
+    assert_eq!(report["policy"], "continuous-recovery-v1");
+    assert_eq!(report["injected_hold"], true);
+    assert_eq!(report["tracking_hold_events"], 1);
+    assert_eq!(report["tracking_automatic_recoveries"], 1);
+    assert_eq!(report["strict_single_generation_gate_passed"], false);
+    assert_eq!(report["strict_rate_gate_passed"], true);
+    assert_eq!(report["generation_epochs"].as_array().unwrap().len(), 2);
+    assert!(report["tracking_hold_seconds"].as_f64().unwrap() >= 10.);
+    let mut stale = state.samples().to_vec();
+    stale.iter_mut().for_each(|s| s.age_high_us = 500_001);
+    assert_eq!(trial.evaluate(&stale), Err("invalid_samples"));
+    assert_eq!(trial.evaluate(&[]), Err("invalid_samples"));
+    assert!(
+        trial
+            .evaluate(
+                &state
+                    .samples()
+                    .iter()
+                    .step_by(2)
+                    .copied()
+                    .collect::<Vec<_>>()
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn continuous_policy_has_bounded_hold_and_terminal_faults_never_retry() {
+    assert!(Trial::new_continuous(1, 10_000_000, true).is_err());
+    for reason in ["frames_expired", "disk_low", "manual"] {
+        let (mut trial, mut state, time) = setup_policy(true, 10_000_000, false);
+        state
+            .mode
+            .request(Mode::Tracking, state.mode.generation(), true)
+            .unwrap();
+        trial.phase = Phase::Warmup;
+        trial.generation = Some(state.mode.generation());
+        trial.epochs.push((1, state.mode.generation()));
+        state.mode.protect(reason).unwrap();
+        if reason == "frames_expired" {
+            assert!(trial.poll(&mut state, 1, true).unwrap());
+            time.store(30_000_002, Ordering::SeqCst);
+            assert_eq!(
+                trial.poll(&mut state, 30_000_002, true),
+                Err("mode_degraded")
+            ); // ACK timeout wins.
+        } else {
+            let generation = state.mode.generation();
+            assert_eq!(trial.poll(&mut state, 1, true), Err("mode_degraded"));
+            assert_eq!(state.mode.generation(), generation);
+            assert_eq!(state.mode.requested(), Mode::Eco);
+        }
+    }
+}
+
+#[test]
+fn repeated_low_cadence_cannot_extend_a_continuous_hold_forever() {
+    let (mut trial, mut state, time) = setup_policy(true, 10_000_000, false);
+    state
+        .mode
+        .request(Mode::Tracking, state.mode.generation(), true)
+        .unwrap();
+    trial.phase = Phase::Warmup;
+    trial.generation = Some(state.mode.generation());
+    trial.epochs.push((1, state.mode.generation()));
+    state.mode.protect("frames_expired").unwrap();
+    state
+        .mode
+        .acknowledge(1, state.mode.generation(), Mode::Tracking, 1)
+        .unwrap();
+    assert!(trial.poll(&mut state, 1, true).unwrap());
+    for seq in 1..=100 {
+        time.fetch_add(300_000, Ordering::SeqCst);
+        publish(&mut state, seq);
+        let now = state.now();
+        assert!(trial.poll(&mut state, now, true).unwrap());
+    }
+    time.fetch_add(1, Ordering::SeqCst);
+    let now = state.now();
+    assert_eq!(
+        trial.poll(&mut state, now, true),
+        Err("tracking_recovery_timeout")
+    );
+}
+
+#[test]
+fn recovery_epoch_limit_accepts_128_and_rejects_the_129th_or_skipped_generation() {
+    let mut trial = Trial::new_continuous(1, 60_000_000, false).unwrap();
+    trial.generation = Some(10);
+    trial.epochs.push((1, 10));
+    assert_eq!(
+        trial.recovery_epoch(2, 12, Some(1)),
+        Err("invalid_recovery_epoch")
+    );
+    assert_eq!(
+        trial.recovery_epoch(2, 11, Some(2)),
+        Err("invalid_recovery_epoch")
+    );
+    for count in 1..=128 {
+        trial
+            .recovery_epoch(count + 1, count + 10, Some(count))
+            .unwrap();
+    }
+    assert_eq!(trial.epochs.len(), 129);
+    assert_eq!(
+        trial.recovery_epoch(130, 139, Some(129)),
+        Err("invalid_recovery_epoch")
+    );
 }

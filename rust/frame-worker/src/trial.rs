@@ -43,6 +43,11 @@ pub struct Trial {
     pub initial: Value,
     pub tracking: Value,
     pub final_eco: Value,
+    continuous: bool,
+    epochs: Vec<(u64, u64)>,
+    holding_since: Option<u64>,
+    inject_hold: bool,
+    injected: bool,
 }
 impl Trial {
     pub fn new(boot: u64, duration_us: u64) -> Result<Self> {
@@ -63,7 +68,32 @@ impl Trial {
             initial: Value::Null,
             tracking: Value::Null,
             final_eco: Value::Null,
+            continuous: false,
+            epochs: Vec::new(),
+            holding_since: None,
+            inject_hold: false,
+            injected: false,
         })
+    }
+    pub fn new_continuous(boot: u64, duration_us: u64, inject_hold: bool) -> Result<Self> {
+        let mut trial = Self::new(boot, duration_us)?;
+        if inject_hold && duration_us < 60_000_000 {
+            return Err("invalid_injection_duration");
+        }
+        trial.continuous = true;
+        trial.inject_hold = inject_hold;
+        Ok(trial)
+    }
+    fn recovery_epoch(&mut self, now: u64, generation: u64, holds: Option<u64>) -> Result<()> {
+        if self.generation.and_then(|g| g.checked_add(1)) != Some(generation)
+            || self.epochs.len() >= 129
+            || holds != Some(self.epochs.len() as u64)
+        {
+            return Err("invalid_recovery_epoch");
+        }
+        self.generation = Some(generation);
+        self.epochs.push((now, generation));
+        Ok(())
     }
     /// Called with the State mode lock held; readiness is a cached supervisor signal.
     pub fn poll(&mut self, state: &mut State, now: u64, ready: bool) -> Result<bool> {
@@ -79,11 +109,32 @@ impl Trial {
         }
         let changed = *self.changed.get_or_insert(now);
         let status = state.mode.status().map_err(|_| "mode_failed")?;
+        if self.continuous && !status["tracking_hold_events"].is_u64() {
+            return Err("recovery_policy_unavailable");
+        }
         if status["boot_id"].as_u64().is_some_and(|b| b != self.boot) {
             return Err("camera_rebooted");
         }
         let connected = status["connected"] == true;
-        if (self.phase != Phase::InitialEco || connected) && !status["reason"].is_null() {
+        let recovering = self.continuous
+            && status["tracking_auto_recovery_pending"] == true
+            && state.mode.requested() == Mode::Tracking
+            && matches!(
+                status["reason"].as_str(),
+                Some("frames_expired" | "cadence_low")
+            );
+        if recovering {
+            let began = *self.holding_since.get_or_insert(now);
+            if now.checked_sub(began).is_none_or(|age| age > 30_000_000) {
+                return Err("tracking_recovery_timeout");
+            }
+        } else {
+            self.holding_since = None;
+        }
+        if (self.phase != Phase::InitialEco || connected)
+            && !status["reason"].is_null()
+            && !recovering
+        {
             return Err("mode_degraded");
         }
         let active = status["state"] == "active" && status["acknowledged"] == true;
@@ -96,6 +147,7 @@ impl Trial {
                         .request(Mode::Tracking, state.mode.generation(), true)
                         .map_err(|_| "tracking_unavailable")?;
                     self.generation = Some(state.mode.generation());
+                    self.epochs.push((now, state.mode.generation()));
                     self.phase = Phase::Warmup;
                     self.changed = Some(now);
                 } else if now.checked_sub(changed).is_none_or(|t| t > 40_000_000) {
@@ -103,6 +155,13 @@ impl Trial {
                 }
             }
             Phase::Warmup | Phase::Tracking => {
+                if Some(state.mode.generation()) != self.generation && recovering {
+                    self.recovery_epoch(
+                        now,
+                        state.mode.generation(),
+                        status["tracking_hold_events"].as_u64(),
+                    )?;
+                }
                 if !connected
                     || state.mode.requested() != Mode::Tracking
                     || Some(state.mode.generation()) != self.generation
@@ -113,7 +172,8 @@ impl Trial {
                     if active {
                         self.phase = Phase::Tracking;
                         self.changed = Some(now);
-                    } else if now.checked_sub(changed).is_none_or(|t| t > 20_000_000) {
+                    } else if !recovering && now.checked_sub(changed).is_none_or(|t| t > 20_000_000)
+                    {
                         return Err("tracking_timeout");
                     }
                 } else {
@@ -132,12 +192,28 @@ impl Trial {
                             return Ok(true);
                         }
                     }
+                    if self.continuous
+                        && self.inject_hold
+                        && !self.injected
+                        && active
+                        && now - self.start.unwrap() >= 30_000_000
+                    {
+                        self.injected = true;
+                        state
+                            .mode
+                            .protect("frames_expired")
+                            .map_err(|_| "mode_failed")?;
+                        return Ok(true);
+                    }
                     if now
                         .checked_sub(self.start.unwrap())
                         .ok_or("invalid_clock")?
                         >= self.duration
                     {
                         if !active {
+                            if recovering {
+                                return Ok(true);
+                            }
                             return Err("tracking_inactive");
                         }
                         self.end = Some(
@@ -191,8 +267,17 @@ impl Trial {
         let mut compute = Vec::new();
         let (mut previous, mut sequence, mut gap) = (start, 0, 0);
         for s in &records {
+            let expected = if self.continuous {
+                self.epochs
+                    .iter()
+                    .rev()
+                    .find(|(at, _)| *at <= s.published_us)
+                    .map(|(_, g)| *g)
+            } else {
+                Some(generation)
+            };
             if s.boot != self.boot
-                || s.generation != generation
+                || Some(s.generation) != expected
                 || s.sequence <= sequence
                 || s.published_us < previous
                 || !(0..=500_000).contains(&s.age_high_us)
@@ -207,17 +292,46 @@ impl Trial {
             compute.push(s.compute_us);
         }
         gap = gap.max(end - previous);
-        if gap > 500_000 || counts.iter().any(|n| *n < 50) {
+        let strict_rate = gap <= 500_000 && counts.iter().all(|n| *n >= 50);
+        if (!self.continuous && !strict_rate)
+            || (self.continuous
+                && (records.len() as u64 * 1_000_000 < self.duration * 5
+                    || self.tracking["tracking_hold_events"]
+                        != self.tracking["tracking_automatic_recoveries"]
+                    || (self.inject_hold && !self.injected)))
+        {
             return Err("tracking_below_target");
         }
         ages.sort_unstable();
         compute.sort_unstable();
         let p95 = (records.len() * 95).div_ceil(100) - 1;
-        Ok(
-            json!({"duration_us":self.duration,"results":records.len(),"recognition_hz":records.len() as f64*1_000_000./self.duration as f64,
+        let mut report = json!({"duration_us":self.duration,"results":records.len(),"recognition_hz":records.len() as f64*1_000_000./self.duration as f64,
             "window_results":counts,"max_gap_us":gap,"age_p95_us":ages[p95],"age_max_us":ages.last(),"compute_p95_us":compute[p95],
-            "boot_id":self.boot,"generation":generation,"start_us":start,"end_us":end}),
-        )
+            "boot_id":self.boot,"generation":generation,"start_us":start,"end_us":end});
+        if self.continuous {
+            let fields = report.as_object_mut().unwrap();
+            fields.insert("policy".into(), json!("continuous-recovery-v1"));
+            fields.insert("strict_rate_gate_passed".into(), json!(strict_rate));
+            fields.insert(
+                "strict_single_generation_gate_passed".into(),
+                json!(self.epochs.len() == 1),
+            );
+            fields.insert("generation_epochs".into(), json!(self.epochs));
+            fields.insert("injected_hold".into(), json!(self.injected));
+            fields.insert(
+                "tracking_hold_seconds".into(),
+                self.tracking["tracking_hold_seconds"].clone(),
+            );
+            fields.insert(
+                "tracking_hold_events".into(),
+                self.tracking["tracking_hold_events"].clone(),
+            );
+            fields.insert(
+                "tracking_automatic_recoveries".into(),
+                self.tracking["tracking_automatic_recoveries"].clone(),
+            );
+        }
+        Ok(report)
     }
 }
 

@@ -129,6 +129,48 @@ fn adaptive_reserve(value: std::result::Result<String, std::env::VarError>) -> R
     }
 }
 
+fn continuous_poll(
+    s: &mut State,
+    trial: &mut Trial,
+    beats: &Mutex<Beat>,
+    cached: &mut Beat,
+    mono: impl Fn() -> u64,
+    wall: impl Fn() -> u64 + Clone + Send + Sync + 'static,
+) -> std::result::Result<bool, &'static str> {
+    s.mode.set_recovery_ready(false);
+    s.mode.set_recovery_valid_until(None);
+    s.mode.set_recovery_guard(None);
+    let permit = beats.try_lock().ok(); // Never block the receiver on stdin owner.
+    if let Some(current) = permit.as_ref() {
+        *cached = **current;
+    }
+    let (now, unix) = (mono(), wall());
+    let ready = cached.ready(now, unix);
+    if ready {
+        let capture_end = s.tracking_capture_deadline().map_err(|_| "mode_failed")?;
+        if permit.is_some() {
+            let (ticket, wall_check) = (*cached, wall.clone());
+            s.mode.set_recovery_guard(Some(Box::new(move || {
+                let current = wall_check();
+                current > 0 && current.abs_diff(ticket.wall) <= 1500
+            })));
+            let resource_end = cached
+                .mono
+                .saturating_add(2_000_000)
+                .min(now.saturating_add((1500 - unix.abs_diff(cached.wall)) * 1000));
+            s.mode
+                .set_recovery_valid_until(capture_end.map(|end| end.min(resource_end)));
+            s.mode.set_recovery_ready(capture_end.is_some());
+        }
+    }
+    let result = trial.poll(s, now, ready);
+    s.mode.set_recovery_ready(false); // Worker cannot recover using a cached ticket.
+    s.mode.set_recovery_valid_until(None);
+    s.mode.set_recovery_guard(None);
+    drop(permit); // Guard spans the recovery commit under the outer State mutex.
+    result
+}
+
 fn execute() -> Result<bool> {
     let args: Vec<_> = std::env::args_os().collect();
     if args.len() != 5 {
@@ -150,6 +192,11 @@ fn execute() -> Result<bool> {
     let duration_us = trial::duration_us(duration.as_deref()).map_err(|_| "invalid duration")?;
     let budget_seconds = duration_us / 1_000_000 + 120;
     let adaptive = adaptive_reserve(std::env::var("ESP32CAM_RUST_TRIAL_ADAPTIVE_RESERVE"))?;
+    let continuous = adaptive_reserve(std::env::var("ESP32CAM_RUST_TRIAL_AUTO_RECOVERY"))?;
+    let inject_hold = adaptive_reserve(std::env::var("ESP32CAM_RUST_TRIAL_INJECT_HOLD"))?;
+    if inject_hold && !continuous {
+        return Err("hold injection requires continuous policy".into());
+    }
     let selected = key(
         camera,
         &std::env::var("ESP32CAM_DEVICE_API_KEY").unwrap_or_default(),
@@ -181,8 +228,12 @@ fn execute() -> Result<bool> {
         thread::sleep(Duration::from_millis(10));
     }
     let state = Arc::new(Mutex::new(
-        State::new(transport::initial_generation()?, clock.clone())
-            .map_err(|_| "invalid initial mode")?,
+        State::new_with_tracking_recovery(
+            transport::initial_generation()?,
+            clock.clone(),
+            continuous,
+        )
+        .map_err(|_| "invalid initial mode")?,
     ));
     let worker = Worker::start_with_adaptive_reserve(
         state.clone(),
@@ -224,7 +275,12 @@ fn execute() -> Result<bool> {
             Err(e) => return Err(e.into()),
         }
     };
-    let mut trial = Trial::new(boot, duration_us).map_err(|_| "invalid trial")?;
+    let mut trial = if continuous {
+        Trial::new_continuous(boot, duration_us, inject_hold)
+    } else {
+        Trial::new(boot, duration_us)
+    }
+    .map_err(|_| "invalid trial")?;
     let receiver = Receiver::new(
         &worker,
         Limits {
@@ -236,6 +292,9 @@ fn execute() -> Result<bool> {
     )
     .map_err(|_| "invalid limits")?;
     let outcome = receiver.run(&mut socket, |s, now| {
+        if continuous {
+            return continuous_poll(s, &mut trial, &beats, &mut cached, || clock(), wall_ms);
+        }
         let ready = refresh_ready(&beats, &mut cached, || clock(), wall_ms);
         trial.poll(s, now, ready)
     });
@@ -284,7 +343,9 @@ fn execute() -> Result<bool> {
         })
         .collect();
     let report = json!({"schema":1,"live_validation_only":true,"physical_motor_control":false,"global_acceptance":false,
-        "adaptive_inference_reserve":adaptive,"finite_live_gate_passed":passed,"tracking_ping_interval_us":50_000,"reason":outcome.reason,"measurement":measurement.ok(),"measurement_error":measurement_error,"model_sha256":detector::MODEL_SHA,
+        "adaptive_inference_reserve":adaptive,"finite_live_gate_passed":passed && !continuous,
+        "continuous_tracking_policy":continuous,"continuous_tracking_gate_passed":passed && continuous,
+        "hold_injection_requested":inject_hold,"tracking_ping_interval_us":50_000,"reason":outcome.reason,"measurement":measurement.ok(),"measurement_error":measurement_error,"model_sha256":detector::MODEL_SHA,
         "runtime_sha256":detector::RUNTIME_SHA,"runtime_build":ort::info(),"input_size":320,"threshold":0.5,"threads":3,
         "initial_eco":trial.initial,"tracking":trial.tracking,"final_eco":trial.final_eco,"session_final":outcome.final_status,
         "receiver":{"messages":outcome.stats.messages,"frames":outcome.stats.frames,"admitted":outcome.stats.admitted,"dropped":outcome.stats.dropped,
@@ -319,6 +380,148 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    fn held_latest(time: &Arc<AtomicU64>, clock: Clock) -> Arc<Mutex<State>> {
+        use esp32cam_frame_worker::{
+            Frame,
+            control::SessionClock,
+            pipeline::{Job, Submit},
+        };
+        let mut s = State::new_with_tracking_recovery(10, clock, true).unwrap();
+        s.mode.hello(1, 0).unwrap();
+        s.mode
+            .request(
+                esp32cam_frame_worker::operating_mode::Mode::Tracking,
+                s.mode.generation(),
+                true,
+            )
+            .unwrap();
+        s.mode.protect("frames_expired").unwrap();
+        s.mode
+            .acknowledge(
+                1,
+                s.mode.generation(),
+                esp32cam_frame_worker::operating_mode::Mode::Tracking,
+                1,
+            )
+            .unwrap();
+        let mut frame = Frame {
+            boot: 1,
+            sequence: 0,
+            captured_us: 100,
+            sent_us: 100,
+            generation: Some(s.mode.generation()),
+            jpeg: vec![0],
+        };
+        for seq in 1..=53 {
+            time.fetch_add(190_000, Ordering::SeqCst);
+            frame.sequence = seq;
+            frame.captured_us = seq + 100;
+            assert!(s.mode.publish_result(&frame, || true).unwrap());
+        }
+        let now = time.fetch_add(190_000, Ordering::SeqCst) + 190_000;
+        frame.sequence = 54;
+        frame.captured_us = now;
+        frame.sent_us = now;
+        let mut sync = SessionClock::default();
+        sync.poll(now, true, || Ok("0123456789abcdef".into()))
+            .unwrap();
+        sync.pong(1, "0123456789abcdef", now, now).unwrap();
+        let arrival = sync.admit(&frame, now).unwrap();
+        let state = Arc::new(Mutex::new(s));
+        let worker = Worker::start(state.clone(), |_| Ok(vec![])).unwrap();
+        assert_eq!(
+            worker.submit(Job {
+                frame,
+                arrival,
+                cancelled: Arc::new(AtomicBool::new(false))
+            }),
+            Submit::Queued
+        );
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while state.lock().unwrap().counters.published == 0 {
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(1));
+        }
+        worker.stop().unwrap();
+        state
+    }
+
+    #[test]
+    fn continuous_permit_contention_never_uses_cached_ready_to_recover() {
+        let time = Arc::new(AtomicU64::new(1));
+        let copy = time.clone();
+        let state = held_latest(&time, Arc::new(move || copy.load(Ordering::SeqCst)));
+        let now = time.load(Ordering::SeqCst);
+        let shared = Mutex::new(Beat {
+            alive: false,
+            mono: now,
+            wall: 10000,
+        });
+        let mut cached = Beat {
+            alive: true,
+            mono: now,
+            wall: 10000,
+        };
+        let mut trial = Trial::new_continuous(1, 60_000_000, false).unwrap();
+        let occupied = shared.lock().unwrap();
+        let mut s = state.lock().unwrap();
+        s.mode.set_recovery_ready(true); // Prior caller must not leak permission.
+        assert!(
+            continuous_poll(&mut s, &mut trial, &shared, &mut cached, || now, || 10000).unwrap()
+        );
+        assert_eq!(s.mode.status().unwrap()["tracking_automatic_recoveries"], 0);
+        drop(occupied);
+        assert_eq!(
+            continuous_poll(&mut s, &mut trial, &shared, &mut cached, || now, || 10000),
+            Err("resources_unavailable")
+        );
+        assert_eq!(s.mode.status().unwrap()["requested_mode"], "eco");
+    }
+
+    #[test]
+    fn wall_clock_step_during_poll_cannot_commit_tracking_recovery() {
+        let time = Arc::new(AtomicU64::new(1));
+        let wall = Arc::new(AtomicU64::new(10000));
+        let armed = Arc::new(AtomicBool::new(false));
+        let (t, w, a) = (time.clone(), wall.clone(), armed.clone());
+        let state = held_latest(
+            &time,
+            Arc::new(move || {
+                if a.swap(false, Ordering::SeqCst) {
+                    w.store(12001, Ordering::SeqCst);
+                }
+                t.load(Ordering::SeqCst)
+            }),
+        );
+        let now = time.load(Ordering::SeqCst);
+        let shared = Mutex::new(Beat {
+            alive: true,
+            mono: now,
+            wall: 10000,
+        });
+        let mut cached = Beat::default();
+        let mut trial = Trial::new_continuous(1, 60_000_000, false).unwrap();
+        armed.store(true, Ordering::SeqCst);
+        let mut s = state.lock().unwrap();
+        assert!(
+            continuous_poll(
+                &mut s,
+                &mut trial,
+                &shared,
+                &mut cached,
+                || now,
+                move || wall.load(Ordering::SeqCst)
+            )
+            .unwrap()
+        );
+        assert_eq!(s.mode.status().unwrap()["tracking_automatic_recoveries"], 0);
+        assert_eq!(
+            s.mode.status().unwrap()["tracking_auto_recovery_pending"],
+            true
+        );
+    }
     #[test]
     fn adaptive_policy_is_explicit_and_invalid_values_fail() {
         assert!(!adaptive_reserve(Err(std::env::VarError::NotPresent)).unwrap());

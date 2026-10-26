@@ -324,6 +324,9 @@ fn recovery_requires_owner_permit_and_never_reuses_an_old_ack() {
     }
     assert_eq!(mode.status().unwrap()["tracking_automatic_recoveries"], 0);
     mode.set_recovery_ready(true); // Test owner holds its synthetic resource permit.
+    mode.set_recovery_valid_until(Some(time.load(Ordering::SeqCst) - 1));
+    assert_eq!(mode.status().unwrap()["tracking_automatic_recoveries"], 0);
+    mode.set_recovery_valid_until(Some(time.load(Ordering::SeqCst)));
     let status = mode.status().unwrap();
     mode.set_recovery_ready(false);
     assert_eq!(status["actuation_state"], "observe_only");

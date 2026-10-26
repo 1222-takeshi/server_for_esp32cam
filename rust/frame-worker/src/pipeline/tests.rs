@@ -39,6 +39,41 @@ fn wait(state: &Arc<Mutex<State>>, inferred: u64) {
         thread::sleep(Duration::from_millis(1));
     }
 }
+
+#[test]
+fn capture_deadline_holds_before_the_publication_gap_expires() {
+    let (state, clock, time) = setup();
+    {
+        let mut s = state.lock().unwrap();
+        s.mode = OperatingMode::new_with_tracking_recovery(10, move || clock(), true).unwrap();
+        s.mode.hello(1, 0).unwrap();
+        let generation = s.mode.generation();
+        s.mode.request(Mode::Tracking, generation, true).unwrap();
+        let generation = s.mode.generation();
+        s.mode
+            .acknowledge(1, generation, Mode::Tracking, 1)
+            .unwrap();
+    }
+    let job = job(&state, 1);
+    let mut s = state.lock().unwrap();
+    time.store(200_000, Ordering::SeqCst);
+    assert!(s.mode.publish_result(&job.frame, || true).unwrap());
+    s.latest = Some(Arc::new(Completed {
+        frame: job.frame,
+        arrival: job.arrival,
+        detections: vec![],
+        published_us: 200_000,
+        compute_us: 100_000,
+    }));
+    time.store(599_999, Ordering::SeqCst);
+    assert_eq!(s.tracking_capture_deadline().unwrap(), Some(600_000));
+    time.store(600_001, Ordering::SeqCst);
+    assert_eq!(s.mode.status().unwrap()["tracking_hold_events"], 0);
+    assert_eq!(s.tracking_capture_deadline().unwrap(), None);
+    assert_eq!(s.mode.status().unwrap()["tracking_hold_events"], 1);
+    assert_eq!(s.mode.status().unwrap()["actuation_state"], "hold");
+    assert!(s.latest().unwrap().is_none());
+}
 #[test]
 fn running_one_and_latest_waiting_one_without_io_blocking() {
     let (state, _clock, _) = setup();
