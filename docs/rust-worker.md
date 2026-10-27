@@ -24,6 +24,13 @@ ticket期限を合成したdeadlineを復帰commitでも再確認し、workerに
 必要とし、復帰完了と復帰後の結果も測定区間内に要求します。
 `tracking_hold_statistics_scope=full_tracking_phase`はwarmup/終了待ちを含む集計であることを明示します。
 `strict_single_generation_gate_passed`は測定区間の実sample世代から計算します。
+continuous試験では、pendingの時計交換が処理時に1秒を超えた場合もholdのまま新しい交換を開始します。
+期限切れの時計証拠を全破棄し、旧証拠で受付済みの待機/実行中jobと最新結果をfenceします。
+同じbootの既知の期限切れnonceだけを1回捨て、未知nonce・再送replay・boot変更は従来どおり終了します。
+期限切れnonceは8個、再取得はsession最大128回に制限し、session/hold/ACK期限も維持します。
+当該世代のACKと再取得した時計で検証した結果の10秒5Hzから復帰し、RTT1秒・証拠有効10秒・200ppm・500ms鮮度は同一です。
+既定strict sessionは時計期限切れで終了します。reportの`clock_timeout_recovery_enabled`と
+receiverの`clock_restarts`・`retired_pongs`・直近8件の`[sent_us, fenced_us]`で動作を確認できます。
 
 `frame-worker`はIssue #553のオフライン互換・性能検証用です。ECF2をstdinから有限回再生し、認識結果と計測値を
 JSON Linesでstdoutへ返します。実行中は1画像・待ちqueueなし、最大120画像・出力1行64KiBです。

@@ -296,6 +296,11 @@ fn execute() -> Result<bool> {
         },
     )
     .map_err(|_| "invalid limits")?;
+    let receiver = if continuous {
+        receiver.with_clock_recovery()
+    } else {
+        receiver
+    };
     let outcome = receiver.run(&mut socket, |s, now| {
         if continuous {
             return continuous_poll(s, &mut trial, &beats, &mut cached, || clock(), wall_ms);
@@ -347,17 +352,20 @@ fn execute() -> Result<bool> {
             })
         })
         .collect();
-    let report = json!({"schema":1,"live_validation_only":true,"physical_motor_control":false,"global_acceptance":false,
-        "adaptive_inference_reserve":adaptive,"finite_live_gate_passed":passed && !continuous,
-        "continuous_tracking_policy":continuous,"continuous_tracking_gate_passed":passed && continuous,
-        "hold_injection_requested":inject_hold,"tracking_ping_interval_us":50_000,"reason":outcome.reason,"measurement":measurement.ok(),"measurement_error":measurement_error,"model_sha256":detector::MODEL_SHA,
-        "runtime_sha256":detector::RUNTIME_SHA,"runtime_build":ort::info(),"input_size":320,"threshold":0.5,"threads":3,
-        "initial_eco":trial.initial,"tracking":trial.tracking,"final_eco":trial.final_eco,"session_final":outcome.final_status,
-        "receiver":{"messages":outcome.stats.messages,"frames":outcome.stats.frames,"admitted":outcome.stats.admitted,"dropped":outcome.stats.dropped,
+    let receiver_report = json!({"messages":outcome.stats.messages,"frames":outcome.stats.frames,"admitted":outcome.stats.admitted,"dropped":outcome.stats.dropped,
+            "clock_restarts":outcome.stats.clock_restarts,"retired_pongs":outcome.stats.retired_pongs,"recent_clock_restarts":outcome.stats.recent_clock_restarts,
             "overwritten":outcome.stats.overwritten,"queue_busy":outcome.stats.queue_busy,"rejected_ack":outcome.stats.rejected_ack,
             "first_device":outcome.stats.first_device,"last_device":outcome.stats.last_device,
             "max_receive_call_us":outcome.stats.max_receive_call_us,"max_control_send_us":outcome.stats.max_control_send_us,
-            "max_admission_guard_us":outcome.stats.max_admission_guard_us,"recent_receipts":receipts,"recent_rejections":rejections},
+            "max_admission_guard_us":outcome.stats.max_admission_guard_us,"recent_receipts":receipts,"recent_rejections":rejections});
+    let report = json!({"schema":1,"live_validation_only":true,"physical_motor_control":false,"global_acceptance":false,
+        "adaptive_inference_reserve":adaptive,"finite_live_gate_passed":passed && !continuous,
+        "continuous_tracking_policy":continuous,"continuous_tracking_gate_passed":passed && continuous,
+        "clock_timeout_recovery_enabled":continuous,
+        "hold_injection_requested":inject_hold,"tracking_ping_interval_us":50_000,"reason":outcome.reason,"measurement":measurement.ok(),"measurement_error":measurement_error,"model_sha256":detector::MODEL_SHA,
+        "runtime_sha256":detector::RUNTIME_SHA,"runtime_build":ort::info(),"input_size":320,"threshold":0.5,"threads":3,
+        "initial_eco":trial.initial,"tracking":trial.tracking,"final_eco":trial.final_eco,"session_final":outcome.final_status,
+        "receiver":receiver_report,
         "worker":{"inferred":s.counters.inferred,"published":s.counters.published,"dropped":s.counters.dropped,
             "failures":s.counters.failures,"evidence_lost":s.counters.evidence_lost},"process_before_worker_shutdown":usage,"samples":samples,"recent_worker_drops":drops,"transport_io":io_trace});
     let raw = serde_json::to_vec(&report)?;

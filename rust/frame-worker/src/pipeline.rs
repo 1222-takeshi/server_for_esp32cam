@@ -97,6 +97,7 @@ pub struct Sample {
 }
 pub struct State {
     clock: Clock,
+    clock_fence_us: u64,
     #[cfg(feature = "transport")]
     session: Option<Arc<AtomicBool>>,
     pub mode: OperatingMode,
@@ -118,6 +119,7 @@ impl State {
         let mode = OperatingMode::new_with_tracking_recovery(generation, move || copy(), auto)?;
         Ok(Self {
             clock,
+            clock_fence_us: 0,
             #[cfg(feature = "transport")]
             session: None,
             mode,
@@ -129,6 +131,17 @@ impl State {
     }
     pub fn now(&self) -> u64 {
         (self.clock)()
+    }
+    /// Caller owns State. Invalidate waiting/in-flight jobs even if already held.
+    pub fn invalidate_clock(&mut self) -> Result<u64, ModeError> {
+        let now = self.now();
+        if now == 0 || now < self.clock_fence_us {
+            return Err(ModeError(503));
+        }
+        self.clock_fence_us = now;
+        self.latest = None;
+        self.mode.protect("frames_expired")?;
+        Ok(now)
     }
     #[cfg(feature = "transport")]
     pub(crate) fn claim_session(&mut self) -> Result<Arc<AtomicBool>, &'static str> {
@@ -199,7 +212,11 @@ impl State {
         Ok(self
             .latest
             .as_ref()
-            .filter(|r| self.mode.allows(&r.frame) && r.arrival.fits(&r.frame, now, 0))
+            .filter(|r| {
+                r.arrival.received_us() > self.clock_fence_us
+                    && self.mode.allows(&r.frame)
+                    && r.arrival.fits(&r.frame, now, 0)
+            })
             .cloned())
     }
     /// Opt-in live owner calls this before granting recovery, with readiness false.
@@ -210,7 +227,9 @@ impl State {
             return Ok(None);
         }
         let now = self.now();
-        let Some(result) = self.latest.as_ref().filter(|r| self.mode.allows(&r.frame)) else {
+        let Some(result) = self.latest.as_ref().filter(|r| {
+            r.arrival.received_us() > self.clock_fence_us && self.mode.allows(&r.frame)
+        }) else {
             return Ok(None);
         };
         if !result.arrival.fits(&result.frame, now, 0) {
@@ -288,6 +307,8 @@ impl Worker {
                         let now = clock();
                         let reason = if job.cancelled.load(Ordering::Acquire) {
                             Some("cancelled_before")
+                        } else if job.arrival.received_us() <= s.clock_fence_us {
+                            Some("clock_before")
                         } else if !s.mode.allows(&job.frame) {
                             Some("mode_before")
                         } else if !job.arrival.fits(&job.frame, now, reserve_us) {
@@ -315,12 +336,15 @@ impl Worker {
                     s.counters.inferred = s.counters.inferred.saturating_add(1);
                     if stop.load(Ordering::Acquire)
                         || job.cancelled.load(Ordering::Acquire)
+                        || job.arrival.received_us() <= s.clock_fence_us
                         || !s.mode.allows(&job.frame)
                     {
                         let reason = if stop.load(Ordering::Acquire)
                             || job.cancelled.load(Ordering::Acquire)
                         {
                             "cancelled_after"
+                        } else if job.arrival.received_us() <= s.clock_fence_us {
+                            "clock_after"
                         } else {
                             "mode_after"
                         };

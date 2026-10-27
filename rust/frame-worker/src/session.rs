@@ -51,6 +51,9 @@ pub struct Rejection {
 }
 #[derive(Default)]
 pub struct Stats {
+    pub clock_restarts: u64,
+    pub retired_pongs: u64,
+    pub recent_clock_restarts: VecDeque<[u64; 2]>,
     pub messages: u64,
     pub frames: u64,
     pub admitted: u64,
@@ -140,6 +143,7 @@ pub struct Receiver<'a> {
     clock: Clock,
     worker: &'a Worker,
     limits: Limits,
+    recover_clock: bool,
 }
 impl<'a> Receiver<'a> {
     pub fn new(worker: &'a Worker, limits: Limits) -> Result<Self> {
@@ -157,7 +161,41 @@ impl<'a> Receiver<'a> {
             clock,
             worker,
             limits,
+            recover_clock: false,
         })
+    }
+    /// Explicit continuous tracking policy; strict sessions retain their default.
+    pub fn with_clock_recovery(mut self) -> Self {
+        self.recover_clock = true;
+        self
+    }
+    fn restart_clock(
+        &self,
+        s: &mut State,
+        clock: &mut SessionClock,
+        now: u64,
+        stats: &mut Stats,
+    ) -> Result<()> {
+        if !self.recover_clock || clock.expired_at(now)?.is_none() {
+            return Ok(());
+        }
+        if s.mode.requested() != Mode::Tracking {
+            return Ok(());
+        }
+        if stats.clock_restarts >= 128 {
+            s.mode
+                .protect("clock_recovery_limit")
+                .map_err(|_| "mode_failed")?;
+            return Err("clock_recovery_limit");
+        }
+        let fenced = s.invalidate_clock().map_err(|_| "mode_failed")?;
+        let sent = clock.restart_expired(fenced)?;
+        stats.clock_restarts += 1;
+        if stats.recent_clock_restarts.len() == 8 {
+            stats.recent_clock_restarts.pop_front();
+        }
+        stats.recent_clock_restarts.push_back([sent, fenced]);
+        Ok(())
     }
     fn receive(
         &self,
@@ -251,6 +289,8 @@ impl<'a> Receiver<'a> {
                 {
                     return Err("duration_limit");
                 }
+                // Same lock and fresh decision stamp as the controller's commit.
+                self.restart_clock(&mut s, &mut clock, now, stats)?;
                 match catch_unwind(AssertUnwindSafe(|| controller(&mut s, now))) {
                     Ok(Ok(true)) => {}
                     Ok(result) => {
@@ -280,6 +320,12 @@ impl<'a> Receiver<'a> {
             let Some((message, received)) = self.receive(socket, stats)? else {
                 continue;
             };
+            // Receive can cross the deadline: fence before accepting any payload.
+            if self.recover_clock {
+                let mut s = self.state.lock().map_err(|_| "state_unavailable")?;
+                let now = s.now();
+                self.restart_clock(&mut s, &mut clock, now, stats)?;
+            }
             if received.checked_sub(window).ok_or("invalid_host_clock")? >= 1_000_000 {
                 window = received;
                 rate = 0;
@@ -325,7 +371,13 @@ impl<'a> Receiver<'a> {
                             boot,
                             nonce,
                             device_us,
-                        } => clock.pong(boot, &nonce, device_us, received)?,
+                        } => {
+                            if self.recover_clock && clock.ignore_retired(boot, &nonce)? {
+                                stats.retired_pongs += 1;
+                            } else {
+                                clock.pong(boot, &nonce, device_us, received)?;
+                            }
+                        }
                         Control::Status { counters, .. } => {
                             stats.first_device.get_or_insert(counters);
                             stats.last_device = Some(counters);
