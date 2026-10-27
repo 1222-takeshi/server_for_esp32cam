@@ -1,4 +1,85 @@
 use super::*;
+
+#[test]
+fn clock_restart_fences_inflight_work_without_ack_or_generation_churn() {
+    let (state, clock, time) = setup();
+    {
+        let mut s = state.lock().unwrap();
+        s.mode = OperatingMode::new_with_tracking_recovery(10, move || clock(), true).unwrap();
+        s.mode.hello(1, 0).unwrap();
+        let g = s.mode.generation();
+        s.mode.request(Mode::Tracking, g, true).unwrap();
+        s.mode.protect("frames_expired").unwrap();
+        let g = s.mode.generation();
+        s.mode.acknowledge(1, g, Mode::Tracking, 1).unwrap();
+    }
+    let (begun, started) = mpsc::channel();
+    let (release, blocked) = mpsc::channel();
+    let mut first = true;
+    let worker = Worker::start(state.clone(), move |_| {
+        if first {
+            first = false;
+            begun.send(()).unwrap();
+            blocked.recv().unwrap();
+        }
+        Ok(vec![])
+    })
+    .unwrap();
+    worker.submit(job(&state, 1));
+    started.recv_timeout(Duration::from_secs(2)).unwrap();
+    let generation = state.lock().unwrap().mode.generation();
+    time.store(150_000, Ordering::SeqCst);
+    assert_eq!(state.lock().unwrap().invalidate_clock().unwrap(), 150_000);
+    assert_eq!(state.lock().unwrap().mode.generation(), generation);
+    release.send(()).unwrap();
+    wait(&state, 1);
+    {
+        let mut s = state.lock().unwrap();
+        assert_eq!(s.counters.published, 0);
+        assert_eq!(s.drops().back().unwrap().stage, "clock_after");
+        assert!(s.latest().unwrap().is_none());
+    }
+    let mut fresh = job(&state, 2);
+    let mut proof = SessionClock::default();
+    proof
+        .poll(200_000, true, || Ok("0123456789abcdef".into()))
+        .unwrap();
+    proof
+        .pong(1, "0123456789abcdef", fresh.frame.captured_us, 200_000)
+        .unwrap();
+    fresh.arrival = proof.admit(&fresh.frame, 200_000).unwrap();
+    time.store(200_000, Ordering::SeqCst);
+    assert_eq!(worker.submit(fresh), Submit::Queued);
+    wait(&state, 2);
+    worker.stop().unwrap();
+    let mut s = state.lock().unwrap();
+    assert_eq!(s.counters.published, 1);
+    assert_eq!(s.mode.status().unwrap()["actuation_state"], "hold");
+    assert_eq!(s.latest().unwrap().unwrap().frame.sequence, 2);
+}
+
+#[test]
+fn clock_restart_skips_waiting_work_before_inference() {
+    let (state, _, time) = setup();
+    let waiting = job(&state, 1);
+    time.store(150_000, Ordering::SeqCst);
+    state.lock().unwrap().invalidate_clock().unwrap();
+    let worker = Worker::start(state.clone(), |_| {
+        panic!("expired admission must not infer")
+    })
+    .unwrap();
+    worker.submit(waiting);
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while state.lock().unwrap().counters.dropped == 0 {
+        assert!(std::time::Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(1));
+    }
+    worker.stop().unwrap();
+    let s = state.lock().unwrap();
+    assert_eq!(s.counters.inferred, 0);
+    assert_eq!(s.counters.failures, 0);
+    assert_eq!(s.drops().back().unwrap().stage, "clock_before");
+}
 use crate::{control::SessionClock, operating_mode::Mode};
 use std::sync::{atomic::AtomicU64, mpsc};
 fn setup() -> (Arc<Mutex<State>>, Clock, Arc<AtomicU64>) {

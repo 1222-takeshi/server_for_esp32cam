@@ -6,6 +6,7 @@ use crate::{
     operating_mode::Mode,
 };
 use serde_json::{Map, Value, json};
+use std::collections::VecDeque;
 
 pub const TEXT_LIMIT: usize = 512;
 type Result<T> = std::result::Result<T, &'static str>;
@@ -155,8 +156,43 @@ pub struct SessionClock {
     pending: Option<(String, u64)>,
     last_ping: Option<u64>,
     window: ClockWindow,
+    retired: VecDeque<(String, bool)>,
 }
 impl SessionClock {
+    pub fn expired_at(&self, now: u64) -> Result<Option<u64>> {
+        if now == 0 {
+            return Err("invalid_host_clock");
+        }
+        let Some((_, sent)) = self.pending.as_ref() else {
+            return Ok(None);
+        };
+        let elapsed = now.checked_sub(*sent).ok_or("invalid_host_clock")?;
+        Ok((elapsed > 1_000_000).then_some(*sent))
+    }
+    /// Opt-in recovery only: never renew an expired exchange or old evidence.
+    pub fn restart_expired(&mut self, now: u64) -> Result<u64> {
+        let sent = self.expired_at(now)?.ok_or("clock_not_expired")?;
+        if self.retired.len() == 8 {
+            self.retired.pop_front();
+        }
+        self.retired
+            .push_back((self.pending.take().unwrap().0, false));
+        self.window = ClockWindow::default();
+        self.last_ping = None;
+        Ok(sent)
+    }
+    /// Only a known expired nonce may be ignored, once, on the same boot.
+    pub fn ignore_retired(&mut self, boot: u64, nonce: &str) -> Result<bool> {
+        let Some(index) = self.retired.iter().position(|(id, _)| id == nonce) else {
+            return Ok(false);
+        };
+        self.bind(boot)?;
+        if self.retired[index].1 {
+            return Err("clock_nonce");
+        }
+        self.retired[index].1 = true;
+        Ok(true)
+    }
     pub fn bind(&mut self, boot: u64) -> Result<()> {
         if boot == 0 || self.boot.is_some_and(|b| b != boot) {
             return Err("boot_mismatch");
@@ -189,7 +225,10 @@ impl SessionClock {
             return Ok(None);
         }
         let id = nonce()?;
-        if id.len() != 16 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
+        if id.len() != 16
+            || !id.bytes().all(|b| b.is_ascii_hexdigit())
+            || self.retired.iter().any(|(old, _)| old == &id)
+        {
             return Err("invalid_nonce");
         }
         self.pending = Some((id.clone(), now));

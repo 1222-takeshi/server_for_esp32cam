@@ -1,5 +1,75 @@
 use super::*;
 
+#[test]
+fn expired_clock_requires_fresh_evidence_and_rejects_replayed_or_unknown_replies() {
+    let mut clock = SessionClock::default();
+    clock.bind(1).unwrap();
+    clock
+        .poll(100_000, true, || Ok("aaaaaaaaaaaaaaaa".into()))
+        .unwrap();
+    clock.pong(1, "aaaaaaaaaaaaaaaa", 100_000, 100_100).unwrap();
+    let mut frame = Frame {
+        boot: 1,
+        sequence: 1,
+        captured_us: 100_000,
+        sent_us: 100_000,
+        generation: Some(1),
+        jpeg: vec![],
+    };
+    assert!(clock.admit(&frame, 100_100).is_some());
+    clock
+        .poll(150_000, true, || Ok("bbbbbbbbbbbbbbbb".into()))
+        .unwrap();
+    assert_eq!(clock.expired_at(1_150_000), Ok(None));
+    assert_eq!(clock.restart_expired(1_150_000), Err("clock_not_expired"));
+    assert_eq!(clock.restart_expired(1_150_001), Ok(150_000));
+    assert!(clock.admit(&frame, 1_150_001).is_none());
+    assert_eq!(
+        clock.poll(1_150_002, true, || Ok("bbbbbbbbbbbbbbbb".into())),
+        Err("invalid_nonce")
+    );
+    clock
+        .poll(1_150_002, true, || Ok("cccccccccccccccc".into()))
+        .unwrap();
+    assert_eq!(
+        clock.ignore_retired(2, "bbbbbbbbbbbbbbbb"),
+        Err("boot_mismatch")
+    );
+    assert_eq!(clock.ignore_retired(1, "bbbbbbbbbbbbbbbb"), Ok(true));
+    assert_eq!(
+        clock.ignore_retired(1, "bbbbbbbbbbbbbbbb"),
+        Err("clock_nonce")
+    );
+    assert_eq!(clock.ignore_retired(1, "dddddddddddddddd"), Ok(false));
+    assert_eq!(
+        clock.pong(1, "dddddddddddddddd", 1_150_003, 1_150_100),
+        Err("clock_nonce")
+    );
+    assert!(clock.admit(&frame, 1_150_100).is_none());
+    clock
+        .pong(1, "cccccccccccccccc", 1_150_003, 1_150_100)
+        .unwrap();
+    frame.captured_us = 1_150_003;
+    frame.sent_us = 1_150_003;
+    assert!(clock.admit(&frame, 1_150_100).is_some());
+    assert_eq!(clock.expired_at(0), Err("invalid_host_clock"));
+}
+
+#[test]
+fn expired_nonce_memory_is_bounded_and_backward_time_is_terminal() {
+    let mut clock = SessionClock::default();
+    clock.bind(1).unwrap();
+    for i in 0..12u64 {
+        let now = 1 + i * 1_000_002;
+        clock.poll(now, true, || Ok(format!("{i:016x}"))).unwrap();
+        assert_eq!(clock.expired_at(now - 1), Err("invalid_host_clock"));
+        clock.restart_expired(now + 1_000_001).unwrap();
+    }
+    assert_eq!(clock.retired.len(), 8);
+    assert_eq!(clock.ignore_retired(1, "0000000000000000"), Ok(false));
+    assert_eq!(clock.ignore_retired(1, "000000000000000b"), Ok(true));
+}
+
 fn frame(boot: u64, captured_us: u64) -> Frame {
     Frame {
         boot,

@@ -8,6 +8,232 @@ use std::{
 };
 use tungstenite::client::IntoClientRequest;
 
+#[test]
+fn expiry_crossed_while_waiting_for_state_is_fenced_before_controller() {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    let time = Arc::new(AtomicU64::new(100_000));
+    let copy = time.clone();
+    let clock: Clock = Arc::new(move || copy.load(Ordering::SeqCst));
+    let state = Arc::new(Mutex::new(
+        State::new_with_tracking_recovery(10, clock, true).unwrap(),
+    ));
+    let worker = Worker::start(state.clone(), |_| Ok(vec![])).unwrap();
+    let (mut client, mut server) = pair();
+    let camera = thread::spawn(move || {
+        client.send(Message::Text(json!({"type":"profile.hello","schema":2,"boot_id":1,"generation_floor":0,"profiles":["eco","tracking"]}).to_string().into())).unwrap();
+        while let Ok(Message::Text(raw)) = client.read() {
+            let v: Value = serde_json::from_str(&raw).unwrap();
+            if v["type"]=="profile.set" && client.send(Message::Text(json!({"type":"profile.ack","boot_id":1,"generation":v["generation"],"mode":v["mode"],"applied_us":1}).to_string().into())).is_err() {break;}
+            // Leave the initial clock exchange pending.
+        }
+    });
+    let ready = AtomicBool::new(false);
+    let advanced = AtomicBool::new(false);
+    let outcome = thread::scope(|scope| {
+        let owner = scope.spawn(|| {
+            let receiver = Receiver::new(
+                &worker,
+                Limits {
+                    duration_us: 4_000_000,
+                    ..Limits::default()
+                },
+            )
+            .unwrap()
+            .with_clock_recovery();
+            let mut generation = None;
+            receiver.run(&mut server, |s, _| {
+                if advanced.load(Ordering::SeqCst) {
+                    return if s.mode.generation() > generation.unwrap() {
+                        Ok(false)
+                    } else {
+                        Err("unfenced_controller")
+                    };
+                }
+                if s.mode.status().unwrap()["acknowledged"] == true {
+                    if generation.is_none() {
+                        s.mode
+                            .request(Mode::Tracking, s.mode.generation(), true)
+                            .unwrap();
+                        generation = Some(s.mode.generation());
+                    } else {
+                        ready.store(true, Ordering::SeqCst);
+                    }
+                }
+                Ok(true)
+            })
+        });
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !ready.load(Ordering::SeqCst) {
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(1));
+        }
+        let held = state.lock().unwrap();
+        time.store(1_100_000, Ordering::SeqCst); // RTT exactly 1s is still valid.
+        thread::sleep(Duration::from_millis(150)); // Receiver waits for State across expiry.
+        time.store(1_100_001, Ordering::SeqCst);
+        advanced.store(true, Ordering::SeqCst);
+        drop(held);
+        owner.join().unwrap()
+    });
+    assert_eq!(outcome.reason, "completed");
+    assert_eq!(outcome.stats.clock_restarts, 1);
+    drop(server);
+    camera.join().unwrap();
+    worker.stop().unwrap();
+}
+
+#[test]
+fn late_pong_is_replaced_only_for_the_opt_in_session_over_a_real_socket() {
+    for recover in [false, true] {
+        let (state, worker, clock) = setup();
+        let copy = clock.clone();
+        state.lock().unwrap().mode =
+            crate::operating_mode::OperatingMode::new_with_tracking_recovery(
+                10,
+                move || copy(),
+                true,
+            )
+            .unwrap();
+        let (mut client, mut server) = pair();
+        let camera = thread::spawn(move || {
+            client.send(Message::Text(json!({"type":"profile.hello","schema":2,"boot_id":1,"generation_floor":0,"profiles":["eco","tracking"]}).to_string().into())).unwrap();
+            let (mut ack, mut tracking, mut synced, mut delayed, mut sequence) =
+                (None, false, false, false, 0);
+            while let Ok(Message::Text(raw)) = client.read() {
+                let v: Value = serde_json::from_str(&raw).unwrap();
+                let response = match v["type"].as_str().unwrap() {
+                    "profile.set" => {
+                        let applied = clock() + 1_000_000;
+                        let generation = v["generation"].as_u64().unwrap();
+                        ack = Some((generation, applied));
+                        tracking = v["mode"] == "tracking";
+                        json!({"type":"profile.ack","boot_id":1,"generation":generation,"mode":v["mode"],"applied_us":applied})
+                    }
+                    "clock.ping" => {
+                        if tracking && sequence > 0 && !delayed {
+                            delayed = true;
+                            thread::sleep(Duration::from_millis(1150));
+                        }
+                        synced = true;
+                        json!({"type":"clock.pong","boot_id":1,"id":v["id"],"device_us":clock()+1_000_000})
+                    }
+                    _ => panic!(),
+                };
+                if client
+                    .send(Message::Text(response.to_string().into()))
+                    .is_err()
+                {
+                    break;
+                }
+                if tracking
+                    && synced
+                    && let Some((generation, applied)) = ack
+                {
+                    sequence += 1;
+                    let capture = (clock() + 1_000_000).max(applied + 1);
+                    if client
+                        .send(Message::Binary(
+                            envelope(1, sequence, capture, generation).into(),
+                        ))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }
+            delayed
+        });
+        let receiver = Receiver::new(
+            &worker,
+            Limits {
+                duration_us: 4_000_000,
+                ..Limits::default()
+            },
+        )
+        .unwrap();
+        let receiver = if recover {
+            receiver.with_clock_recovery()
+        } else {
+            receiver
+        };
+        let mut tracking_generation = None;
+        let outcome = receiver.run(&mut server, |s, _| {
+            if tracking_generation.is_none() && s.mode.status().unwrap()["acknowledged"] == true {
+                s.mode
+                    .request(Mode::Tracking, s.mode.generation(), true)
+                    .unwrap();
+                tracking_generation = Some(s.mode.generation());
+            }
+            Ok(!s
+                .samples()
+                .iter()
+                .any(|sample| Some(sample.generation) != tracking_generation))
+        });
+        assert_eq!(
+            outcome.reason,
+            if recover {
+                "completed"
+            } else {
+                "clock_timeout"
+            }
+        );
+        assert_eq!(outcome.stats.clock_restarts, u64::from(recover));
+        assert_eq!(outcome.stats.retired_pongs, u64::from(recover));
+        assert_eq!(outcome.final_status["actuation_state"], "hold"); // Full new cadence is still mandatory.
+        assert!(!state.lock().unwrap().mode.connected());
+        drop(server);
+        assert!(camera.join().unwrap());
+        worker.stop().unwrap();
+    }
+}
+
+#[test]
+fn clock_restart_budget_and_diagnostics_are_bounded() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let time = Arc::new(AtomicU64::new(1));
+    let copy = time.clone();
+    let clock: Clock = Arc::new(move || copy.load(Ordering::SeqCst));
+    let state = Arc::new(Mutex::new(
+        State::new_with_tracking_recovery(10, clock, true).unwrap(),
+    ));
+    {
+        let mut s = state.lock().unwrap();
+        s.mode.hello(1, 0).unwrap();
+        let g = s.mode.generation();
+        s.mode.request(Mode::Tracking, g, true).unwrap();
+    }
+    let worker = Worker::start(state, |_| panic!("no inference")).unwrap();
+    let receiver = Receiver::new(&worker, Limits::default())
+        .unwrap()
+        .with_clock_recovery();
+    let mut clock = SessionClock::default();
+    clock.bind(1).unwrap();
+    let mut stats = Stats::default();
+    for count in 0..129u64 {
+        let now = 1 + count * 1_000_002;
+        clock
+            .poll(now, true, || Ok(format!("{count:016x}")))
+            .unwrap();
+        time.store(now + 1_000_001, Ordering::SeqCst);
+        let mut s = receiver.state.lock().unwrap();
+        let result = receiver.restart_clock(&mut s, &mut clock, now + 1_000_001, &mut stats);
+        assert_eq!(
+            result,
+            if count < 128 {
+                Ok(())
+            } else {
+                Err("clock_recovery_limit")
+            }
+        );
+        if count == 128 {
+            assert_eq!(s.mode.requested(), Mode::Eco);
+        }
+    }
+    assert_eq!(stats.clock_restarts, 128);
+    assert_eq!(stats.recent_clock_restarts.len(), 8);
+    worker.stop().unwrap();
+}
+
 fn pair() -> (tungstenite::WebSocket<TcpStream>, Connection) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
