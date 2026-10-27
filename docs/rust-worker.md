@@ -31,6 +31,8 @@ continuous試験では、pendingの時計交換が処理時に1秒を超えた�
 当該世代のACKと再取得した時計で検証した結果の10秒5Hzから復帰し、RTT1秒・証拠有効10秒・200ppm・500ms鮮度は同一です。
 既定strict sessionは時計期限切れで終了します。reportの`clock_timeout_recovery_enabled`と
 receiverの`clock_restarts`・`retired_pongs`・直近8件の`[sent_us, fenced_us]`で動作を確認できます。
+Piでの10分・1時間の認識継続と自動復帰、そのhold時間・復元結果は
+[自動復帰の有限検証記録](rust-recovery-validation.md)を参照してください。
 
 `frame-worker`はIssue #553のオフライン互換・性能検証用です。ECF2をstdinから有限回再生し、認識結果と計測値を
 JSON Linesでstdoutへ返します。実行中は1画像・待ちqueueなし、最大120画像・出力1行64KiBです。
