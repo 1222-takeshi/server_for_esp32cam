@@ -52,6 +52,103 @@ pub struct Job {
     pub arrival: Arrival,
     pub cancelled: Arc<AtomicBool>,
 }
+#[derive(Clone, Copy)]
+pub(crate) struct WorkTiming {
+    boot: u64,
+    generation: Option<u64>,
+    sequence: u64,
+    captured_us: u64,
+    sent_us: u64,
+    received_us: u64,
+    ready_us: Option<u64>,
+    arrival_age_bounds_us: Option<(i128, i128)>,
+}
+impl WorkTiming {
+    fn from_job(job: &Job, ready_us: Option<u64>) -> Self {
+        Self {
+            boot: job.frame.boot,
+            generation: job.frame.generation,
+            sequence: job.frame.sequence,
+            captured_us: job.frame.captured_us,
+            sent_us: job.frame.sent_us,
+            received_us: job.arrival.received_us(),
+            ready_us,
+            arrival_age_bounds_us: job
+                .arrival
+                .age_bounds(&job.frame, job.arrival.received_us()),
+        }
+    }
+    pub(crate) fn report(&self) -> serde_json::Value {
+        serde_json::json!({"boot_id":self.boot,"generation":self.generation,"sequence":self.sequence,
+            "captured_us":self.captured_us,"sent_us":self.sent_us,"received_us":self.received_us,
+            "worker_ready_us":self.ready_us,"arrival_age_bounds_us":self.arrival_age_bounds_us})
+    }
+}
+#[derive(Clone, Copy)]
+struct WorkResult {
+    work: WorkTiming,
+    begun_us: u64,
+    finished_us: u64,
+    decided_us: u64,
+    outcome: &'static str,
+}
+impl WorkResult {
+    fn report(&self) -> serde_json::Value {
+        let mut value = self.work.report();
+        let fields = value.as_object_mut().unwrap();
+        fields.insert("begun_us".into(), self.begun_us.into());
+        fields.insert("finished_us".into(), self.finished_us.into());
+        fields.insert("decided_us".into(), self.decided_us.into());
+        fields.insert("outcome".into(), self.outcome.into());
+        value
+    }
+}
+#[derive(Clone, Copy)]
+struct PublishedTiming {
+    frame: WorkTiming,
+    published_us: u64,
+    compute_us: u64,
+    age_bounds_us: Option<(i128, i128)>,
+}
+pub struct TimingSnapshot {
+    observed_us: u64,
+    latest: Option<PublishedTiming>,
+    in_flight: Option<WorkTiming>,
+    recent_work: [Option<WorkResult>; 8],
+    last_drop: Option<DropSample>,
+}
+impl TimingSnapshot {
+    /// Call after releasing State; JSON allocation never delays publication.
+    pub fn report(&self) -> serde_json::Value {
+        let latest = self.latest.map(|latest| {
+            let mut value = latest.frame.report();
+            let fields = value.as_object_mut().unwrap();
+            fields.insert("published_us".into(), latest.published_us.into());
+            fields.insert("compute_us".into(), latest.compute_us.into());
+            fields.insert(
+                "age_bounds_us".into(),
+                serde_json::json!(latest.age_bounds_us),
+            );
+            value
+        });
+        let dropped = self.last_drop.map(|d| {
+            serde_json::json!({
+                "sequence":d.sequence,"generation":d.generation,"at_us":d.at_us,"stage":d.stage,
+                "age_high_us":d.age_high_us,"arrival_age_high_us":d.arrival_age_high_us,
+                "arrival_age_low_us":d.arrival_age_low_us,"compute_us":d.compute_us,
+                "reserve_us":d.reserve_us,"elapsed_since_arrival_us":d.wait_us,
+            })
+        });
+        let work: Vec<_> = self
+            .recent_work
+            .iter()
+            .flatten()
+            .map(WorkResult::report)
+            .collect();
+        serde_json::json!({"observed_us":self.observed_us,"latest":latest,"recent_work":work,
+            "in_flight":self.in_flight.as_ref().map(WorkTiming::report),"last_drop":dropped})
+    }
+}
 pub struct Completed {
     pub frame: Frame,
     pub detections: Vec<Detection>,
@@ -64,6 +161,7 @@ impl Completed {
         self.arrival.age_bounds(&self.frame, now)
     }
 }
+#[derive(Clone, Copy)]
 pub struct DropSample {
     pub boot: u64,
     pub generation: Option<u64>,
@@ -103,6 +201,8 @@ pub struct State {
     pub mode: OperatingMode,
     pub counters: Counters,
     latest: Option<Arc<Completed>>,
+    in_flight: Option<WorkTiming>,
+    recent_work: std::collections::VecDeque<WorkResult>,
     samples: Vec<Sample>,
     drops: std::collections::VecDeque<DropSample>,
 }
@@ -125,6 +225,8 @@ impl State {
             mode,
             counters: Counters::default(),
             latest: None,
+            in_flight: None,
+            recent_work: std::collections::VecDeque::with_capacity(8),
             samples: Vec::new(),
             drops: std::collections::VecDeque::with_capacity(32),
         })
@@ -172,6 +274,48 @@ impl State {
     }
     pub fn drops(&self) -> &std::collections::VecDeque<DropSample> {
         &self.drops
+    }
+    /// Fixed-size primitive copy only; the owner serializes after releasing State.
+    pub fn timing_snapshot(&self, now: u64) -> TimingSnapshot {
+        let latest = self.latest.as_ref().map(|r| PublishedTiming {
+            frame: WorkTiming {
+                boot: r.frame.boot,
+                generation: r.frame.generation,
+                sequence: r.frame.sequence,
+                captured_us: r.frame.captured_us,
+                sent_us: r.frame.sent_us,
+                received_us: r.arrival.received_us(),
+                ready_us: None,
+                arrival_age_bounds_us: r.age_bounds(r.arrival.received_us()),
+            },
+            published_us: r.published_us,
+            compute_us: r.compute_us,
+            age_bounds_us: r.age_bounds(now),
+        });
+        TimingSnapshot {
+            observed_us: now,
+            latest,
+            in_flight: self.in_flight,
+            recent_work: std::array::from_fn(|i| self.recent_work.get(i).copied()),
+            last_drop: self.drops.back().copied(),
+        }
+    }
+    pub fn in_flight_sequence(&self) -> Option<u64> {
+        self.in_flight.as_ref().map(|r| r.sequence)
+    }
+    fn finish_work(&mut self, begun: u64, finished: u64, decided: u64, outcome: &'static str) {
+        if let Some(work) = self.in_flight.take() {
+            if self.recent_work.len() == 8 {
+                self.recent_work.pop_front();
+            }
+            self.recent_work.push_back(WorkResult {
+                work,
+                begun_us: begun,
+                finished_us: finished,
+                decided_us: decided,
+                outcome,
+            });
+        }
     }
     fn dropped(
         &mut self,
@@ -320,6 +464,8 @@ impl Worker {
                             s.dropped(&job, reason, now, 0, reserve_us);
                             continue;
                         }
+                        // Metadata only; ready_us precedes releasing State and the native call.
+                        s.in_flight = Some(WorkTiming::from_job(&job, Some(now)));
                     }
                     let begun = clock();
                     let output = catch_unwind(AssertUnwindSafe(|| infer(&job.frame.jpeg)))
@@ -349,6 +495,7 @@ impl Worker {
                             "mode_after"
                         };
                         s.dropped(&job, reason, clock(), compute_us, reserve_us);
+                        s.finish_work(begun, finished, clock(), reason);
                         continue;
                     }
                     let Some(detections) = output.filter(|v| {
@@ -365,6 +512,7 @@ impl Worker {
                     }) else {
                         s.counters.failures = s.counters.failures.saturating_add(1);
                         let _ = s.mode.protect("inference_failed");
+                        s.finish_work(begun, finished, clock(), "inference_failed");
                         continue;
                     };
                     let frame = Frame {
@@ -430,6 +578,16 @@ impl Worker {
                         };
                         s.dropped(&job, "publication_gate", now, compute_us, reserve_us);
                     }
+                    s.finish_work(
+                        begun,
+                        finished,
+                        clock(),
+                        if published {
+                            "published"
+                        } else {
+                            "publication_gate"
+                        },
+                    );
                 }
                 stop.store(true, Ordering::Release);
             })?;

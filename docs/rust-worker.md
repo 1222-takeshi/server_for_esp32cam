@@ -31,6 +31,17 @@ continuous試験では、pendingの時計交換が処理時に1秒を超えた�
 当該世代のACKと再取得した時計で検証した結果の10秒5Hzから復帰し、RTT1秒・証拠有効10秒・200ppm・500ms鮮度は同一です。
 既定strict sessionは時計期限切れで終了します。reportの`clock_timeout_recovery_enabled`と
 receiverの`clock_restarts`・`retired_pongs`・直近8件の`[sent_us, fenced_us]`で動作を確認できます。
+`receiver.hold_diagnostics`はholdを初めて観測した時の数値snapshotを最大128件保持します。
+理由・世代・hold開始時刻、最新結果、推論中frame、直近8件の受信/IO/推論完了metadataを含みます。
+`worker_ready_us`はworkerがState内で適格性を確認した時刻で、native呼出し直前の`begun_us`と区別します。
+推論完了の`finished_us`と判定後の`decided_us`からcommitまでの経過も確認できます。
+共有ロック内では固定長の数値だけをコピーし、JSON化はworker終了後に行います。
+待機queueの瞬間状態は直接観測せず、受信から推論開始までの時間・完了履歴・破棄記録で解析します。
+`after`は観測した推論中frameが切り替わった後の最初のsnapshotです。対象がなければ次の観測です。
+`after_source=worker_shutdown`は終了後の補完を示します。8件ringからの退去は
+`watched_sequence`で検出し、記録がない場合に原因を推測しません。開始と観測時刻は同一とは限りません。
+画像・検出座標・認証情報は含めず、上限超過や終了までに観測できなかったholdは`hold_diagnostics_lost`へ計上します。
+診断は保護・世代fence・復帰条件を変更せず、安定5Hzの新しい受入基準とも分けます。
 Piでの10分・1時間の認識継続と自動復帰、そのhold時間・復元結果は
 [自動復帰の有限検証記録](rust-recovery-validation.md)を参照してください。
 

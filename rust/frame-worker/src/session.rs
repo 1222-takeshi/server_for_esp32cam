@@ -4,7 +4,7 @@ use crate::{
     control::{self, Control, SessionClock},
     decode,
     operating_mode::Mode,
-    pipeline::{Clock, Job, State, Submit, Worker},
+    pipeline::{Clock, Job, State, Submit, TimingSnapshot, Worker},
     transport::{self, Connection, Message},
 };
 use serde_json::Value;
@@ -33,6 +33,7 @@ impl Default for Limits {
         }
     }
 }
+#[derive(Clone, Copy)]
 pub struct Receipt {
     pub sequence: u64,
     pub received_us: u64,
@@ -49,8 +50,72 @@ pub struct Rejection {
     pub age_bounds: Option<crate::clock::AgeBounds>,
     pub clock_exchanges: Vec<[u64; 4]>,
 }
+struct RejectionTiming {
+    sequence: u64,
+    generation: Option<u64>,
+    received_us: u64,
+    captured_us: u64,
+    sent_us: u64,
+    stage: &'static str,
+    age_bounds: Option<crate::clock::AgeBounds>,
+}
+struct HoldDiagnostic {
+    generation: u64,
+    started_us: u64,
+    reason: Option<&'static str>,
+    pipeline: TimingSnapshot,
+    after: Option<TimingSnapshot>,
+    watched_sequence: Option<u64>,
+    after_source: Option<&'static str>,
+    receipts: [Option<Receipt>; 8],
+    io: [Option<transport::IoSample>; 8],
+    rejection: Option<RejectionTiming>,
+    counts: [u64; 5],
+}
+impl HoldDiagnostic {
+    fn report(&self) -> Value {
+        let receipts:Vec<_>=self.receipts.iter().flatten().map(|r|serde_json::json!({
+            "sequence":r.sequence,"received_us":r.received_us,"ws_complete_unix_us":r.ws_complete_unix_us})).collect();
+        let io: Vec<_> = self
+            .io
+            .iter()
+            .flatten()
+            .map(|e| {
+                serde_json::json!({
+            "kind":e.kind,"status":e.status,"bytes":e.bytes,"elapsed_us":e.elapsed_us,
+            "observed_unix_us":e.observed_unix_us})
+            })
+            .collect();
+        let rejection=self.rejection.as_ref().map(|r|serde_json::json!({
+            "sequence":r.sequence,"generation":r.generation,"received_us":r.received_us,
+            "captured_us":r.captured_us,"sent_us":r.sent_us,"stage":r.stage,"age_bounds_us":r.age_bounds}));
+        serde_json::json!({"generation":self.generation,"started_us":self.started_us,"reason":self.reason,
+            "pipeline":self.pipeline.report(),"after":self.after.as_ref().map(TimingSnapshot::report),
+            "watched_sequence":self.watched_sequence,"after_source":self.after_source,
+            "receipts":receipts,"io":io,"last_rejection":rejection,
+            "frames":self.counts[0],"admitted":self.counts[1],"dropped":self.counts[2],
+            "overwritten":self.counts[3],"queue_busy":self.counts[4]})
+    }
+}
+pub struct HoldDiagnostics(Vec<HoldDiagnostic>);
+impl Default for HoldDiagnostics {
+    fn default() -> Self {
+        Self(Vec::with_capacity(128))
+    }
+}
+impl HoldDiagnostics {
+    /// Serialize only after publication has stopped; never under the live State lock.
+    pub fn report(&self) -> Vec<Value> {
+        self.0.iter().map(HoldDiagnostic::report).collect()
+    }
+}
 #[derive(Default)]
 pub struct Stats {
+    pub hold_diagnostics: HoldDiagnostics,
+    pub hold_diagnostics_lost: u64,
+    initial_hold_events: u64,
+    last_hold: Option<(u64, u64)>,
+    last_hold_saved: bool,
     pub clock_restarts: u64,
     pub retired_pongs: u64,
     pub recent_clock_restarts: VecDeque<[u64; 2]>,
@@ -70,6 +135,82 @@ pub struct Stats {
     pub last_device: Option<[u64; 6]>,
 }
 impl Stats {
+    fn note_hold(&mut self, state: &State, io: &VecDeque<transport::IoSample>) {
+        let Some(started) = state.mode.tracking_hold_started() else {
+            return;
+        };
+        let key = (state.mode.generation(), started);
+        if self.last_hold == Some(key) {
+            if self.last_hold_saved {
+                let last = self.hold_diagnostics.0.last_mut().unwrap();
+                if last.after.is_none()
+                    && last
+                        .watched_sequence
+                        .is_none_or(|seq| state.in_flight_sequence() != Some(seq))
+                {
+                    last.after = Some(state.timing_snapshot(state.now()));
+                    last.after_source = Some("poll");
+                }
+            }
+            return;
+        }
+        self.last_hold = Some(key);
+        self.last_hold_saved = false;
+        if self.hold_diagnostics.0.len() == 128 {
+            self.hold_diagnostics_lost = self.hold_diagnostics_lost.saturating_add(1);
+            return;
+        }
+        self.last_hold_saved = true;
+        let receipts = std::array::from_fn(|i| {
+            self.recent_receipts
+                .get(self.recent_receipts.len().saturating_sub(8) + i)
+                .copied()
+        });
+        let io = std::array::from_fn(|i| io.get(io.len().saturating_sub(8) + i).copied());
+        let rejection = self.recent_rejections.back().map(|r| RejectionTiming {
+            sequence: r.sequence,
+            generation: r.generation,
+            received_us: r.received_us,
+            captured_us: r.captured_us,
+            sent_us: r.sent_us,
+            stage: r.stage,
+            age_bounds: r.age_bounds,
+        });
+        self.hold_diagnostics.0.push(HoldDiagnostic {
+            generation: key.0,
+            started_us: started,
+            reason: state.mode.tracking_hold_reason(),
+            pipeline: state.timing_snapshot(state.now()),
+            after: None,
+            watched_sequence: state.in_flight_sequence(),
+            after_source: None,
+            receipts,
+            io,
+            rejection,
+            counts: [
+                self.frames,
+                self.admitted,
+                self.dropped,
+                self.overwritten,
+                self.queue_busy,
+            ],
+        });
+    }
+    pub fn finish_diagnostics(&mut self, state: &State) {
+        if let Some(last) = self.hold_diagnostics.0.last_mut()
+            && last.after.is_none()
+        {
+            last.after = Some(state.timing_snapshot(state.now()));
+            last.after_source = Some("worker_shutdown");
+        }
+        self.hold_diagnostics_lost = self.hold_diagnostics_lost.max(
+            state
+                .mode
+                .tracking_hold_events()
+                .saturating_sub(self.initial_hold_events)
+                .saturating_sub(self.hold_diagnostics.0.len() as u64),
+        );
+    }
     fn reject(
         &mut self,
         frame: &crate::Frame,
@@ -231,8 +372,11 @@ impl<'a> Receiver<'a> {
             .state
             .lock()
             .map_err(|_| "state_unavailable")
-            .and_then(|mut s| s.claim_session())
-        {
+            .and_then(|mut s| {
+                let token = s.claim_session()?;
+                stats.initial_hold_events = s.mode.tracking_hold_events();
+                Ok(token)
+            }) {
             Ok(token) => token,
             Err(reason) => {
                 socket.shutdown();
@@ -249,18 +393,25 @@ impl<'a> Receiver<'a> {
         };
         let shutdown = SocketShutdown(socket); // Drops before the earlier lease, including unwinding.
         let result = self.exchange(shutdown.0, &token, &mut stats, &mut controller);
-        let final_status = self.snapshot_and_cancel(&token);
+        let final_status = self.snapshot_and_cancel(&token, &mut stats, shutdown.0.io_trace());
         Outcome {
             reason: result.err().unwrap_or("completed"),
             stats,
             final_status,
         }
     }
-    fn snapshot_and_cancel(&self, token: &AtomicBool) -> Value {
+    fn snapshot_and_cancel(
+        &self,
+        token: &AtomicBool,
+        stats: &mut Stats,
+        io: &VecDeque<transport::IoSample>,
+    ) -> Value {
         match self.state.lock() {
             Ok(mut s) => {
                 token.store(true, Ordering::Release);
-                s.mode.status().unwrap_or(Value::Null)
+                let status = s.mode.status().unwrap_or(Value::Null);
+                stats.note_hold(&s, io);
+                status
             }
             Err(_) => {
                 token.store(true, Ordering::Release);
@@ -291,9 +442,11 @@ impl<'a> Receiver<'a> {
                 }
                 // Same lock and fresh decision stamp as the controller's commit.
                 self.restart_clock(&mut s, &mut clock, now, stats)?;
+                stats.note_hold(&s, socket.io_trace());
                 match catch_unwind(AssertUnwindSafe(|| controller(&mut s, now))) {
                     Ok(Ok(true)) => {}
                     Ok(result) => {
+                        stats.note_hold(&s, socket.io_trace());
                         token.store(true, Ordering::Release);
                         return result.map(|_| ());
                     }
@@ -303,6 +456,7 @@ impl<'a> Receiver<'a> {
                         return Err("controller_failed");
                     }
                 }
+                stats.note_hold(&s, socket.io_trace());
                 let command = s.mode.command().map_err(|_| "mode_failed")?;
                 if !s.mode.connected() && now - begun >= 5_000_000 {
                     return Err("hello_timeout");
