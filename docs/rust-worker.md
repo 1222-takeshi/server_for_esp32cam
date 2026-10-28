@@ -42,6 +42,10 @@ receiverの`clock_restarts`・`retired_pongs`・直近8件の`[sent_us, fenced_u
 `watched_sequence`で検出し、記録がない場合に原因を推測しません。開始と観測時刻は同一とは限りません。
 画像・検出座標・認証情報は含めず、上限超過や終了までに観測できなかったholdは`hold_diagnostics_lost`へ計上します。
 診断は保護・世代fence・復帰条件を変更せず、安定5Hzの新しい受入基準とも分けます。
+追加の数値判定は`python scripts/check_stable_recovery.py /private/native.json`で再計算します。
+全10秒窓50件以上、計測区間と重なる自然holdの累計1%以下を別々に判定し、事前宣言した
+注入hold1件だけを除外します。結果は補助判定で、時計/ACK・資源・精度・元環境復元の証明は
+独立したguardian検証が必要です。入力rawや既存のcontinuous/strict判定は変更しません。
 Piでの10分・1時間の認識継続と自動復帰、そのhold時間・復元結果は
 [自動復帰の有限検証記録](rust-recovery-validation.md)を参照してください。
 
