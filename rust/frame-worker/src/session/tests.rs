@@ -9,6 +9,223 @@ use std::{
 use tungstenite::client::IntoClientRequest;
 
 #[test]
+fn reused_state_does_not_count_previous_sessions_as_lost_diagnostics() {
+    let mut state = State::new_with_tracking_recovery(10, Arc::new(|| 100_000), true).unwrap();
+    state.mode.hello(1, 0).unwrap();
+    state
+        .mode
+        .request(Mode::Tracking, state.mode.generation(), true)
+        .unwrap();
+    state.mode.protect("frames_expired").unwrap();
+    state
+        .mode
+        .request(Mode::Eco, state.mode.generation(), true)
+        .unwrap();
+    let mut stats = Stats {
+        initial_hold_events: state.mode.tracking_hold_events(),
+        ..Stats::default()
+    };
+    state
+        .mode
+        .request(Mode::Tracking, state.mode.generation(), true)
+        .unwrap();
+    state.mode.protect("frames_expired").unwrap();
+    stats.note_hold(&state, &VecDeque::new());
+    stats.finish_diagnostics(&state);
+    assert_eq!(stats.hold_diagnostics_lost, 0);
+    state
+        .mode
+        .request(Mode::Eco, state.mode.generation(), true)
+        .unwrap();
+    state
+        .mode
+        .request(Mode::Tracking, state.mode.generation(), true)
+        .unwrap();
+    state.mode.protect("frames_expired").unwrap();
+    state
+        .mode
+        .request(Mode::Eco, state.mode.generation(), true)
+        .unwrap();
+    stats.finish_diagnostics(&state);
+    assert_eq!(stats.hold_diagnostics_lost, 1);
+}
+
+#[test]
+fn exit_snapshot_and_worker_shutdown_reconcile_diagnostics() {
+    let (state, worker, clock) = setup();
+    {
+        let mut s = state.lock().unwrap();
+        s.mode = crate::operating_mode::OperatingMode::new_with_tracking_recovery(
+            10,
+            move || clock(),
+            true,
+        )
+        .unwrap();
+        s.mode.hello(1, 0).unwrap();
+        let g = s.mode.generation();
+        s.mode.request(Mode::Tracking, g, true).unwrap();
+        s.mode.protect("frames_expired").unwrap();
+    }
+    let mut stats = Stats::default();
+    let receiver = Receiver::new(&worker, Limits::default()).unwrap();
+    let token = AtomicBool::new(false);
+    receiver.snapshot_and_cancel(&token, &mut stats, &VecDeque::new());
+    assert!(token.load(std::sync::atomic::Ordering::Acquire));
+    assert_eq!(stats.hold_diagnostics.0.len(), 1);
+    assert!(stats.hold_diagnostics.report()[0]["after"].is_null());
+    worker.stop().unwrap();
+    let mut s = state.lock().unwrap();
+    // A transient hold closed entirely inside an aborting controller cannot
+    // be reconstructed, but it must never be silently omitted from loss count.
+    let g = s.mode.generation();
+    s.mode.request(Mode::Eco, g, true).unwrap();
+    let g = s.mode.generation();
+    s.mode.request(Mode::Tracking, g, true).unwrap();
+    s.mode.protect("frames_expired").unwrap();
+    let g = s.mode.generation();
+    s.mode.request(Mode::Eco, g, true).unwrap();
+    stats.finish_diagnostics(&s);
+    assert_eq!(stats.hold_diagnostics_lost, 1);
+    assert_eq!(
+        stats.hold_diagnostics.report()[0]["after_source"],
+        "worker_shutdown"
+    );
+    assert!(std::mem::size_of::<HoldDiagnostic>() * 128 < 2 * 1024 * 1024);
+}
+
+#[test]
+fn hold_diagnostic_retains_first_observation_after_inflight_generation_fence() {
+    use crate::pipeline::{Job, Submit};
+    use std::sync::{
+        atomic::{AtomicU64, Ordering},
+        mpsc,
+    };
+    let time = Arc::new(AtomicU64::new(100_000));
+    let copy = time.clone();
+    let state = Arc::new(Mutex::new(
+        State::new_with_tracking_recovery(10, Arc::new(move || copy.load(Ordering::SeqCst)), true)
+            .unwrap(),
+    ));
+    let generation = {
+        let mut s = state.lock().unwrap();
+        s.mode.hello(1, 0).unwrap();
+        let current = s.mode.generation();
+        s.mode.request(Mode::Tracking, current, true).unwrap();
+        let g = s.mode.generation();
+        s.mode.acknowledge(1, g, Mode::Tracking, 1).unwrap();
+        g
+    };
+    let (begun, started) = mpsc::channel();
+    let (release, blocked) = mpsc::channel();
+    let worker = Worker::start(state.clone(), move |_| {
+        begun.send(()).unwrap();
+        blocked.recv().unwrap();
+        Ok(vec![])
+    })
+    .unwrap();
+    let frame = decode(&envelope(1, 1, 1000, generation), true).unwrap();
+    let mut clock = SessionClock::default();
+    clock
+        .poll(100_000, true, || Ok("0123456789abcdef".into()))
+        .unwrap();
+    clock.pong(1, "0123456789abcdef", 1000, 100_000).unwrap();
+    let arrival = clock.admit(&frame, 100_000).unwrap();
+    assert_eq!(
+        worker.submit(Job {
+            frame,
+            arrival,
+            cancelled: Arc::new(AtomicBool::new(false))
+        }),
+        Submit::Queued
+    );
+    started.recv_timeout(Duration::from_secs(2)).unwrap();
+    let mut stats = Stats::default();
+    let io = VecDeque::new();
+    {
+        let mut s = state.lock().unwrap();
+        time.store(150_000, Ordering::SeqCst);
+        s.mode.protect("frames_expired").unwrap();
+        stats.note_hold(&s, &io);
+        stats.note_hold(&s, &io);
+        assert!(stats.hold_diagnostics.report()[0]["after"].is_null());
+        assert_eq!(stats.hold_diagnostics.report()[0]["watched_sequence"], 1);
+    }
+    time.store(200_000, Ordering::SeqCst);
+    release.send(()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let s = state.lock().unwrap();
+        if s.counters.inferred == 1 {
+            stats.note_hold(&s, &io);
+            break;
+        }
+        drop(s);
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(1));
+    }
+    worker.stop().unwrap();
+    let after = stats.hold_diagnostics.report()[0]["after"].clone();
+    assert_eq!(after["recent_work"][0]["sequence"], 1);
+    assert_eq!(after["recent_work"][0]["outcome"], "mode_after");
+    assert_eq!(after["recent_work"][0]["finished_us"], 200_000);
+    time.store(250_000, Ordering::SeqCst);
+    stats.note_hold(&state.lock().unwrap(), &io);
+    assert_eq!(stats.hold_diagnostics.report()[0]["after"], after);
+    assert_eq!(stats.hold_diagnostics_lost, 0);
+}
+
+#[test]
+fn hold_diagnostics_are_once_per_hold_bounded_and_metadata_only() {
+    let mut state = State::new_with_tracking_recovery(10, Arc::new(|| 100_000), true).unwrap();
+    state.mode.hello(1, 0).unwrap();
+    let mut stats = Stats::default();
+    let io: VecDeque<_> = (0..40)
+        .map(|i| transport::IoSample {
+            kind: "read",
+            status: "ok",
+            bytes: i,
+            elapsed_us: Some(i as u64),
+            observed_unix_us: Some(i as u64),
+        })
+        .collect();
+    for i in 0..40 {
+        stats.receipt(i, i, Some(i));
+    }
+    stats.note_hold(&state, &io);
+    assert!(stats.hold_diagnostics.0.is_empty()); // Eco is never a tracking hold.
+    for i in 0..130 {
+        state
+            .mode
+            .request(Mode::Tracking, state.mode.generation(), true)
+            .unwrap();
+        state.mode.protect("frames_expired").unwrap();
+        let generation = state.mode.generation();
+        stats.note_hold(&state, &io);
+        stats.note_hold(&state, &io); // Polling must not multiply records or loss count.
+        assert_eq!(stats.hold_diagnostics.0.len(), (i + 1).min(128));
+        assert_eq!(
+            stats.hold_diagnostics_lost,
+            (i + 1).saturating_sub(128) as u64
+        );
+        assert_eq!(state.mode.generation(), generation);
+        state.mode.request(Mode::Eco, generation, true).unwrap();
+    }
+    let first = &stats.hold_diagnostics.report()[0];
+    assert_eq!(first["receipts"].as_array().unwrap().len(), 8);
+    assert_eq!(first["receipts"][0]["sequence"], 32);
+    assert_eq!(first["io"].as_array().unwrap().len(), 8);
+    assert_eq!(first["io"][0]["bytes"], 32);
+    assert!(first["pipeline"]["in_flight"].is_null());
+    assert_eq!(first["reason"], "frames_expired");
+    assert!(!first["after"].is_null());
+    let raw = serde_json::to_string(&stats.hold_diagnostics.report()).unwrap();
+    assert!(raw.len() < 512 * 1024);
+    for forbidden in ["test-key", "x-api-key", "jpeg", "nonce"] {
+        assert!(!raw.contains(forbidden));
+    }
+}
+
+#[test]
 fn expiry_crossed_while_waiting_for_state_is_fenced_before_controller() {
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     let time = Arc::new(AtomicU64::new(100_000));
@@ -535,7 +752,7 @@ fn ending_session_fences_inflight_result_before_status_and_lease_release() {
     }
     started.recv_timeout(Duration::from_secs(2)).unwrap();
     let receiver = Receiver::new(&worker, Limits::default()).unwrap();
-    let snapshot = receiver.snapshot_and_cancel(&token);
+    let snapshot = receiver.snapshot_and_cancel(&token, &mut Stats::default(), &VecDeque::new());
     assert!(snapshot["acknowledged"].as_bool().unwrap());
     assert!(state.lock().unwrap().claim_session().is_err());
     release.send(()).unwrap();

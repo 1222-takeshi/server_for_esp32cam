@@ -1,6 +1,92 @@
 use super::*;
 
 #[test]
+fn timing_snapshot_observes_blocked_work_without_renewing_or_publishing_it() {
+    let (state, _, time) = setup();
+    let (begun, started) = mpsc::channel();
+    let (release, blocked) = mpsc::channel();
+    let worker = Worker::start(state.clone(), move |_| {
+        begun.send(()).unwrap();
+        blocked.recv().unwrap();
+        Ok(vec![])
+    })
+    .unwrap();
+    worker.submit(job(&state, 1));
+    started.recv_timeout(Duration::from_secs(2)).unwrap();
+    {
+        let s = state.lock().unwrap();
+        let snapshot = s.timing_snapshot(200_000).report();
+        assert!(snapshot["latest"].is_null());
+        let active = &snapshot["in_flight"];
+        assert_eq!(active["sequence"], 1);
+        assert_eq!(active["captured_us"], 2);
+        assert_eq!(active["sent_us"], 2);
+        assert_eq!(active["received_us"], 100_000);
+        assert_eq!(active["worker_ready_us"], 100_000);
+        assert_eq!(active["arrival_age_bounds_us"], serde_json::json!([0, 0]));
+        assert_eq!(s.counters.published, 0);
+        assert_eq!(s.mode.generation(), active["generation"].as_u64().unwrap());
+        assert!(!snapshot.to_string().contains("jpeg"));
+    }
+    time.store(200_000, Ordering::SeqCst);
+    release.send(()).unwrap();
+    wait(&state, 1);
+    worker.stop().unwrap();
+    let s = state.lock().unwrap();
+    let snapshot = s.timing_snapshot(210_000).report();
+    assert!(snapshot["in_flight"].is_null());
+    assert_eq!(snapshot["latest"]["sequence"], 1);
+    let finished = &snapshot["recent_work"][0];
+    assert_eq!(finished["begun_us"], 100_000);
+    assert_eq!(finished["finished_us"], 200_000);
+    assert_eq!(finished["decided_us"], 200_000);
+    assert_eq!(finished["outcome"], "published");
+    assert_eq!(
+        snapshot["latest"]["age_bounds_us"],
+        serde_json::json!([110_000, 110_000])
+    );
+    assert!(s.timing_snapshot(1).report()["latest"]["age_bounds_us"].is_null());
+    assert_eq!(s.counters.published, 1);
+}
+
+#[test]
+fn timing_snapshot_clears_failed_work_and_never_starts_invalid_work() {
+    let (state, _, _) = setup();
+    let worker = Worker::start(state.clone(), |_| Err("native failed")).unwrap();
+    let mut invalid = job(&state, 1);
+    invalid.frame.sequence = 2; // Frozen arrival identity no longer matches.
+    assert_eq!(worker.submit(invalid), Submit::Invalid);
+    assert!(state.lock().unwrap().timing_snapshot(100_000).report()["in_flight"].is_null());
+    worker.submit(job(&state, 2));
+    wait(&state, 1);
+    worker.stop().unwrap();
+    let s = state.lock().unwrap();
+    assert_eq!(s.counters.failures, 1);
+    assert!(s.timing_snapshot(100_000).report()["in_flight"].is_null());
+    assert!(s.timing_snapshot(100_000).report()["latest"].is_null());
+    assert_eq!(
+        s.timing_snapshot(100_000).report()["recent_work"][0]["outcome"],
+        "inference_failed"
+    );
+}
+
+#[test]
+fn completed_work_timing_ring_discards_the_oldest_metadata() {
+    let (state, _, _) = setup();
+    let worker = Worker::start(state.clone(), |_| Ok(vec![])).unwrap();
+    for sequence in 1..=10 {
+        worker.submit(job(&state, sequence));
+        wait(&state, sequence);
+    }
+    worker.stop().unwrap();
+    let snapshot = state.lock().unwrap().timing_snapshot(100_000).report();
+    let history = snapshot["recent_work"].as_array().unwrap();
+    assert_eq!(history.len(), 8);
+    assert_eq!(history[0]["sequence"], 3);
+    assert_eq!(history[7]["sequence"], 10);
+}
+
+#[test]
 fn clock_restart_fences_inflight_work_without_ack_or_generation_churn() {
     let (state, clock, time) = setup();
     {

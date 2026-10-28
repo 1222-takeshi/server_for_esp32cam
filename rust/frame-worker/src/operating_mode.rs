@@ -151,6 +151,12 @@ impl OperatingMode {
     pub fn tracking_hold_started(&self) -> Option<u64> {
         self.tracking_hold_started
     }
+    pub fn tracking_hold_events(&self) -> u64 {
+        self.tracking_hold_events
+    }
+    pub fn tracking_hold_reason(&self) -> Option<&'static str> {
+        self.tracking_hold_started.and(self.reason)
+    }
     pub fn last_tracking_hold(&self) -> Option<(u64, u64)> {
         self.last_tracking_hold
     }

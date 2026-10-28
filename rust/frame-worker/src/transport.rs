@@ -62,7 +62,7 @@ impl Auth {
 }
 
 /// Bounded metadata only. Wall time is for packet correlation, never a safety clock.
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct IoSample {
     pub kind: &'static str,
     pub status: &'static str,

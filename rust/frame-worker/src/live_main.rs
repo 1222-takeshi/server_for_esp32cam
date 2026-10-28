@@ -301,7 +301,7 @@ fn execute() -> Result<bool> {
     } else {
         receiver
     };
-    let outcome = receiver.run(&mut socket, |s, now| {
+    let mut outcome = receiver.run(&mut socket, |s, now| {
         if continuous {
             return continuous_poll(s, &mut trial, &beats, &mut cached, || clock(), wall_ms);
         }
@@ -311,6 +311,7 @@ fn execute() -> Result<bool> {
     let usage = replay::usage();
     worker.stop().map_err(|_| "worker failed")?;
     let s = state.lock().map_err(|_| "state unavailable")?;
+    outcome.stats.finish_diagnostics(&s);
     let measurement = trial.evaluate(s.samples());
     let passed = outcome.reason == "completed" && measurement.is_ok();
     let measurement_error = measurement.as_ref().err().copied();
@@ -353,6 +354,7 @@ fn execute() -> Result<bool> {
         })
         .collect();
     let receiver_report = json!({"messages":outcome.stats.messages,"frames":outcome.stats.frames,"admitted":outcome.stats.admitted,"dropped":outcome.stats.dropped,
+            "hold_diagnostics":outcome.stats.hold_diagnostics.report(),"hold_diagnostics_lost":outcome.stats.hold_diagnostics_lost,
             "clock_restarts":outcome.stats.clock_restarts,"retired_pongs":outcome.stats.retired_pongs,"recent_clock_restarts":outcome.stats.recent_clock_restarts,
             "overwritten":outcome.stats.overwritten,"queue_busy":outcome.stats.queue_busy,"rejected_ack":outcome.stats.rejected_ack,
             "first_device":outcome.stats.first_device,"last_device":outcome.stats.last_device,
