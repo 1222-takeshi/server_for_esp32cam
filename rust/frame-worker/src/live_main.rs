@@ -13,7 +13,7 @@ use esp32cam_frame_worker::{
 use serde_json::{Value, json};
 use std::{
     io::{self, BufRead, Read, Write},
-    net::{SocketAddr, TcpListener},
+    net::SocketAddr,
     path::Path,
     sync::{Arc, Mutex},
     thread,
@@ -92,6 +92,17 @@ fn quick_ack(
     let enabled = adaptive_reserve(setting)?;
     if enabled && (!continuous || !cfg!(target_os = "linux")) {
         return Err("quick ACK requires Linux continuous policy".into());
+    }
+    Ok(enabled)
+}
+fn small_mss(
+    setting: std::result::Result<String, std::env::VarError>,
+    continuous: bool,
+    quick_ack: bool,
+) -> Result<bool> {
+    let enabled = adaptive_reserve(setting)?;
+    if enabled && (!continuous || quick_ack || !cfg!(target_os = "linux")) {
+        return Err("small MSS requires Linux continuous policy without quick ACK".into());
     }
     Ok(enabled)
 }
@@ -235,6 +246,11 @@ fn execute() -> Result<bool> {
     let auth = Auth::new(camera, selected.as_bytes())?;
     let raw = raw_clock(std::env::var("ESP32CAM_RUST_TRIAL_RAW_CLOCK"), continuous)?;
     let quick_ack = quick_ack(std::env::var("ESP32CAM_RUST_TRIAL_QUICK_ACK"), continuous)?;
+    let small_mss = small_mss(
+        std::env::var("ESP32CAM_RUST_TRIAL_SMALL_MSS"),
+        continuous,
+        quick_ack,
+    )?;
     let host_source = HostClock::new(raw)?;
     let host_begin = host_source.observations()?;
     let selected_source = host_source.clone();
@@ -278,7 +294,7 @@ fn execute() -> Result<bool> {
         },
         adaptive,
     )?;
-    let listener = TcpListener::bind(address)?;
+    let listener = transport::bind_listener(address, small_mss)?;
     listener.set_nonblocking(true)?;
     let begun = clock();
     let mut rejected = 0;
@@ -307,6 +323,15 @@ fn execute() -> Result<bool> {
             }
             Err(e) => return Err(e.into()),
         }
+    };
+    let accepted_tcp_maxseg = if small_mss {
+        let value = socket.tcp_maxseg()?;
+        if value == 0 || value > 512 {
+            return Err("unexpected accepted MSS".into());
+        }
+        Some(value)
+    } else {
+        None
     };
     let mut trial = if continuous {
         Trial::new_continuous(boot, duration_us, inject_hold)
@@ -389,7 +414,7 @@ fn execute() -> Result<bool> {
             "max_receive_call_us":outcome.stats.max_receive_call_us,"max_control_send_us":outcome.stats.max_control_send_us,
             "max_admission_guard_us":outcome.stats.max_admission_guard_us,"recent_receipts":receipts,"recent_rejections":rejections});
     let host_end = host_source.observations()?;
-    let report = json!({"tcp_quick_ack":quick_ack,"host_clock_source":host_source.name(),"host_clock_epoch_ns":host_source.epoch_ns(),
+    let report = json!({"tcp_quick_ack":quick_ack,"tcp_maxseg_requested":small_mss.then_some(512),"tcp_maxseg_accepted":accepted_tcp_maxseg,"host_clock_source":host_source.name(),"host_clock_epoch_ns":host_source.epoch_ns(),
         "host_clock_witness":{"fields":["monotonic_low_ns","monotonic_high_ns","raw_low_ns","raw_high_ns"],"begin":host_begin,"end":host_end},"schema":1,"live_validation_only":true,"physical_motor_control":false,"global_acceptance":false,
         "adaptive_inference_reserve":adaptive,"finite_live_gate_passed":passed && !continuous,
         "continuous_tracking_policy":continuous,"continuous_tracking_gate_passed":passed && continuous,
@@ -590,6 +615,30 @@ mod tests {
             assert!(quick_ack(Ok(value.into()), true).is_err());
         }
         assert!(quick_ack(Err(std::env::VarError::NotUnicode("bad".into())), true).is_err());
+    }
+    #[test]
+    fn small_mss_requires_explicit_linux_continuous_without_quick_ack() {
+        assert!(!small_mss(Err(std::env::VarError::NotPresent), false, true).unwrap());
+        assert!(!small_mss(Ok("0".into()), false, true).unwrap());
+        assert!(small_mss(Ok("1".into()), false, false).is_err());
+        assert!(small_mss(Ok("1".into()), true, true).is_err());
+        let enabled = small_mss(Ok("1".into()), true, false);
+        if cfg!(target_os = "linux") {
+            assert!(enabled.unwrap());
+        } else {
+            assert!(enabled.is_err());
+        }
+        for value in ["", "true", "512", "01", " 1", "2"] {
+            assert!(small_mss(Ok(value.into()), true, false).is_err());
+        }
+        assert!(
+            small_mss(
+                Err(std::env::VarError::NotUnicode("bad".into())),
+                true,
+                false
+            )
+            .is_err()
+        );
     }
     #[test]
     fn adaptive_policy_is_explicit_and_invalid_values_fail() {
