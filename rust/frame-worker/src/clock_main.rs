@@ -8,7 +8,6 @@ mod linux {
         control::{self, Control},
         transport::{self, Auth, Connection, Message},
     };
-    use rustix::time::{ClockId, clock_gettime};
     use serde_json::{Value, json};
     use std::{
         net::{SocketAddr, TcpListener},
@@ -16,22 +15,11 @@ mod linux {
         time::{Duration, Instant},
     };
 
-    fn ns(id: ClockId) -> Result<u64> {
-        let t = clock_gettime(id);
-        u64::try_from(t.tv_sec)
-            .ok()
-            .and_then(|s| s.checked_mul(1_000_000_000))
-            .and_then(|n| u64::try_from(t.tv_nsec).ok().and_then(|v| n.checked_add(v)))
-            .ok_or("clock_range")
-    }
     fn stamp() -> Result<Stamp> {
-        let mono_low = ns(ClockId::Monotonic)?;
-        let raw_low = ns(ClockId::MonotonicRaw)?;
-        let raw_high = ns(ClockId::MonotonicRaw)?;
-        let mono_high = ns(ClockId::Monotonic)?;
+        let [ml, mh, rl, rh] = esp32cam_frame_worker::host_clock::snapshot()?;
         Ok(Stamp {
-            mono: [mono_low, mono_high],
-            raw: [raw_low, raw_high],
+            mono: [ml, mh],
+            raw: [rl, rh],
         })
     }
     pub fn execute() -> Result<Value> {

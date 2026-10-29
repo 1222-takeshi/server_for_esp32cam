@@ -12,8 +12,8 @@ required-features = ["jpeg"]
 
 [features]
 jpeg = ["dep:turbojpeg"]
-transport = ["dep:tungstenite", "dep:subtle", "dep:getrandom"]
-clock-probe = ["transport", "dep:rustix"]
+transport = ["dep:tungstenite", "dep:subtle", "dep:getrandom", "dep:rustix"]
+clock-probe = ["transport"]
 
 [dependencies]
 ort = { version = "=2.0.0-rc.11", default-features = false, features = ["std", "load-dynamic"] }
