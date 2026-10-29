@@ -334,3 +334,12 @@ Linux の有限 continuous 試験で `ESP32CAM_RUST_TRIAL_SMALL_MSS=1` を指定
 接続後のローカルsocket値を残す（通常はnull）。後者は相手の実packet長を証明するものではない。
 画像byte・推論・保護条件は維持するが、packet数とCPU負荷は増え得るため実機で比較する。
 受信停止の原因や改善は未証明で、既定有効化や継続運用の合格を意味しない。
+
+Linux有限continuous試験だけで `ESP32CAM_RUST_TRIAL_ISOLATE_IO=1` を指定すると、
+monitor/ORT/Workerの生成前に現在threadをCPU1〜3へ制限し、Worker生成後・listen前に
+main I/O threadだけCPU0へ移す。生成済みの子threadは1〜3を保持する。3推論threadと
+モデル・保護条件は維持し、既定ではaffinityを読み書きしない。CPU0〜3が許可されていない、
+設定失敗、readback不一致、非Linux/非continuousは拒否。reportは `cpu_affinity_policy` を記録する。
+OS全体のaffinityやgovernorは変更しない。I/O threadから後で生成されるthreadはCPU0を継承し得るため、
+実機guardianでmain TID=PIDは[0]、それ以外の全current/new TIDは[1,2,3]を上限付きで継続確認する。
+CPU0のIRQ競合や性能効果は未確定で、有限試験の候補として扱う。
