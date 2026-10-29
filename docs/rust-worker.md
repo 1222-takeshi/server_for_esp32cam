@@ -317,3 +317,12 @@ consistent with 200ppm for both sources; it did not reproduce the earlier
 inconsistency or establish NTP as its cause. RAW is a bounded follow-up candidate,
 not a proven improvement or a default rollout. Stable 5Hz still requires the
 predeclared 600s → full restoration → 3600s acceptance.
+
+Linux の有限 continuous 試験だけで `ESP32CAM_RUST_TRIAL_QUICK_ACK=1` を指定すると、
+ソケット接続時と positive read のたびに `TCP_QUICKACK` を再設定する。通常は無効。
+Linux以外、continuous以外、不正値、ソケット設定失敗は拒否する。レポートの
+`tcp_quick_ack` に設定を記録する。TCP ACK は画像の採用・推論完了・モーター許可を
+意味せず、既存の500ms、時計、generation/ACK、復帰条件は変えない。
+部分画像の受信停止に対する実験候補であり、原因や実機での改善は未確認。
+[Linux tcp(7)](https://man7.org/linux/man-pages/man7/tcp.7.html) にあるとおり
+QUICKACK は一時的な設定なので、接続時の設定だけでは継続しない。

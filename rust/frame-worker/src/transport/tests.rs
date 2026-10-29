@@ -106,6 +106,7 @@ fn handshake_byte_and_absolute_deadline_budgets() {
             deadline: Some(Instant::now() + Duration::from_millis(30)),
             remaining: Some(8),
             write_failed: false,
+            quick_ack: false,
             trace: VecDeque::with_capacity(32),
         };
         let start = Instant::now();
@@ -215,6 +216,7 @@ fn write_deadline_failure_is_fatal_instead_of_an_idle_read() {
         deadline: Some(Instant::now()),
         remaining: None,
         write_failed: false,
+        quick_ack: false,
         trace: VecDeque::with_capacity(32),
     };
     assert_eq!(
@@ -268,4 +270,53 @@ fn io_trace_has_a_fixed_capacity_and_never_keeps_payloads() {
     );
     let trace = format!("{:?}", server.io_trace());
     assert!(!trace.contains("private-payload") && !trace.contains("test-key"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn quick_ack_rearms_on_partial_reads_and_keeps_eof_and_timeout() {
+    use rustix::net::sockopt::{set_tcp_quickack, tcp_quickack};
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let socket = listener.accept().unwrap().0;
+    let mut stream = BoundedStream {
+        socket,
+        deadline: None,
+        remaining: None,
+        write_failed: false,
+        quick_ack: true,
+        trace: VecDeque::with_capacity(32),
+    };
+    peer.write_all(b"abc").unwrap();
+    for expected in b"abc" {
+        // Leave bytes pending in the receive queue and explicitly disable the
+        // transient option to prove that each application read re-arms it.
+        set_tcp_quickack(&stream.socket, false).unwrap();
+        let mut byte = [0];
+        assert_eq!(stream.read(&mut byte).unwrap(), 1);
+        assert_eq!(byte[0], *expected);
+        assert!(tcp_quickack(&stream.socket).unwrap());
+    }
+    stream.deadline = Some(Instant::now() + Duration::from_millis(20));
+    assert!(
+        matches!(stream.read(&mut [0]), Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut))
+    );
+    assert_eq!(stream.trace.back().unwrap().status, "timeout");
+    peer.shutdown(Shutdown::Write).unwrap();
+    stream.deadline = Some(Instant::now() + Duration::from_secs(1));
+    assert_eq!(stream.read(&mut [0]).unwrap(), 0);
+    assert_eq!(stream.trace.back().unwrap().status, "eof");
+}
+
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn quick_ack_fails_before_handshake_on_unsupported_platforms() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let _peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let socket = listener.accept().unwrap().0;
+    let error =
+        Connection::accept_with_quick_ack(socket, &Auth::new("cam-1", b"key").unwrap(), true)
+            .err()
+            .unwrap();
+    assert_eq!(error.kind(), io::ErrorKind::Unsupported);
 }
