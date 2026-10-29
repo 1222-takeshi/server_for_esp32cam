@@ -106,6 +106,16 @@ fn small_mss(
     }
     Ok(enabled)
 }
+fn isolate_io(
+    setting: std::result::Result<String, std::env::VarError>,
+    continuous: bool,
+) -> Result<bool> {
+    let enabled = adaptive_reserve(setting)?;
+    if enabled && (!continuous || !cfg!(target_os = "linux")) {
+        return Err("CPU isolation requires Linux continuous policy".into());
+    }
+    Ok(enabled)
+}
 fn monitor(clock: Clock, nonce: String) -> Arc<Mutex<Beat>> {
     let beat = Arc::new(Mutex::new(Beat::default()));
     let shared = beat.clone();
@@ -251,6 +261,8 @@ fn execute() -> Result<bool> {
         continuous,
         quick_ack,
     )?;
+    let isolate_io = isolate_io(std::env::var("ESP32CAM_RUST_TRIAL_ISOLATE_IO"), continuous)?;
+    let affinity = esp32cam_frame_worker::cpu_affinity::CpuIsolation::prepare(isolate_io)?;
     let host_source = HostClock::new(raw)?;
     let host_begin = host_source.observations()?;
     let selected_source = host_source.clone();
@@ -294,6 +306,7 @@ fn execute() -> Result<bool> {
         },
         adaptive,
     )?;
+    affinity.pin_io()?; // Existing monitor/ORT/Worker children retain CPU1..3.
     let listener = transport::bind_listener(address, small_mss)?;
     listener.set_nonblocking(true)?;
     let begun = clock();
@@ -414,7 +427,7 @@ fn execute() -> Result<bool> {
             "max_receive_call_us":outcome.stats.max_receive_call_us,"max_control_send_us":outcome.stats.max_control_send_us,
             "max_admission_guard_us":outcome.stats.max_admission_guard_us,"recent_receipts":receipts,"recent_rejections":rejections});
     let host_end = host_source.observations()?;
-    let report = json!({"tcp_quick_ack":quick_ack,"tcp_maxseg_requested":small_mss.then_some(512),"tcp_maxseg_accepted":accepted_tcp_maxseg,"host_clock_source":host_source.name(),"host_clock_epoch_ns":host_source.epoch_ns(),
+    let report = json!({"cpu_affinity_policy":affinity.name(),"tcp_quick_ack":quick_ack,"tcp_maxseg_requested":small_mss.then_some(512),"tcp_maxseg_accepted":accepted_tcp_maxseg,"host_clock_source":host_source.name(),"host_clock_epoch_ns":host_source.epoch_ns(),
         "host_clock_witness":{"fields":["monotonic_low_ns","monotonic_high_ns","raw_low_ns","raw_high_ns"],"begin":host_begin,"end":host_end},"schema":1,"live_validation_only":true,"physical_motor_control":false,"global_acceptance":false,
         "adaptive_inference_reserve":adaptive,"finite_live_gate_passed":passed && !continuous,
         "continuous_tracking_policy":continuous,"continuous_tracking_gate_passed":passed && continuous,
@@ -639,6 +652,22 @@ mod tests {
             )
             .is_err()
         );
+    }
+    #[test]
+    fn io_isolation_is_explicit_linux_continuous_only() {
+        assert!(!isolate_io(Err(std::env::VarError::NotPresent), false).unwrap());
+        assert!(!isolate_io(Ok("0".into()), false).unwrap());
+        assert!(isolate_io(Ok("1".into()), false).is_err());
+        let enabled = isolate_io(Ok("1".into()), true);
+        if cfg!(target_os = "linux") {
+            assert!(enabled.unwrap());
+        } else {
+            assert!(enabled.is_err());
+        }
+        for value in ["", "true", "01", " 1", "2"] {
+            assert!(isolate_io(Ok(value.into()), true).is_err());
+        }
+        assert!(isolate_io(Err(std::env::VarError::NotUnicode("bad".into())), true).is_err());
     }
     #[test]
     fn adaptive_policy_is_explicit_and_invalid_values_fail() {

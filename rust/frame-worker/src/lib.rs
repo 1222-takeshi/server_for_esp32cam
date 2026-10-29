@@ -10,6 +10,8 @@ pub mod clock;
 #[cfg(feature = "clock-probe")]
 pub mod clock_probe;
 pub mod control;
+#[cfg(feature = "transport")]
+pub mod cpu_affinity;
 pub mod detector;
 #[cfg(feature = "transport")]
 pub mod host_clock;
