@@ -85,6 +85,16 @@ fn raw_clock(
     }
     Ok(raw)
 }
+fn quick_ack(
+    setting: std::result::Result<String, std::env::VarError>,
+    continuous: bool,
+) -> Result<bool> {
+    let enabled = adaptive_reserve(setting)?;
+    if enabled && (!continuous || !cfg!(target_os = "linux")) {
+        return Err("quick ACK requires Linux continuous policy".into());
+    }
+    Ok(enabled)
+}
 fn monitor(clock: Clock, nonce: String) -> Arc<Mutex<Beat>> {
     let beat = Arc::new(Mutex::new(Beat::default()));
     let shared = beat.clone();
@@ -224,6 +234,7 @@ fn execute() -> Result<bool> {
     )?;
     let auth = Auth::new(camera, selected.as_bytes())?;
     let raw = raw_clock(std::env::var("ESP32CAM_RUST_TRIAL_RAW_CLOCK"), continuous)?;
+    let quick_ack = quick_ack(std::env::var("ESP32CAM_RUST_TRIAL_QUICK_ACK"), continuous)?;
     let host_source = HostClock::new(raw)?;
     let host_begin = host_source.observations()?;
     let selected_source = host_source.clone();
@@ -282,7 +293,7 @@ fn execute() -> Result<bool> {
             return Err("camera connection timeout".into());
         }
         match listener.accept() {
-            Ok((tcp, _)) => match Connection::accept(tcp, &auth) {
+            Ok((tcp, _)) => match Connection::accept_with_quick_ack(tcp, &auth, quick_ack) {
                 Ok(socket) => break socket,
                 Err(_) => {
                     rejected += 1;
@@ -378,7 +389,7 @@ fn execute() -> Result<bool> {
             "max_receive_call_us":outcome.stats.max_receive_call_us,"max_control_send_us":outcome.stats.max_control_send_us,
             "max_admission_guard_us":outcome.stats.max_admission_guard_us,"recent_receipts":receipts,"recent_rejections":rejections});
     let host_end = host_source.observations()?;
-    let report = json!({"host_clock_source":host_source.name(),"host_clock_epoch_ns":host_source.epoch_ns(),
+    let report = json!({"tcp_quick_ack":quick_ack,"host_clock_source":host_source.name(),"host_clock_epoch_ns":host_source.epoch_ns(),
         "host_clock_witness":{"fields":["monotonic_low_ns","monotonic_high_ns","raw_low_ns","raw_high_ns"],"begin":host_begin,"end":host_end},"schema":1,"live_validation_only":true,"physical_motor_control":false,"global_acceptance":false,
         "adaptive_inference_reserve":adaptive,"finite_live_gate_passed":passed && !continuous,
         "continuous_tracking_policy":continuous,"continuous_tracking_gate_passed":passed && continuous,
@@ -563,6 +574,22 @@ mod tests {
         assert!(raw_clock(Ok("1".into()), false).is_err());
         assert!(raw_clock(Ok("1".into()), true).unwrap());
         assert!(raw_clock(Ok("true".into()), true).is_err());
+    }
+    #[test]
+    fn quick_ack_is_explicit_and_linux_continuous_only() {
+        assert!(!quick_ack(Err(std::env::VarError::NotPresent), false).unwrap());
+        assert!(!quick_ack(Ok("0".into()), false).unwrap());
+        assert!(quick_ack(Ok("1".into()), false).is_err());
+        let enabled = quick_ack(Ok("1".into()), true);
+        if cfg!(target_os = "linux") {
+            assert!(enabled.unwrap());
+        } else {
+            assert!(enabled.is_err());
+        }
+        for value in ["", "true", "01", " 1", "2"] {
+            assert!(quick_ack(Ok(value.into()), true).is_err());
+        }
+        assert!(quick_ack(Err(std::env::VarError::NotUnicode("bad".into())), true).is_err());
     }
     #[test]
     fn adaptive_policy_is_explicit_and_invalid_values_fail() {

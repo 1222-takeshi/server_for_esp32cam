@@ -75,6 +75,7 @@ struct BoundedStream {
     deadline: Option<Instant>,
     remaining: Option<usize>,
     write_failed: bool,
+    quick_ack: bool,
     trace: VecDeque<IoSample>,
 }
 impl BoundedStream {
@@ -136,7 +137,27 @@ impl BoundedStream {
         if let Some(remaining) = self.remaining.as_mut() {
             *remaining -= count;
         }
+        // QUICKACK is transient on Linux. Re-arm after every positive read,
+        // including partial WS frames; it does not acknowledge application work.
+        if count > 0 && self.quick_ack {
+            enable_quick_ack(&self.socket)?;
+        }
         Ok(count)
+    }
+}
+
+fn enable_quick_ack(socket: &TcpStream) -> io::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        rustix::net::sockopt::set_tcp_quickack(socket, true).map_err(Into::into)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = socket;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "quick ACK requires Linux",
+        ))
     }
 }
 impl Read for BoundedStream {
@@ -189,12 +210,25 @@ impl Connection {
     // Tungstenite Callback requires its unboxed HTTP ErrorResponse.
     #[allow(clippy::result_large_err)]
     pub fn accept(socket: TcpStream, auth: &Auth) -> io::Result<Self> {
+        Self::accept_with_quick_ack(socket, auth, false)
+    }
+    /// Opt-in Linux experiment. Socket-option failures terminate the connection.
+    #[allow(clippy::result_large_err)]
+    pub fn accept_with_quick_ack(
+        socket: TcpStream,
+        auth: &Auth,
+        quick_ack: bool,
+    ) -> io::Result<Self> {
+        if quick_ack {
+            enable_quick_ack(&socket)?;
+        }
         socket.set_nodelay(true)?;
         let stream = BoundedStream {
             socket,
             deadline: Some(Instant::now() + HANDSHAKE_TIMEOUT),
             remaining: Some(HANDSHAKE_LIMIT),
             write_failed: false,
+            quick_ack,
             trace: VecDeque::with_capacity(32),
         };
         let config = WebSocketConfig::default()
