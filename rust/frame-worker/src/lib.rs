@@ -7,6 +7,8 @@ use std::io::{self, Read};
 use std::sync::Mutex;
 
 pub mod clock;
+#[cfg(feature = "clock-probe")]
+pub mod clock_probe;
 pub mod control;
 pub mod detector;
 #[cfg(feature = "jpeg")]

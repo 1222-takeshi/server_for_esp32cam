@@ -261,3 +261,33 @@ source/configuration separately from the fixed-policy baseline before a trial.
 
 固定/適応予約での10分・1時間指定試験の結果は
 [rust-duration-validation.md](rust-duration-validation.md)を参照してください。
+
+### Bounded dual-clock diagnostic (#603)
+
+`cargo build --locked --features clock-probe --bin frame-clock` adds a Linux-only
+observer. The CLI is `frame-clock ADDRESS CAMERA`; it requires explicit
+`ESP32CAM_RUST_CLOCK_PROBE=120`, a positive `ESP32CAM_RUST_TRIAL_EXPECTED_BOOT`,
+and the selected camera credential in `ESP32CAM_RUST_CLOCK_PROBE_KEY`. Pass the
+credential privately through the finite supervisor, never in argv or logs.
+
+After the authenticated hello it observes for 120 seconds, with one outstanding
+random-nonce ping, a 50ms target interval and a 1s RTT/response limit. Connection
+and hello waits are bounded by 20s and 5s. The last pending exchange may finish
+within its 1s limit. The supervisor must also enforce a 150s process deadline,
+1MiB stdout/64KiB stderr limits, resource monitoring, and original-environment
+restoration on every exit. At least 1000 complete exchanges are required.
+
+Each of at most 4096 records pairs the same Pong with MONOTONIC and MONOTONIC_RAW
+readings. Device time is in microseconds; host brackets are in nanoseconds and
+the report names every field. Send observations precede the write; receive
+observations follow the read. Use the lower pre-send and upper post-receive
+values for conservative offset intervals, not the brackets as wire timestamps.
+Failure reports retain completed exchanges. Numeric stdout is capped at 1MiB.
+
+The observer sends no profile command, performs no inference and saves no images.
+All live/performance acceptance flags remain false. Neither the existing clock,
+200ppm assumption, 500ms protection nor recovery policy changes. RAW removes NTP
+frequency corrections, including calibration; it is not automatically more
+accurate. Compare both against the same device exchanges before selecting a
+future candidate. See [Linux clock semantics](https://man7.org/linux/man-pages/man3/clock_gettime.3.html)
+and [rustix clock_gettime](https://docs.rs/rustix/1.1.5/rustix/time/fn.clock_gettime.html).
