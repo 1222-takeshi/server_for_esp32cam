@@ -291,3 +291,29 @@ frequency corrections, including calibration; it is not automatically more
 accurate. Compare both against the same device exchanges before selecting a
 future candidate. See [Linux clock semantics](https://man7.org/linux/man-pages/man3/clock_gettime.3.html)
 and [rustix clock_gettime](https://docs.rs/rustix/1.1.5/rustix/time/fn.clock_gettime.html).
+
+### Opt-in RAW host clock for finite continuous trials (#605)
+
+The finite supervisor may set `ESP32CAM_RUST_TRIAL_RAW_CLOCK=1` together with
+`ESP32CAM_RUST_TRIAL_AUTO_RECOVERY=1`. Missing/`0` retains `Instant` and adds no
+RAW clock reads. Invalid values, a non-continuous request or an unsupported
+platform fail before loading the model. The production Python clock is unchanged.
+
+One immutable source/epoch supplies all numeric ping timestamps, frame age,
+arrival/worker elapsed time, mode freshness and trial measurements. RAW read or
+range errors stop processing; there is no fallback or mid-trial clock switch.
+Independent socket wait timers retain `Instant`; their durations are not mixed
+with freshness timestamps. UTC supervisor health tickets remain separate too.
+
+Reports state `host_clock_source`, optional `host_clock_epoch_ns`, and a
+`host_clock_witness` containing named MONOTONIC/RAW brackets before/after the
+RAW trial. These bracket the process lifecycle, including model warmup and Eco
+transitions, rather than only the tracking measurement. Default witnesses/epoch are null. Keep this evidence with the raw
+report and verify the selected source before applying the ordinary full gates.
+
+The 200ppm assumption, 500ms protection, 1s RTT, 10s evidence expiry, generation
+ACK and 10s/50-result recovery are unchanged. A 120s paired-clock probe was
+consistent with 200ppm for both sources; it did not reproduce the earlier
+inconsistency or establish NTP as its cause. RAW is a bounded follow-up candidate,
+not a proven improvement or a default rollout. Stable 5Hz still requires the
+predeclared 600s → full restoration → 3600s acceptance.

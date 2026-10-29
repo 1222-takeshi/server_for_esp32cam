@@ -11,6 +11,8 @@ pub mod clock;
 pub mod clock_probe;
 pub mod control;
 pub mod detector;
+#[cfg(feature = "transport")]
+pub mod host_clock;
 #[cfg(feature = "jpeg")]
 pub mod jpeg;
 pub mod operating_mode;

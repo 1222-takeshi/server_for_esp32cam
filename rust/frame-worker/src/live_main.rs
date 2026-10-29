@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 use esp32cam_frame_worker::{
     detector::{self, Detector, Result},
+    host_clock::HostClock,
     jpeg,
     pipeline::{Clock, State, Worker},
     replay,
@@ -16,8 +17,11 @@ use std::{
     path::Path,
     sync::{Arc, Mutex},
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
+
+#[cfg(test)]
+use std::time::Instant;
 
 #[derive(Clone, Copy, Default)]
 struct Beat {
@@ -70,6 +74,16 @@ fn key(camera: &str, global: &str, mapping: &str, shared_id: &str) -> Result<Str
         return Err("shared key identity missing".into());
     }
     Ok(global.into()) // Auth::new validates the bounded printable key.
+}
+fn raw_clock(
+    setting: std::result::Result<String, std::env::VarError>,
+    continuous: bool,
+) -> Result<bool> {
+    let raw = adaptive_reserve(setting)?;
+    if raw && !continuous {
+        return Err("raw clock requires continuous policy".into());
+    }
+    Ok(raw)
 }
 fn monitor(clock: Clock, nonce: String) -> Arc<Mutex<Beat>> {
     let beat = Arc::new(Mutex::new(Beat::default()));
@@ -209,8 +223,11 @@ fn execute() -> Result<bool> {
         &std::env::var("ESP32CAM_SHARED_KEY_DEVICE_ID").unwrap_or_default(),
     )?;
     let auth = Auth::new(camera, selected.as_bytes())?;
-    let epoch = Instant::now();
-    let clock: Clock = Arc::new(move || epoch.elapsed().as_micros() as u64 + 1);
+    let raw = raw_clock(std::env::var("ESP32CAM_RUST_TRIAL_RAW_CLOCK"), continuous)?;
+    let host_source = HostClock::new(raw)?;
+    let host_begin = host_source.observations()?;
+    let selected_source = host_source.clone();
+    let clock: Clock = Arc::new(move || selected_source.now_us().expect("host clock failed"));
     let beats = monitor(clock.clone(), nonce);
     let mut detector = Detector::new(Path::new(&args[1]), Path::new(&args[2]))?;
     let warmup = vec![0.; detector::INPUT_LEN];
@@ -360,7 +377,9 @@ fn execute() -> Result<bool> {
             "first_device":outcome.stats.first_device,"last_device":outcome.stats.last_device,
             "max_receive_call_us":outcome.stats.max_receive_call_us,"max_control_send_us":outcome.stats.max_control_send_us,
             "max_admission_guard_us":outcome.stats.max_admission_guard_us,"recent_receipts":receipts,"recent_rejections":rejections});
-    let report = json!({"schema":1,"live_validation_only":true,"physical_motor_control":false,"global_acceptance":false,
+    let host_end = host_source.observations()?;
+    let report = json!({"host_clock_source":host_source.name(),"host_clock_epoch_ns":host_source.epoch_ns(),
+        "host_clock_witness":{"fields":["monotonic_low_ns","monotonic_high_ns","raw_low_ns","raw_high_ns"],"begin":host_begin,"end":host_end},"schema":1,"live_validation_only":true,"physical_motor_control":false,"global_acceptance":false,
         "adaptive_inference_reserve":adaptive,"finite_live_gate_passed":passed && !continuous,
         "continuous_tracking_policy":continuous,"continuous_tracking_gate_passed":passed && continuous,
         "clock_timeout_recovery_enabled":continuous,
@@ -536,6 +555,14 @@ mod tests {
             s.mode.status().unwrap()["tracking_auto_recovery_pending"],
             true
         );
+    }
+    #[test]
+    fn raw_clock_is_explicit_and_requires_continuous_policy() {
+        assert!(!raw_clock(Err(std::env::VarError::NotPresent), false).unwrap());
+        assert!(!raw_clock(Ok("0".into()), false).unwrap());
+        assert!(raw_clock(Ok("1".into()), false).is_err());
+        assert!(raw_clock(Ok("1".into()), true).unwrap());
+        assert!(raw_clock(Ok("true".into()), true).is_err());
     }
     #[test]
     fn adaptive_policy_is_explicit_and_invalid_values_fail() {
