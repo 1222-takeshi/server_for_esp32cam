@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::VecDeque,
     io::{self, Read, Write},
-    net::{Shutdown, TcpStream},
+    net::{Shutdown, SocketAddr, TcpListener, TcpStream},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use subtle::ConstantTimeEq;
@@ -22,6 +22,51 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(2);
 
 fn invalid() -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, "WebSocket rejected")
+}
+
+/// Experimental MSS is applied before bind/listen, hence before any SYN-ACK.
+/// The default path uses precisely the existing std listener behavior.
+pub fn bind_listener(address: SocketAddr, small_mss: bool) -> io::Result<TcpListener> {
+    if !small_mss {
+        return TcpListener::bind(address);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use socket2::{Domain, Protocol, Socket, Type};
+        let socket = Socket::new(
+            Domain::for_address(address),
+            Type::STREAM,
+            Some(Protocol::TCP),
+        )?;
+        socket.set_tcp_mss(512)?;
+        // Before a connection exists Linux may return its initial mss_cache,
+        // not this user_mss. Verify the connected socket and peer in tests.
+        socket.set_reuse_address(true)?;
+        socket.bind(&address.into())?;
+        socket.listen(128)?;
+        Ok(socket.into())
+    }
+    #[cfg(not(target_os = "linux"))]
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "small MSS requires Linux",
+    ))
+}
+
+/// The accepted socket's TCP_MAXSEG value, not proof of remote packet sizes.
+pub fn tcp_maxseg(socket: &TcpStream) -> io::Result<u32> {
+    #[cfg(target_os = "linux")]
+    {
+        socket2::SockRef::from(socket).tcp_mss()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = socket;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "MSS observation requires Linux",
+        ))
+    }
 }
 
 /// No Debug implementation: credentials and request headers must never be logged.
@@ -260,6 +305,9 @@ impl Connection {
             .socket
             .set_read_timeout(Some(Duration::from_millis(50)))?;
         Ok(Self(socket))
+    }
+    pub fn tcp_maxseg(&self) -> io::Result<u32> {
+        tcp_maxseg(&self.0.get_ref().socket)
     }
     pub fn io_trace(&self) -> &VecDeque<IoSample> {
         &self.0.get_ref().trace

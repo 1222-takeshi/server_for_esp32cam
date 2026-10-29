@@ -9,7 +9,17 @@ fn peer(
     std::result::Result<WebSocket<TcpStream>, ()>,
     thread::JoinHandle<io::Result<Connection>>,
 ) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    peer_with_mss(path, keys, false)
+}
+fn peer_with_mss(
+    path: &str,
+    keys: &[&str],
+    small_mss: bool,
+) -> (
+    std::result::Result<WebSocket<TcpStream>, ()>,
+    thread::JoinHandle<io::Result<Connection>>,
+) {
+    let listener = bind_listener("127.0.0.1:0".parse().unwrap(), small_mss).unwrap();
     let address = listener.local_addr().unwrap();
     let owner = thread::spawn(move || {
         Connection::accept(listener.accept()?.0, &Auth::new("cam-1", b"test-key")?)
@@ -319,4 +329,57 @@ fn quick_ack_fails_before_handshake_on_unsupported_platforms() {
             .err()
             .unwrap();
     assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn prelisten_mss_is_negotiated_by_peer_and_preserves_ws_payload() {
+    let (client, owner) = peer_with_mss("/ws/cameras/cam-1/live", &["test-key"], true);
+    let mut client = client.unwrap();
+    let mut server = owner.join().unwrap().unwrap();
+    for mss in [
+        tcp_maxseg(client.get_ref()).unwrap(),
+        server.tcp_maxseg().unwrap(),
+    ] {
+        assert!((1..=512).contains(&mss));
+    }
+    // Concurrent receive prevents a large payload from depending on socket
+    // send-buffer capacity; exact equality checks the complete masked message.
+    let payload: Vec<u8> = (0..MAX_JPEG + 48).map(|i| (i % 251) as u8).collect();
+    let expected = payload.clone();
+    let receive = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            assert!(Instant::now() < deadline);
+            match server.receive().unwrap() {
+                Some(Message::Binary(data)) => {
+                    assert_eq!(data.as_ref(), expected);
+                    return;
+                }
+                None => continue,
+                other => panic!("unexpected message {other:?}"),
+            }
+        }
+    });
+    client.send(Message::Binary(payload.into())).unwrap();
+    receive.join().unwrap();
+    // Authentication and limits apply equally to the opt-in listener.
+    let (bad, owner) = peer_with_mss("/ws/cameras/cam-1/live", &["wrong-key"], true);
+    assert!(bad.is_err());
+    assert!(owner.join().unwrap().is_err());
+}
+
+#[test]
+fn listener_port_conflict_is_an_error() {
+    let first = bind_listener("127.0.0.1:0".parse().unwrap(), false).unwrap();
+    assert!(bind_listener(first.local_addr().unwrap(), false).is_err());
+    #[cfg(target_os = "linux")]
+    assert!(bind_listener(first.local_addr().unwrap(), true).is_err());
+    #[cfg(not(target_os = "linux"))]
+    assert_eq!(
+        bind_listener("127.0.0.1:0".parse().unwrap(), true)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::Unsupported
+    );
 }

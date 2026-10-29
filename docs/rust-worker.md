@@ -326,3 +326,11 @@ Linux以外、continuous以外、不正値、ソケット設定失敗は拒否�
 部分画像の受信停止に対する実験候補であり、原因や実機での改善は未確認。
 [Linux tcp(7)](https://man7.org/linux/man-pages/man7/tcp.7.html) にあるとおり
 QUICKACK は一時的な設定なので、接続時の設定だけでは継続しない。
+
+Linux の有限 continuous 試験で `ESP32CAM_RUST_TRIAL_SMALL_MSS=1` を指定すると、
+新しいlistenerの `TCP_MAXSEG=512` をbind/listen前に設定し、SYN-ACKで小さいMSSを通知する。
+既定のlistenerとQUICKACKは変更せず、両opt-inの同時指定、不正値、非Linux/非continuous、
+設定失敗は拒否する。reportの `tcp_maxseg_requested` / `tcp_maxseg_accepted` に設定値と
+接続後のローカルsocket値を残す（通常はnull）。後者は相手の実packet長を証明するものではない。
+画像byte・推論・保護条件は維持するが、packet数とCPU負荷は増え得るため実機で比較する。
+受信停止の原因や改善は未証明で、既定有効化や継続運用の合格を意味しない。
