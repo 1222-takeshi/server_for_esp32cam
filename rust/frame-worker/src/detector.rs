@@ -13,6 +13,30 @@ pub const RUNTIME_SHA: &str = "ab8c4363e06ac80b3d1279ea55ebea44e906c5b131ba783ff
 pub const INPUT_LEN: usize = 3 * 320 * 320;
 pub const OUTPUT_LEN: usize = 84 * 2100;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TaskPartition {
+    #[default]
+    Static,
+    Dynamic4,
+}
+impl TaskPartition {
+    /// Explicit experiment setting; library defaults never read the environment.
+    pub fn parse(value: std::result::Result<String, std::env::VarError>) -> Result<Self> {
+        match value {
+            Err(std::env::VarError::NotPresent) => Ok(Self::Static),
+            Ok(value) if value == "0" => Ok(Self::Static),
+            Ok(value) if value == "1" && cfg!(target_os = "linux") => Ok(Self::Dynamic4),
+            _ => Err("invalid dynamic task partition setting".into()),
+        }
+    }
+    pub fn base(self) -> Option<u32> {
+        match self {
+            Self::Static => None,
+            Self::Dynamic4 => Some(4),
+        }
+    }
+}
+
 fn geometry(height: usize) -> Result<usize> {
     if ![240, 320].contains(&height) {
         return Err("unsupported image geometry".into());
@@ -162,6 +186,14 @@ pub struct Detector {
 
 impl Detector {
     pub fn new(model: &Path, runtime: &Path) -> Result<Self> {
+        Self::new_with_task_partition(model, runtime, TaskPartition::Static)
+    }
+
+    pub fn new_with_task_partition(
+        model: &Path,
+        runtime: &Path,
+        partition: TaskPartition,
+    ) -> Result<Self> {
         let runtime = runtime.canonicalize()?;
         verify_runtime(&runtime)?;
         let mut bytes = Vec::new();
@@ -172,14 +204,19 @@ impl Detector {
             return Err("model hash mismatch".into());
         }
         ort::init_from(&runtime)?.commit();
-        let session = Session::builder()?
+        let builder = Session::builder()?
             .with_intra_threads(3)?
             .with_inter_threads(1)?
             .with_parallel_execution(false)?
             .with_intra_op_spinning(false)?
             .with_inter_op_spinning(false)?
-            .with_optimization_level(GraphOptimizationLevel::All)?
-            .commit_from_memory(&bytes)?;
+            .with_optimization_level(GraphOptimizationLevel::All)?;
+        let builder = if partition == TaskPartition::Dynamic4 {
+            builder.with_config_entry("session.dynamic_block_base", "4")?
+        } else {
+            builder
+        };
+        let session = builder.commit_from_memory(&bytes)?;
         if session.inputs().len() != 1 || session.outputs().len() != 1 {
             return Err("invalid model IO".into());
         }
