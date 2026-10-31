@@ -116,6 +116,16 @@ fn isolate_io(
     }
     Ok(enabled)
 }
+fn task_partition(
+    setting: std::result::Result<String, std::env::VarError>,
+    continuous: bool,
+) -> Result<detector::TaskPartition> {
+    let partition = detector::TaskPartition::parse(setting)?;
+    if partition.base().is_some() && !continuous {
+        return Err("dynamic tasks require continuous policy".into());
+    }
+    Ok(partition)
+}
 fn monitor(clock: Clock, nonce: String) -> Arc<Mutex<Beat>> {
     let beat = Arc::new(Mutex::new(Beat::default()));
     let shared = beat.clone();
@@ -262,13 +272,18 @@ fn execute() -> Result<bool> {
         quick_ack,
     )?;
     let isolate_io = isolate_io(std::env::var("ESP32CAM_RUST_TRIAL_ISOLATE_IO"), continuous)?;
+    let partition = task_partition(
+        std::env::var("ESP32CAM_RUST_TRIAL_DYNAMIC_BLOCKS"),
+        continuous,
+    )?;
     let affinity = esp32cam_frame_worker::cpu_affinity::CpuIsolation::prepare(isolate_io)?;
     let host_source = HostClock::new(raw)?;
     let host_begin = host_source.observations()?;
     let selected_source = host_source.clone();
     let clock: Clock = Arc::new(move || selected_source.now_us().expect("host clock failed"));
     let beats = monitor(clock.clone(), nonce);
-    let mut detector = Detector::new(Path::new(&args[1]), Path::new(&args[2]))?;
+    let mut detector =
+        Detector::new_with_task_partition(Path::new(&args[1]), Path::new(&args[2]), partition)?;
     let warmup = vec![0.; detector::INPUT_LEN];
     for _ in 0..5 {
         detector.infer(&warmup)?;
@@ -427,7 +442,7 @@ fn execute() -> Result<bool> {
             "max_receive_call_us":outcome.stats.max_receive_call_us,"max_control_send_us":outcome.stats.max_control_send_us,
             "max_admission_guard_us":outcome.stats.max_admission_guard_us,"recent_receipts":receipts,"recent_rejections":rejections});
     let host_end = host_source.observations()?;
-    let report = json!({"cpu_affinity_policy":affinity.name(),"tcp_quick_ack":quick_ack,"tcp_maxseg_requested":small_mss.then_some(512),"tcp_maxseg_accepted":accepted_tcp_maxseg,"host_clock_source":host_source.name(),"host_clock_epoch_ns":host_source.epoch_ns(),
+    let report = json!({"dynamic_block_base":partition.base(),"cpu_affinity_policy":affinity.name(),"tcp_quick_ack":quick_ack,"tcp_maxseg_requested":small_mss.then_some(512),"tcp_maxseg_accepted":accepted_tcp_maxseg,"host_clock_source":host_source.name(),"host_clock_epoch_ns":host_source.epoch_ns(),
         "host_clock_witness":{"fields":["monotonic_low_ns","monotonic_high_ns","raw_low_ns","raw_high_ns"],"begin":host_begin,"end":host_end},"schema":1,"live_validation_only":true,"physical_motor_control":false,"global_acceptance":false,
         "adaptive_inference_reserve":adaptive,"finite_live_gate_passed":passed && !continuous,
         "continuous_tracking_policy":continuous,"continuous_tracking_gate_passed":passed && continuous,
@@ -464,6 +479,30 @@ fn main() {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    #[test]
+    fn dynamic_tasks_require_explicit_linux_continuous_policy() {
+        for continuous in [false, true] {
+            assert_eq!(
+                task_partition(Err(std::env::VarError::NotPresent), continuous)
+                    .unwrap()
+                    .base(),
+                None
+            );
+            assert_eq!(
+                task_partition(Ok("0".into()), continuous).unwrap().base(),
+                None
+            );
+            assert!(task_partition(Ok("4".into()), continuous).is_err());
+        }
+        assert!(task_partition(Ok("1".into()), false).is_err());
+        let enabled = task_partition(Ok("1".into()), true);
+        if cfg!(target_os = "linux") {
+            assert_eq!(enabled.unwrap().base(), Some(4));
+        } else {
+            assert!(enabled.is_err());
+        }
+    }
 
     fn held_latest(time: &Arc<AtomicU64>, clock: Clock) -> Arc<Mutex<State>> {
         use esp32cam_frame_worker::{

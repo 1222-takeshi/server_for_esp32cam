@@ -1,5 +1,30 @@
 use super::*;
 
+#[test]
+fn task_partition_is_opt_in_strict_and_reports_the_fixed_base() {
+    assert_eq!(TaskPartition::default(), TaskPartition::Static);
+    assert_eq!(
+        TaskPartition::parse(Err(std::env::VarError::NotPresent))
+            .unwrap()
+            .base(),
+        None
+    );
+    assert_eq!(
+        TaskPartition::parse(Ok("0".into())).unwrap(),
+        TaskPartition::Static
+    );
+    let selected = TaskPartition::parse(Ok("1".into()));
+    if cfg!(target_os = "linux") {
+        assert_eq!(selected.unwrap().base(), Some(4));
+    } else {
+        assert!(selected.is_err());
+    }
+    for value in ["", "true", "4", "01", "1 ", "-1", "1\n"] {
+        assert!(TaskPartition::parse(Ok(value.into())).is_err());
+    }
+    assert!(TaskPartition::parse(Err(std::env::VarError::NotUnicode("invalid".into()))).is_err());
+}
+
 fn prediction(raw: &mut [f32], index: usize, class: usize, score: f32, x: f32) {
     for (channel, value) in [x, 160.0, 80.0, 80.0].into_iter().enumerate() {
         raw[channel * 2100 + index] = value;

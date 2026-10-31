@@ -1,6 +1,6 @@
 //! Finite offline experiment worker. It neither listens on a port nor drives motors.
 use esp32cam_frame_worker::{
-    detector::{Detector, Result, postprocess, prepare_rgb},
+    detector::{Detector, Result, TaskPartition, postprocess, prepare_rgb},
     jpeg, replay,
 };
 use serde_json::json;
@@ -15,7 +15,9 @@ fn execute() -> Result<()> {
     if args.len() != 3 {
         return Err("usage: frame-worker MODEL_ONNX ORT_LIBRARY < frames.ecf2".into());
     }
-    let mut detector = Detector::new(Path::new(&args[1]), Path::new(&args[2]))?;
+    let partition = TaskPartition::parse(std::env::var("ESP32CAM_RUST_BENCH_DYNAMIC_BLOCKS"))?;
+    let mut detector =
+        Detector::new_with_task_partition(Path::new(&args[1]), Path::new(&args[2]), partition)?;
     let wall = Instant::now();
     replay::run(&mut io::stdin().lock(), &mut io::stdout().lock(), |frame| {
         let start = Instant::now();
@@ -43,7 +45,7 @@ fn execute() -> Result<()> {
             Sha256::digest(bytemuck::cast_slice::<f32, u8>(&raw))
         );
         Ok(
-            json!({"runtime_build":ort::info(),"input_sha256":input_sha,"raw_sha256":raw_sha,"detections":detections,
+            json!({"dynamic_block_base":partition.base(),"runtime_build":ort::info(),"input_sha256":input_sha,"raw_sha256":raw_sha,"detections":detections,
             "decode_us":decoded.as_micros(),"prepare_us":(prepared-decoded).as_micros(),
             "infer_us":(inferred-prepared).as_micros(),"post_us":(total-inferred).as_micros(),
             "total_us":total.as_micros(),"wall_us":wall.elapsed().as_micros(),"usage":replay::usage()}),

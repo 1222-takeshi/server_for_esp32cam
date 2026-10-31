@@ -343,3 +343,19 @@ main I/O threadだけCPU0へ移す。生成済みの子threadは1〜3を保持�
 OS全体のaffinityやgovernorは変更しない。I/O threadから後で生成されるthreadはCPU0を継承し得るため、
 実機guardianでmain TID=PIDは[0]、それ以外の全current/new TIDは[1,2,3]を上限付きで継続確認する。
 CPU0のIRQ競合や性能効果は未確定で、有限試験の候補として扱う。
+# 有限試験の動的タスク分割
+
+Linuxの有限 `frame-live` continuous試験でのみ、
+`ESP32CAM_RUST_TRIAL_DYNAMIC_BLOCKS=1` によりORTの `session.dynamic_block_base=4` を選択できます。
+最大120入力のオフライン `frame-worker` 比較には `ESP32CAM_RUST_BENCH_DYNAMIC_BLOCKS=1` を使います。
+未指定/`0` は従来の設定で、このconfig entryを追加しません。不正値はモデル読込前に拒否します。
+出力の `dynamic_block_base` は従来ならnull、選択時は4です。
+これは選択した設定値の記録で、ORT内部状態の独立したreadbackではありません。
+
+[ORT公式のばらつき対策](https://onnxruntime.ai/docs/performance/tune-performance/troubleshooting.html#i-am-seeing-high-latency-variance)
+を比較するための設定です。FP32、モデル/runtime、3推論thread、spinning無効、前後処理、
+500ms鮮度・時計・ACK・復帰条件は維持します。既定の `Detector::new()` は設定を変更しません。
+Piで固定入力の生出力・検出結果をgoldenと比較してから実機試験へ進みます。
+反復するオフラインA/Bで、平均・throughput・温度を悪化させず処理時間の裾が改善することも
+OTA前に確認します。比較順序、試行回数、採用基準は計測前の固定planに記録します。
+設定の追加だけでは認識精度や5Hz安定性の成功を意味しません。

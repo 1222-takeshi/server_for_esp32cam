@@ -57,7 +57,21 @@ fn timing_snapshot_clears_failed_work_and_never_starts_invalid_work() {
     invalid.frame.sequence = 2; // Frozen arrival identity no longer matches.
     assert_eq!(worker.submit(invalid), Submit::Invalid);
     assert!(state.lock().unwrap().timing_snapshot(100_000).report()["in_flight"].is_null());
-    worker.submit(job(&state, 2));
+    // A nonblocking producer can be Busy while the worker takes the slot.
+    let held = worker.queue.0.lock().unwrap();
+    assert_eq!(worker.submit(job(&state, 2)), Submit::Busy);
+    drop(held);
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        match worker.submit(job(&state, 2)) {
+            Submit::Queued => break,
+            Submit::Busy => {
+                assert!(std::time::Instant::now() < deadline);
+                thread::yield_now();
+            }
+            other => panic!("unexpected submission: {other:?}"),
+        }
+    }
     wait(&state, 1);
     worker.stop().unwrap();
     let s = state.lock().unwrap();
