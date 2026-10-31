@@ -2,6 +2,12 @@
 
 #include "high_rate_frame.h"
 
+#ifndef OPERATING_TRACKING_INTERVAL_MS
+#define OPERATING_TRACKING_INTERVAL_MS 190
+#endif
+static_assert(OPERATING_TRACKING_INTERVAL_MS == 100 || OPERATING_TRACKING_INTERVAL_MS == 190,
+              "OPERATING_TRACKING_INTERVAL_MS must be 100 or 190");
+
 namespace operating {
 constexpr size_t kHeaderSize = 48;
 constexpr uint64_t kMaxGeneration = (1ULL << 53) - 1;  // Exact JSON/UI integer.
@@ -29,7 +35,7 @@ struct Profile {
     return true;
   }
 
-  uint32_t intervalMs() const { return tracking ? 190 : 5000; }
+  uint32_t intervalMs() const { return tracking ? OPERATING_TRACKING_INTERVAL_MS : 5000; }
   bool accepts(uint64_t capturedUs) const { return generation != 0 && capturedUs > appliedUs; }
 };
 

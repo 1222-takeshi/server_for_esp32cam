@@ -701,3 +701,16 @@ accuracy and sustained capture rate still require their separate Pi validation.
 
 References: [RFC 6455 §5.3](https://www.rfc-editor.org/rfc/rfc6455.html#section-5.3),
 [ESP-IDF RNG](https://docs.espressif.com/projects/esp-idf/en/v4.4/esp32/api-reference/system/random.html).
+# 有限Rust試験用の100ms tracking撮影
+
+`pio run -e esp32cam_operating_profiles_100ms` は、tracking撮影だけを100ms間隔にする
+明示的な実験targetです。通常の `esp32cam_operating_profiles` は190ms、両targetの
+Ecoは5000msです。`OPERATING_TRACKING_INTERVAL_MS` は100または190だけを許可します。
+`HIGH_RATE_INTERVAL_MS` はprofile有効時の撮影間隔を変更しません。
+
+このtargetは、Rust製 `frame-live` が最新フレームで推論待ちを置き換える有限試験専用です。Flask側の
+profile情報は0.19秒を前提としており、通常Python運用へこのFWを常設しないでください。
+QVGA/JPEG12、モデル精度と入力サイズ、generation/ACK、500ms鮮度保護は変更しません。
+撮影10Hzは認識10Hzを保証しません。受信・カメラ負荷は増えるため、全10秒窓50認識以上、
+自然holdの計測内1%以下、温度・throttle・保存容量をPi実測で検証します。
+試験後は元FWと元Python/Ecoへ復元します。画像を毎フレーム保存する設定は追加しません。
