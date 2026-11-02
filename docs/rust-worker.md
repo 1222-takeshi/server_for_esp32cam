@@ -359,3 +359,34 @@ Piで固定入力の生出力・検出結果をgoldenと比較してから実機
 反復するオフラインA/Bで、平均・throughput・温度を悪化させず処理時間の裾が改善することも
 OTA前に確認します。比較順序、試行回数、採用基準は計測前の固定planに記録します。
 設定の追加だけでは認識精度や5Hz安定性の成功を意味しません。
+
+# 推論Run中だけのintra-op spinning
+
+ORTの `session.force_spinning_stop` は、最後の同時 `Run()` が戻った時点で内部thread poolのspinを即停止し、
+次の `Run()` で再開する設定です（SessionOptionsのconfig key、per-session内部poolにのみ適用、値は文字列 `"1"` のみ有効）。
+Linuxの有限 `frame-live` continuous試験でのみ `ESP32CAM_RUST_TRIAL_SPIN_ON_RUN=1` で選択できます。
+`0` を明示すると従来設定のまま、後述のオンライン中止判定だけが有効になります。
+最大120入力のオフライン `frame-worker` 比較には `ESP32CAM_RUST_BENCH_SPIN_ON_RUN=0|1` を使います。
+未指定/`0` はintra-op spinning無効で、config keyを追加しません。不正値（`""`、`2`、`true` 等）はモデル読込前に拒否します。
+選択時はintra-op spinningを有効にし、inter-op spinningは無効のまま、Static分割・FP32・入力320・3推論threadを維持します。
+global thread pool・external poolは使いません（`force_spinning_stop` が効かなくなるため）。
+出力の `spin_on_run`・`intra_op_spinning`・`force_spinning_stop` は選択した設定値の記録で、ORT内部状態のreadbackではありません。
+
+オフライン比較では `ESP32CAM_RUST_BENCH_FRAME_GAP_MS=0|40`（未指定は0）で、2入力目以降の処理の直前に40msの待機を入れます。
+N入力でN-1回、最後の入力の後には入りません。これは推論Run間の遊休をCPU時間に反映させるためのもので、
+`wall_us` と `usage.cpu_ticks` は各入力の処理完了後に同時点で採取します。
+
+## オンライン中止判定
+
+連続hold・自然hold予算・閉じた10秒窓の認識数・保護値（公開済み結果の年齢、未応答のclock ping、最終同期からの経過、
+200ppm仮定との矛盾）を `src/online_abort.rs` がnativeの単調時計で評価します。
+評価は受信ループの各周回で `State` から取った値で行い、結果の公開有無に依存しません。
+違反を検出すると公開を止めてreportに `reason`（`continuous_hold`・`natural_hold_budget_exceeded`・
+`window_below_50`・`protection_violation`）を書き、終了コード20で終了します。閾値は元の値のままです。
+
+## 実験用ハーネス
+
+`scripts/spin_on_run/` に標準ライブラリのみのPython実装があります（offline 16 runのABBAランナー、
+候補Mのスレッド別CPU sampler、判定表、live用guardian・復旧guard・checker、systemd unitの生成）。
+これらは生成とドライランができるファイルで、Piへの配布・実行は別の工程です。`python -m scripts.spin_on_run.cli units`
+でunit文字列と起動要求のドライランを新規ディレクトリに出力できます。
