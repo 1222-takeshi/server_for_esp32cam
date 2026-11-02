@@ -240,11 +240,18 @@ FRAME_GAP_S = 0.04
 
 
 def gap_present(rows: list[dict]) -> bool:
-    """Plan 5.4: 80 gaps of 40 ms lie between the end of row 4 and the end of row 84."""
+    """The gap rule of plan 5.4/9.1 applied to one run, as `metrics.run_metrics` applies it.
+
+    Literal bound: 80 gaps of 40 ms lie between the end of row 4 and the end of
+    row 84. The interval must also cover the 80 processed rows themselves plus
+    those gaps, which a run without gaps cannot do.
+    """
     from .common import FRAME_GAP_US, GAP_COUNT
 
     try:
-        return rows[84]["wall_us"] - rows[4]["wall_us"] >= GAP_COUNT * FRAME_GAP_US
+        span = rows[84]["wall_us"] - rows[4]["wall_us"]
+        busy = sum(row["total_us"] for row in rows[5:85])
+        return span >= GAP_COUNT * FRAME_GAP_US and span >= busy + GAP_COUNT * FRAME_GAP_US
     except (KeyError, IndexError, TypeError):
         return False
 

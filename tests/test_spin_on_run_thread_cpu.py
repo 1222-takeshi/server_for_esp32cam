@@ -152,14 +152,18 @@ def test_m_environment_passes_nothing_to_the_unmodified_worker():
     assert tc.FRAME_GAP_S == 0.04
 
 
-def test_the_gap_check_needs_eighty_gaps_of_forty_milliseconds():
-    def rows(span):
-        return [{"wall_us": 0}] * 4 + [{"wall_us": 1_000}] + [{"wall_us": 0}] * 79 + [
-            {"wall_us": 1_000 + span}
-        ]
+def test_the_gap_check_needs_eighty_gaps_of_forty_milliseconds_on_top_of_the_work():
+    def rows(span, busy=0):
+        work = [{"wall_us": 0, "total_us": busy // 80}] * 85
+        work[4] = {"wall_us": 1_000, "total_us": 1}
+        work[84] = {"wall_us": 1_000 + span, "total_us": busy // 80}
+        return work
 
     assert tc.gap_present(rows(3_200_000))
     assert not tc.gap_present(rows(3_199_999))
+    # Processing alone fills 4 s: the literal bound holds without a single gap.
+    assert not tc.gap_present(rows(4_000_000, busy=4_000_000))
+    assert tc.gap_present(rows(7_200_000, busy=4_000_000))
     assert not tc.gap_present([])
 
 
