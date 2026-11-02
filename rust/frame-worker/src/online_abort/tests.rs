@@ -329,20 +329,16 @@ fn a_stalled_input_is_detected_within_two_seconds_with_publication_fully_stopped
 }
 
 #[test]
-fn a_refused_publication_inside_the_interval_is_a_violation_outside_it_is_not() {
+fn a_refused_publication_is_a_violation_whenever_it_happened() {
     let interval = (100 * S, 700 * S);
     let dense = steady(100 * S, 301 * S, 100_000);
-    for (at_us, expected) in [
-        (100 * S - 1, None),
-        (100 * S, Some(PROTECTION_VIOLATION)),
-        (700 * S - 1, Some(PROTECTION_VIOLATION)),
-        (700 * S, None),
-    ] {
+    for at_us in [100 * S - 1, 100 * S, 700 * S - 1, 700 * S] {
         let mut guard = OnlineGuard::new(600 * S);
         let mut o = at(300 * S, interval);
         o.samples = &dense;
+        assert_eq!(guard.observe(&o), None);
         o.publish_refused_at = Some(at_us);
-        assert_eq!(guard.observe(&o), expected, "{at_us}");
+        assert_eq!(guard.observe(&o), Some(PROTECTION_VIOLATION), "{at_us}");
     }
 }
 
@@ -387,13 +383,14 @@ fn protection_is_detected_within_two_seconds_with_publication_fully_stopped() {
 }
 
 #[test]
-fn nothing_is_evaluated_before_the_interval_is_known_and_order_is_fixed() {
+fn only_protection_is_judged_before_the_interval_is_known_and_order_is_fixed() {
     let mut guard = OnlineGuard::new(600 * S);
     let mut o = at(5 * S, (0, 0));
     o.interval = None;
     o.hold_started = Some(0);
+    assert_eq!(guard.observe(&o), None); // holds and windows need the interval
     o.protection.drift_violation = true;
-    assert_eq!(guard.observe(&o), None);
+    assert_eq!(guard.observe(&o), Some(PROTECTION_VIOLATION));
     // Simultaneous conditions report the first code of the table.
     let mut guard = OnlineGuard::new(600 * S);
     let mut o = at(20 * S, (1, 600 * S));

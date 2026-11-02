@@ -99,7 +99,7 @@ pub struct Observation<'a> {
     pub last_hold: Option<(u64, u64)>,
     pub samples: &'a [Sample],
     pub protection: Protection,
-    /// Last time a result was refused at publication because a protection
+    /// Set when a result was refused at publication because a protection
     /// limit was already violated at that moment.
     pub publish_refused_at: Option<u64>,
 }
@@ -132,10 +132,29 @@ impl OnlineGuard {
         self.ongoing = o.hold_started;
     }
 
-    /// First violated condition, in the fixed order A11, A12, A13, A14.
+    /// First violated condition, in the fixed order A11, A12, A13, A14. Hold and
+    /// window limits need the measurement interval; the protection limits do
+    /// not and are judged on every pass from the first one.
     pub fn observe(&mut self, o: &Observation) -> Option<&'static str> {
         self.track_holds(o);
-        let (start, end) = o.interval?;
+        if let Some((start, end)) = o.interval
+            && let Some(code) = self.interval_violation(o, start, end)
+        {
+            return Some(code);
+        }
+        let fresh = o.samples.get(self.checked_samples..).unwrap_or_default();
+        self.checked_samples = o.samples.len();
+        let stale = fresh.iter().any(|s| s.age_high_us > AGE_LIMIT_US);
+        (stale || o.publish_refused_at.is_some() || o.protection.violated(o.now))
+            .then_some(PROTECTION_VIOLATION)
+    }
+
+    fn interval_violation(
+        &mut self,
+        o: &Observation,
+        start: u64,
+        end: u64,
+    ) -> Option<&'static str> {
         let mut natural = 0u64;
         let mut longest = 0u64;
         let spans = self
@@ -158,18 +177,8 @@ impl OnlineGuard {
         if natural > self.budget_us {
             return Some(NATURAL_HOLD_BUDGET);
         }
-        if self.scan_due(o.now)
-            && min_closed_window(o.samples, start, end, o.now) < MIN_RECOGNITIONS
-        {
-            return Some(WINDOW_BELOW_50);
-        }
-        let fresh = o.samples.get(self.checked_samples..).unwrap_or_default();
-        self.checked_samples = o.samples.len();
-        let stale = fresh.iter().any(|s| s.age_high_us > AGE_LIMIT_US);
-        let refused = o
-            .publish_refused_at
-            .is_some_and(|at| (start..end).contains(&at));
-        (stale || refused || o.protection.violated(o.now)).then_some(PROTECTION_VIOLATION)
+        (self.scan_due(o.now) && min_closed_window(o.samples, start, end, o.now) < MIN_RECOGNITIONS)
+            .then_some(WINDOW_BELOW_50)
     }
 
     fn scan_due(&mut self, now: u64) -> bool {
