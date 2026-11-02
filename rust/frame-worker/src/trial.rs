@@ -50,7 +50,13 @@ pub struct Trial {
     injected: bool,
     injected_at: Option<(u64, u64)>,
     holds: Vec<(u64, u64, u64)>,
+    /// Opt-in start gate: do not request Tracking while the 200 ppm estimate is
+    /// undefined. `clock_wait` is when the wait began.
+    require_clock_estimate: bool,
+    clock_wait: Option<u64>,
 }
+/// Longest wait for the 200 ppm estimate to become defined before the start.
+const CLOCK_ESTIMATE_WAIT_US: u64 = 60_000_000;
 impl Trial {
     pub fn new(boot: u64, duration_us: u64) -> Result<Self> {
         if boot == 0
@@ -77,7 +83,40 @@ impl Trial {
             injected: false,
             injected_at: None,
             holds: Vec::new(),
+            require_clock_estimate: false,
+            clock_wait: None,
         })
+    }
+    /// The 200 ppm limit is judged online, so the measurement must not begin
+    /// before the estimate exists: the trial stays in the initial Eco phase until
+    /// then and ends with `clock_unresolved` if that takes too long.
+    pub fn require_clock_estimate(mut self) -> Self {
+        self.require_clock_estimate = true;
+        self
+    }
+    /// The trial `frame-live` runs. The online 200 ppm check needs an estimate
+    /// before the measurement starts, so with the online checks the trial waits
+    /// for it in the initial Eco phase (see [`Self::require_clock_estimate`]).
+    pub fn for_live(
+        continuous: bool,
+        boot: u64,
+        duration_us: u64,
+        inject_hold: bool,
+        online_checks: bool,
+    ) -> Result<Self> {
+        let trial = if continuous {
+            Self::new_continuous(boot, duration_us, inject_hold)
+        } else {
+            Self::new(boot, duration_us)
+        }?;
+        Ok(if online_checks {
+            trial.require_clock_estimate()
+        } else {
+            trial
+        })
+    }
+    pub fn requires_clock_estimate(&self) -> bool {
+        self.require_clock_estimate
     }
     pub fn new_continuous(boot: u64, duration_us: u64, inject_hold: bool) -> Result<Self> {
         let mut trial = Self::new(boot, duration_us)?;
@@ -170,7 +209,19 @@ impl Trial {
         let active = status["state"] == "active" && status["acknowledged"] == true;
         match self.phase {
             Phase::InitialEco => {
-                if active && state.mode.requested() == Mode::Eco {
+                if active
+                    && state.mode.requested() == Mode::Eco
+                    && self.require_clock_estimate
+                    && state.protection.drift_unevaluable
+                {
+                    let since = *self.clock_wait.get_or_insert(now);
+                    if now
+                        .checked_sub(since)
+                        .is_none_or(|t| t > CLOCK_ESTIMATE_WAIT_US)
+                    {
+                        return Err("clock_unresolved");
+                    }
+                } else if active && state.mode.requested() == Mode::Eco {
                     self.initial = status;
                     state
                         .mode

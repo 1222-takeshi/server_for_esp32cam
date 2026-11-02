@@ -409,12 +409,8 @@ fn execute() -> Result<i32> {
     } else {
         None
     };
-    let mut trial = if continuous {
-        Trial::new_continuous(boot, duration_us, inject_hold)
-    } else {
-        Trial::new(boot, duration_us)
-    }
-    .map_err(|_| "invalid trial")?;
+    let mut trial = Trial::for_live(continuous, boot, duration_us, inject_hold, online_checks)
+        .map_err(|_| "invalid trial")?;
     let receiver = Receiver::new(
         &worker,
         Limits {

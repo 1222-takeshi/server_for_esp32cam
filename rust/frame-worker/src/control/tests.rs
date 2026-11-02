@@ -254,7 +254,14 @@ fn arrival_proof_cannot_be_reused_for_another_identity() {
 #[test]
 fn protection_view_reports_unanswered_ping_and_last_sync_without_changing_state() {
     let mut clock = SessionClock::default();
-    assert_eq!(clock.protection(), Protection::default());
+    // Nothing is known yet: no violation, and the 200 ppm limit is not evaluable.
+    assert_eq!(
+        clock.protection(),
+        Protection {
+            drift_unevaluable: true,
+            ..Protection::default()
+        }
+    );
     clock.poll(1_000, true, nonce).unwrap().unwrap();
     let view = clock.protection();
     assert_eq!(view.rtt_us(1_500_001), Some(1_499_001));
@@ -301,4 +308,55 @@ fn accepted_input_is_recorded_at_arrival_and_survives_a_recovery_restart() {
     clock.poll(160_000, true, nonce).unwrap().unwrap();
     clock.restart_expired(1_200_000).unwrap();
     assert_eq!(clock.protection().input, Some(input));
+}
+
+/// One answered exchange every 50 ms of host time (tracking cadence) from second
+/// `from_s` to `to_s` of the session, 5 ms round trip, the device clock `ppm`
+/// slow against the host. Returns the host time of the last ping.
+fn track(clock: &mut SessionClock, from_s: u64, to_s: u64, ppm: u64) -> u64 {
+    let mut now = 0;
+    for k in from_s * 20..to_s * 20 {
+        now = 7_000_000_000 + k * 50_000;
+        clock.poll(now, true, nonce).unwrap().unwrap();
+        // The device read its clock halfway through the round trip.
+        let device = 1_000_000 + (k * 50_000 + 2_500) * (1_000_000 - ppm) / 1_000_000;
+        clock
+            .pong(1, "0123456789abcdef", device, now + 5_000)
+            .unwrap();
+    }
+    now
+}
+
+#[test]
+fn protection_is_not_evaluable_for_the_200_ppm_limit_until_the_baseline_is_long_enough() {
+    let mut clock = SessionClock::default();
+    track(&mut clock, 0, 20, 0);
+    let view = clock.protection();
+    assert!(view.drift_unevaluable && !view.drift_violation);
+    track(&mut clock, 20, 30, 0);
+    let view = clock.protection();
+    assert!(!view.drift_unevaluable && !view.drift_violation);
+}
+
+#[test]
+fn protection_reports_drift_above_200_ppm_through_the_reference_exchanges() {
+    let mut clock = SessionClock::default();
+    track(&mut clock, 0, 60, 300);
+    let view = clock.protection();
+    assert!(!view.drift_unevaluable);
+    assert!(view.drift_violation);
+    let mut steady = SessionClock::default();
+    track(&mut steady, 0, 60, 199);
+    assert!(!steady.protection().drift_violation);
+}
+
+#[test]
+fn a_recovery_restart_drops_the_references_and_the_estimate_becomes_unevaluable() {
+    let mut clock = SessionClock::default();
+    let last = track(&mut clock, 0, 40, 0);
+    assert!(!clock.protection().drift_unevaluable);
+    clock.poll(last + 100_000, true, nonce).unwrap().unwrap();
+    clock.restart_expired(last + 1_200_000).unwrap();
+    // Fail-closed: inside a measurement this stops the run instead of passing.
+    assert!(clock.protection().drift_unevaluable);
 }

@@ -414,3 +414,184 @@ fn abort_reasons_are_closed_set_and_exit_code_is_fixed() {
     }
     assert_eq!(EXIT_CODE, 20);
 }
+
+/// Synthetic receiver loop: a frame every `frame_us`, accepted with a frozen
+/// arrival age of `arrival_age_us`, one controller pass every 50 ms. During a
+/// hold no frame is accepted (the old generation is rejected) until
+/// `recovered + ack_gap_us`, when the new generation has been acknowledged.
+/// Nothing is published during the hold. The protection view is exactly what
+/// the receiver stores: the last accepted input, aged to the current time.
+struct Timeline {
+    frame_us: u64,
+    arrival_age_us: i128,
+    hold: Option<(u64, u64)>,
+    ack_gap_us: u64,
+    /// No input is accepted from this time on (a stalled stream, no hold).
+    stall_from: Option<u64>,
+}
+
+impl Timeline {
+    fn accepting(&self, t: u64) -> bool {
+        if self.stall_from.is_some_and(|from| t >= from) {
+            return false;
+        }
+        match self.hold {
+            Some((began, recovered)) => t < began || t >= recovered + self.ack_gap_us,
+            None => true,
+        }
+    }
+
+    /// First abort code, with its time, over `[start, until)`.
+    fn run(&self, interval: (u64, u64), until: u64) -> Option<(&'static str, u64)> {
+        let (start, end) = interval;
+        // Results every 20 ms outside the hold keep every window far above 50,
+        // so only the freshness behaviour is under test.
+        let samples: Vec<Sample> = (0..)
+            .map(|i| start + i * 20_000)
+            .take_while(|p| *p < until)
+            .filter(|p| self.hold.is_none_or(|(b, r)| *p < b || *p >= r))
+            .map(|p| sample(p, 100_000))
+            .collect();
+        let mut guard = OnlineGuard::new(end - start);
+        let mut input: Option<AcceptedInput> = None;
+        let mut next_frame = start;
+        let mut now = start;
+        while now < until {
+            while next_frame <= now {
+                if self.accepting(next_frame) {
+                    input = Some(AcceptedInput {
+                        received_us: next_frame,
+                        age_high_us: self.arrival_age_us,
+                    });
+                }
+                next_frame += self.frame_us;
+            }
+            let published = samples.partition_point(|s| s.published_us <= now);
+            let mut o = at(now, interval);
+            o.samples = &samples[..published];
+            o.protection = Protection {
+                last_sync_us: Some(now - now % 1_000_000),
+                input,
+                ..Protection::default()
+            };
+            if let Some((began, recovered)) = self.hold {
+                if now >= recovered {
+                    o.last_hold = Some((began, recovered));
+                } else if now >= began {
+                    o.hold_started = Some(began);
+                }
+            }
+            if let Some(code) = guard.observe(&o) {
+                return Some((code, now));
+            }
+            now += 50_000;
+        }
+        None
+    }
+}
+
+fn timeline(hold: Option<(u64, u64)>) -> Timeline {
+    Timeline {
+        frame_us: 190_000,
+        arrival_age_us: 300_000,
+        hold,
+        ack_gap_us: 100_000,
+        stall_from: None,
+    }
+}
+
+#[test]
+fn steady_input_with_a_300ms_arrival_age_and_190ms_frames_is_not_a_violation() {
+    // The age bound peaks at 300 ms + (190 ms - 1 us) just before the next frame.
+    assert_eq!(timeline(None).run((100 * S, 700 * S), 160 * S), None);
+    let mut slower = timeline(None);
+    slower.frame_us = 260_000; // 300 ms + 250 ms at the last pass is over the limit
+    assert_eq!(
+        slower.run((100 * S, 700 * S), 160 * S).map(|c| c.0),
+        Some(PROTECTION_VIOLATION)
+    );
+}
+
+#[test]
+fn a_stalled_stream_is_a_violation_without_any_hold_and_with_publication_stopped() {
+    let mut stalled = timeline(None);
+    stalled.stall_from = Some(300 * S);
+    // The last input arrived at or before 300 s with a 300 ms bound; the bound
+    // passes 500 ms about 200 ms later and the next 50 ms pass sees it.
+    let (code, when) = stalled.run((100 * S, 700 * S), 310 * S).unwrap();
+    assert_eq!(code, PROTECTION_VIOLATION);
+    assert!(when <= 300 * S + 400_000, "{when}");
+}
+
+/// Plan-conformant behaviour, stated as a fact and not worked around: section
+/// 2-9(iv) evaluates the freshness of the most recently accepted input at the
+/// current time while publication is stopped, and no input is accepted during
+/// a hold. A hold therefore ends in A14 about 200 ms after its last accepted
+/// input, long before any hold limit and before a new generation can be
+/// acknowledged. Section 8.4 (a natural hold of 3 s recovered by the ACK of
+/// the new generation) cannot be reached under that rule.
+#[test]
+fn plan_conformant_natural_holds_of_3_6_and_15_seconds_end_in_protection_violation() {
+    let interval = (100 * S, 700 * S);
+    for hold_s in [3, 6, 15] {
+        let began = 300 * S;
+        let hold = timeline(Some((began, began + hold_s * S)));
+        let (code, when) = hold.run(interval, 340 * S).unwrap();
+        assert_eq!(code, PROTECTION_VIOLATION, "{hold_s} s hold");
+        // The last accepted frame is within 190 ms before the hold; the 500 ms
+        // bound is crossed 200 ms after it and the next 50 ms pass sees it.
+        assert!(
+            when > began && when <= began + 250_000,
+            "{hold_s} s hold: {when}"
+        );
+    }
+    // The same with a slow ACK of the new generation (2 s after the hold ends).
+    let mut slow_ack = timeline(Some((300 * S, 306 * S)));
+    slow_ack.ack_gap_us = 2_000_000;
+    let (code, when) = slow_ack.run(interval, 340 * S).unwrap();
+    assert_eq!(code, PROTECTION_VIOLATION);
+    assert!(when <= 300 * S + 250_000, "{when}");
+    // The hold limits were not what stopped it: the hold is still young.
+    let (code, _) = timeline(Some((300 * S, 303 * S)))
+        .run(interval, 300 * S + 250_000)
+        .unwrap();
+    assert_ne!(code, CONTINUOUS_HOLD);
+    assert_ne!(code, NATURAL_HOLD_BUDGET);
+}
+
+#[test]
+fn plan_conformant_age_check_has_no_hold_or_generation_exemption() {
+    // One input, 300 ms bound at arrival: judged at the current time whatever
+    // happens to the mode in the meantime (a hold, a new generation).
+    let view = accepted(10 * S, 300_000);
+    assert!(!view.violated(10 * S + 199_999));
+    assert!(view.violated(10 * S + 200_001));
+    assert!(view.violated(30 * S)); // seconds later, still the same input
+}
+
+#[test]
+fn an_undefined_clock_estimate_is_a_violation_only_inside_the_measurement_interval() {
+    let unevaluable = Protection {
+        drift_unevaluable: true,
+        ..Protection::default()
+    };
+    // Before the interval is known the start gate is still waiting for it.
+    let mut guard = OnlineGuard::new(600 * S);
+    let mut before = at(50 * S, (100 * S, 700 * S));
+    before.interval = None;
+    before.protection = unevaluable;
+    assert_eq!(guard.observe(&before), None);
+    // Inside the interval it is never read as "no violation".
+    let dense = steady(100 * S, 700 * S, 100_000);
+    for now in [100 * S, 400 * S, 700 * S - 1] {
+        let mut guard = OnlineGuard::new(600 * S);
+        let mut o = at(now, (100 * S, 700 * S));
+        o.protection = unevaluable;
+        o.samples = &dense[..dense.partition_point(|s| s.published_us <= now)];
+        assert_eq!(guard.observe(&o), Some(PROTECTION_VIOLATION), "{now}");
+        // The same pass with an evaluable estimate is quiet.
+        let mut guard = OnlineGuard::new(600 * S);
+        o.protection = Protection::default();
+        assert_eq!(guard.observe(&o), None, "{now}");
+    }
+}

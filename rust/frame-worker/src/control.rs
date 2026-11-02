@@ -181,6 +181,7 @@ impl SessionClock {
             last_sync_us: self.last_sync,
             drift_violation: self.window.drift_inconsistent()
                 || self.window.drift_estimate_exceeded(),
+            drift_unevaluable: !self.window.drift_evaluable(),
             input: self.last_input,
         }
     }

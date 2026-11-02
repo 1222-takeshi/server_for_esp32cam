@@ -517,3 +517,91 @@ fn single_generation_metric_excludes_a_recovery_before_the_measured_window() {
     trial.injected_at = Some((10_000_000, 2));
     assert_eq!(trial.evaluate(&samples), Err("missing_in_window_recovery"));
 }
+
+fn poll_every_5s(
+    trial: &mut Trial,
+    state: &mut State,
+    time: &AtomicU64,
+    from: u64,
+    to: u64,
+) -> Result<bool> {
+    let mut last = Ok(true);
+    for i in from..=to {
+        let now = i * 5_000_000;
+        time.store(now, Ordering::SeqCst);
+        let frame = Frame {
+            boot: 1,
+            sequence: i,
+            captured_us: now,
+            sent_us: now,
+            generation: Some(state.mode.generation()),
+            jpeg: vec![],
+        };
+        assert!(
+            state.mode.publish_result(&frame, || true).unwrap(),
+            "poll {i}"
+        );
+        state.record_test_sample(Sample {
+            boot: 1,
+            generation: state.mode.generation(),
+            sequence: i,
+            published_us: now,
+            age_high_us: 200_000,
+            compute_us: 150_000,
+        });
+        last = trial.poll(state, now, true);
+        if last.is_err() {
+            break;
+        }
+    }
+    last
+}
+
+#[test]
+fn the_start_gate_waits_for_the_clock_estimate_and_gives_up_after_sixty_seconds() {
+    let (trial, mut state, time) = setup_policy(true, 10_000_000, false);
+    let mut trial = trial.require_clock_estimate();
+    state.protection.drift_unevaluable = true;
+    // Eco is acknowledged and active, but the 200 ppm limit cannot be judged
+    // yet: the wait starts at the first such poll and lasts 60 s.
+    assert_eq!(
+        poll_every_5s(&mut trial, &mut state, &time, 1, 13),
+        Ok(true)
+    );
+    assert_eq!(state.mode.requested(), Mode::Eco);
+    assert_eq!(
+        poll_every_5s(&mut trial, &mut state, &time, 14, 24),
+        Err("clock_unresolved")
+    );
+    assert!(time.load(Ordering::SeqCst) >= 65_000_000);
+    assert_eq!(state.mode.requested(), Mode::Eco);
+    // Once the estimate exists the trial starts normally.
+    let (trial, mut state, time) = setup_policy(true, 10_000_000, false);
+    let mut trial = trial.require_clock_estimate();
+    state.protection.drift_unevaluable = true;
+    assert_eq!(poll_every_5s(&mut trial, &mut state, &time, 1, 5), Ok(true));
+    assert_eq!(state.mode.requested(), Mode::Eco);
+    state.protection.drift_unevaluable = false;
+    assert_eq!(poll_every_5s(&mut trial, &mut state, &time, 6, 6), Ok(true));
+    assert_eq!(state.mode.requested(), Mode::Tracking);
+}
+
+#[test]
+fn the_start_gate_is_off_unless_requested() {
+    let (mut trial, mut state, time) = setup_policy(true, 10_000_000, false);
+    state.protection.drift_unevaluable = true;
+    assert_eq!(poll_every_5s(&mut trial, &mut state, &time, 1, 3), Ok(true));
+    assert_eq!(state.mode.requested(), Mode::Tracking);
+}
+
+#[test]
+fn only_a_live_trial_with_the_online_checks_waits_for_the_clock_estimate() {
+    for continuous in [false, true] {
+        let plain = Trial::for_live(continuous, 1, 60_000_000, false, false).unwrap();
+        assert!(!plain.requires_clock_estimate());
+    }
+    let checked = Trial::for_live(true, 1, 60_000_000, false, true).unwrap();
+    assert!(checked.requires_clock_estimate());
+    assert!(Trial::for_live(true, 0, 60_000_000, false, true).is_err());
+    assert!(Trial::for_live(true, 1, 5_000_000, false, true).is_err());
+}

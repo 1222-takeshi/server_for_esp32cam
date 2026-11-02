@@ -61,6 +61,11 @@ pub struct Protection {
     /// hold under that bound (disjoint offset intervals). See
     /// `ClockWindow::drift_estimate_exceeded` for the exact definition.
     pub drift_violation: bool,
+    /// No retained pair of exchanges is long enough to resolve 200 ppm, so the
+    /// limit cannot be judged. Never read as "no violation": once the
+    /// measurement interval is known the guard treats this as a violation, and
+    /// the trial does not start before the estimate is defined.
+    pub drift_unevaluable: bool,
     /// Last input the receiver accepted; its age keeps growing while nothing
     /// new is accepted, whether or not a result is being published.
     pub input: Option<AcceptedInput>,
@@ -135,7 +140,10 @@ impl OnlineGuard {
 
     /// First violated condition, in the fixed order A11, A12, A13, A14. Hold and
     /// window limits need the measurement interval; the protection limits do
-    /// not and are judged on every pass from the first one.
+    /// not and are judged on every pass from the first one. The exception is
+    /// the 200 ppm estimate: before the interval is known it may still be
+    /// undefined (the start gate waits for it), while inside the interval an
+    /// undefined estimate is a violation.
     pub fn observe(&mut self, o: &Observation) -> Option<&'static str> {
         self.track_holds(o);
         if let Some((start, end)) = o.interval
@@ -146,7 +154,8 @@ impl OnlineGuard {
         let fresh = o.samples.get(self.checked_samples..).unwrap_or_default();
         self.checked_samples = o.samples.len();
         let stale = fresh.iter().any(|s| s.age_high_us > AGE_LIMIT_US);
-        (stale || o.publish_refused_at.is_some() || o.protection.violated(o.now))
+        let unevaluable = o.interval.is_some() && o.protection.drift_unevaluable;
+        (stale || unevaluable || o.publish_refused_at.is_some() || o.protection.violated(o.now))
             .then_some(PROTECTION_VIOLATION)
     }
 
