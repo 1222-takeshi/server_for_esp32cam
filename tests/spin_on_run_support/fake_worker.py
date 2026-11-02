@@ -7,7 +7,7 @@ import sys
 with open(os.environ["FAKE_GOLDEN"]) as handle:
     golden = [json.loads(line) for line in handle]
 mode = os.environ.get("FAKE_MODE", "ok")
-spin = os.environ["ESP32CAM_RUST_BENCH_SPIN_ON_RUN"] == "1"
+spin = os.environ.get("ESP32CAM_RUST_BENCH_SPIN_ON_RUN") == "1"
 count = 84 if mode == "short" else 85
 wall = ticks = 0
 for i in range(count):
