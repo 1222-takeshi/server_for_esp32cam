@@ -1,7 +1,10 @@
 //! Offline-only replay: envelope order is checked; clocks/ACK/freshness are not.
 use crate::{Frame, FrameOrder, detector::Result, read_frame};
 use serde_json::{Value, json};
-use std::io::{Read, Write};
+use std::{
+    io::{Read, Write},
+    time::Duration,
+};
 
 pub const MAX_FRAMES: usize = 120;
 pub const MAX_LINE: usize = 64 * 1024;
@@ -9,6 +12,28 @@ pub const MAX_LINE: usize = 64 * 1024;
 pub fn run(
     reader: &mut impl Read,
     writer: &mut impl Write,
+    process: impl FnMut(&Frame) -> Result<Value>,
+) -> Result<usize> {
+    run_with_gap(reader, writer, Duration::ZERO, process)
+}
+
+/// Explicit experiment setting: `0` (default) or `40` milliseconds.
+pub fn parse_gap(value: std::result::Result<String, std::env::VarError>) -> Result<Duration> {
+    match value {
+        Err(std::env::VarError::NotPresent) => Ok(Duration::ZERO),
+        Ok(value) if value == "0" => Ok(Duration::ZERO),
+        Ok(value) if value == "40" => Ok(Duration::from_millis(40)),
+        _ => Err("invalid frame gap setting".into()),
+    }
+}
+
+/// Like [`run`], pausing `gap` after each result line and before the next frame is
+/// processed. Nothing is inserted after the final frame, so `n` frames contain
+/// `n - 1` gaps.
+pub fn run_with_gap(
+    reader: &mut impl Read,
+    writer: &mut impl Write,
+    gap: Duration,
     mut process: impl FnMut(&Frame) -> Result<Value>,
 ) -> Result<usize> {
     let mut order = FrameOrder::default();
@@ -21,6 +46,9 @@ pub fn run(
             return Err("replay limit/profile".into());
         }
         order.observe(&frame)?;
+        if count > 0 && !gap.is_zero() {
+            std::thread::sleep(gap);
+        }
         let mut event = process(&frame)?;
         let event = event.as_object_mut().ok_or("invalid result object")?;
         for (key, value) in [
@@ -41,6 +69,7 @@ pub fn run(
         }
         writer.write_all(&line)?;
         writer.write_all(b"\n")?;
+        writer.flush()?;
     }
     unreachable!()
 }
@@ -151,6 +180,46 @@ mod tests {
             ))
             .is_err()
         );
+    }
+
+    #[test]
+    fn gap_setting_is_strict_and_defaults_to_none() {
+        for setting in [Err(std::env::VarError::NotPresent), Ok("0".into())] {
+            assert_eq!(parse_gap(setting).unwrap(), Duration::ZERO);
+        }
+        assert_eq!(
+            parse_gap(Ok("40".into())).unwrap(),
+            Duration::from_millis(40)
+        );
+        for value in ["", "1", "39", "041", "40 ", "40ms", "-40", "true"] {
+            assert!(parse_gap(Ok(value.into())).is_err());
+        }
+        assert!(parse_gap(Err(std::env::VarError::NotUnicode("x".into()))).is_err());
+    }
+
+    #[test]
+    fn gap_precedes_every_frame_but_the_first_and_never_follows_the_last() {
+        use std::time::Instant;
+        let stream: Vec<_> = (1..=4u64).flat_map(|s| wire(s, true)).collect();
+        let (mut starts, mut out) = (vec![], vec![]);
+        let begin = Instant::now();
+        let count = run_with_gap(
+            &mut Cursor::new(stream),
+            &mut out,
+            Duration::from_millis(40),
+            |_| {
+                starts.push(begin.elapsed());
+                Ok(json!({}))
+            },
+        )
+        .unwrap();
+        assert_eq!(count, 4);
+        assert!(starts[0] < Duration::from_millis(40));
+        for pair in starts.windows(2) {
+            assert!(pair[1] - pair[0] >= Duration::from_millis(40));
+        }
+        // 4 frames = 3 gaps; the end of the run carries no trailing gap.
+        assert!(begin.elapsed() < Duration::from_millis(40 * 3 + 35));
     }
 
     #[test]
