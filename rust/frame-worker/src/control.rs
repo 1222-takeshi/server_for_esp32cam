@@ -186,10 +186,14 @@ impl SessionClock {
     }
     /// Records the input the receiver just accepted (see [`Self::admit`]).
     pub fn note_input(&mut self, arrival: &Arrival, frame: &Frame) {
-        if let Some((_, high)) = arrival.age_bounds(frame, arrival.received_us()) {
+        if let (Some((_, high)), Some(generation)) = (
+            arrival.age_bounds(frame, arrival.received_us()),
+            frame.generation,
+        ) {
             self.last_input = Some(AcceptedInput {
                 received_us: arrival.received_us(),
                 age_high_us: high,
+                generation,
             });
         }
     }

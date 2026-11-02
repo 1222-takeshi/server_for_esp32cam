@@ -44,6 +44,8 @@ pub fn hold_budget_us(duration_us: u64) -> u64 {
 pub struct AcceptedInput {
     pub received_us: u64,
     pub age_high_us: i128,
+    /// Mode generation the input was accepted under.
+    pub generation: u64,
 }
 
 /// Protection inputs as the clock and session code currently see them. Times
@@ -67,6 +69,19 @@ pub struct Protection {
 }
 
 impl Protection {
+    /// The view for the mode generation currently in force. An input accepted
+    /// under an earlier generation is no longer "the most recently accepted
+    /// input": a hold advances the generation, frames of the old one are
+    /// rejected until the new one is acknowledged, and a natural hold is
+    /// allowed (up to its own limits) while nothing can be accepted. The age
+    /// of that superseded input is therefore not evaluated, and the freshness
+    /// check resumes with the first input accepted under the new generation.
+    /// The other limits (round trip, sync age, clock error) are unaffected.
+    pub fn in_force(mut self, generation: u64) -> Self {
+        self.input = self.input.filter(|i| i.generation == generation);
+        self
+    }
+
     /// Upper age bound of the last accepted input at `now`.
     pub fn input_age_high_us(&self, now: u64) -> Option<i128> {
         self.input
