@@ -1,9 +1,10 @@
 //! Finite, supervised Raspberry Pi live experiment; no storage/UI/motor control.
 #![forbid(unsafe_code)]
 use esp32cam_frame_worker::{
-    detector::{self, Detector, Result},
+    detector::{self, Detector, Result, SpinPolicy},
     host_clock::HostClock,
     jpeg,
+    online_abort::{self, Observation, OnlineGuard},
     pipeline::{Clock, State, Worker},
     replay,
     session::{Limits, Receiver},
@@ -126,6 +127,20 @@ fn task_partition(
     }
     Ok(partition)
 }
+/// `(policy, online abort checks enabled)`. The checks accompany every explicit
+/// setting of a continuous trial, so a control run (`0`) is judged by the same
+/// rules as `1`. Like the dynamic partition, `1` is continuous-only.
+fn spin_policy(
+    setting: std::result::Result<String, std::env::VarError>,
+    continuous: bool,
+) -> Result<(SpinPolicy, bool)> {
+    let explicit = !matches!(setting, Err(std::env::VarError::NotPresent));
+    let policy = SpinPolicy::parse(setting)?;
+    if policy == SpinPolicy::RunOnly && !continuous {
+        return Err("spin on run requires continuous policy".into());
+    }
+    Ok((policy, explicit && continuous))
+}
 fn monitor(clock: Clock, nonce: String) -> Arc<Mutex<Beat>> {
     let beat = Arc::new(Mutex::new(Beat::default()));
     let shared = beat.clone();
@@ -231,7 +246,37 @@ fn continuous_poll(
     result
 }
 
-fn execute() -> Result<bool> {
+/// Runs the abort checks after the trial's own poll. `Ok(false)` (finished) is
+/// checked too, so a violation of the final seconds is not lost.
+fn online_check(
+    result: std::result::Result<bool, &'static str>,
+    guard: &mut Option<OnlineGuard>,
+    trial: &Trial,
+    s: &State,
+    abort: &mut Option<(&'static str, u64)>,
+) -> std::result::Result<bool, &'static str> {
+    let (Ok(_), Some(guard)) = (&result, guard.as_mut()) else {
+        return result;
+    };
+    let now = s.now();
+    let found = guard.observe(&Observation {
+        now,
+        interval: trial.measurement_interval(),
+        hold_started: s.mode.tracking_hold_started(),
+        last_hold: s.mode.last_tracking_hold(),
+        samples: s.samples(),
+        protection: s.protection,
+    });
+    match found {
+        Some(code) => {
+            *abort = Some((code, now));
+            Err(code)
+        }
+        None => result,
+    }
+}
+
+fn execute() -> Result<i32> {
     let args: Vec<_> = std::env::args_os().collect();
     if args.len() != 5 {
         return Err("usage: frame-live MODEL ORT ADDRESS CAMERA".into());
@@ -276,6 +321,8 @@ fn execute() -> Result<bool> {
         std::env::var("ESP32CAM_RUST_TRIAL_DYNAMIC_BLOCKS"),
         continuous,
     )?;
+    let (spin, online_checks) =
+        spin_policy(std::env::var("ESP32CAM_RUST_TRIAL_SPIN_ON_RUN"), continuous)?;
     let affinity = esp32cam_frame_worker::cpu_affinity::CpuIsolation::prepare(isolate_io)?;
     let host_source = HostClock::new(raw)?;
     let host_begin = host_source.observations()?;
@@ -283,7 +330,7 @@ fn execute() -> Result<bool> {
     let clock: Clock = Arc::new(move || selected_source.now_us().expect("host clock failed"));
     let beats = monitor(clock.clone(), nonce);
     let mut detector =
-        Detector::new_with_task_partition(Path::new(&args[1]), Path::new(&args[2]), partition)?;
+        Detector::new_with_policy(Path::new(&args[1]), Path::new(&args[2]), partition, spin)?;
     let warmup = vec![0.; detector::INPUT_LEN];
     for _ in 0..5 {
         detector.infer(&warmup)?;
@@ -382,9 +429,12 @@ fn execute() -> Result<bool> {
     } else {
         receiver
     };
+    let mut guard = online_checks.then(|| OnlineGuard::new(duration_us));
+    let mut abort = None;
     let mut outcome = receiver.run(&mut socket, |s, now| {
         if continuous {
-            return continuous_poll(s, &mut trial, &beats, &mut cached, || clock(), wall_ms);
+            let polled = continuous_poll(s, &mut trial, &beats, &mut cached, || clock(), wall_ms);
+            return online_check(polled, &mut guard, &trial, s, &mut abort);
         }
         let ready = refresh_ready(&beats, &mut cached, || clock(), wall_ms);
         trial.poll(s, now, ready)
@@ -442,7 +492,8 @@ fn execute() -> Result<bool> {
             "max_receive_call_us":outcome.stats.max_receive_call_us,"max_control_send_us":outcome.stats.max_control_send_us,
             "max_admission_guard_us":outcome.stats.max_admission_guard_us,"recent_receipts":receipts,"recent_rejections":rejections});
     let host_end = host_source.observations()?;
-    let report = json!({"dynamic_block_base":partition.base(),"cpu_affinity_policy":affinity.name(),"tcp_quick_ack":quick_ack,"tcp_maxseg_requested":small_mss.then_some(512),"tcp_maxseg_accepted":accepted_tcp_maxseg,"host_clock_source":host_source.name(),"host_clock_epoch_ns":host_source.epoch_ns(),
+    let report = json!({"dynamic_block_base":partition.base(),
+        "cpu_affinity_policy":affinity.name(),"tcp_quick_ack":quick_ack,"tcp_maxseg_requested":small_mss.then_some(512),"tcp_maxseg_accepted":accepted_tcp_maxseg,"host_clock_source":host_source.name(),"host_clock_epoch_ns":host_source.epoch_ns(),
         "host_clock_witness":{"fields":["monotonic_low_ns","monotonic_high_ns","raw_low_ns","raw_high_ns"],"begin":host_begin,"end":host_end},"schema":1,"live_validation_only":true,"physical_motor_control":false,"global_acceptance":false,
         "adaptive_inference_reserve":adaptive,"finite_live_gate_passed":passed && !continuous,
         "continuous_tracking_policy":continuous,"continuous_tracking_gate_passed":passed && continuous,
@@ -453,6 +504,20 @@ fn execute() -> Result<bool> {
         "receiver":receiver_report,
         "worker":{"inferred":s.counters.inferred,"published":s.counters.published,"dropped":s.counters.dropped,
             "failures":s.counters.failures,"evidence_lost":s.counters.evidence_lost},"process_before_worker_shutdown":usage,"samples":samples,"recent_worker_drops":drops,"transport_io":io_trace});
+    let mut report = report;
+    if let Some(fields) = report.as_object_mut() {
+        // Selected configuration only; not an ORT readback.
+        fields.insert("spin_on_run".into(), json!(spin == SpinPolicy::RunOnly));
+        fields.insert("intra_op_spinning".into(), json!(spin.intra_op_spinning()));
+        fields.insert(
+            "force_spinning_stop".into(),
+            json!(spin.force_spinning_stop()),
+        );
+        fields.insert(
+            "online_abort".into(),
+            json!(abort.map(|(code, at_us)| json!({"code":code,"at_us":at_us}))),
+        );
+    }
     let raw = serde_json::to_vec(&report)?;
     // The on-disk cap includes the trailing newline.
     if raw.len() >= 16 * 1024 * 1024 {
@@ -460,12 +525,16 @@ fn execute() -> Result<bool> {
     }
     io::stdout().lock().write_all(&raw)?;
     io::stdout().lock().write_all(b"\n")?;
-    Ok(passed)
+    Ok(match passed {
+        true => 0,
+        false if online_abort::is_abort_reason(outcome.reason) => online_abort::EXIT_CODE,
+        false => 3,
+    })
 }
 fn main() {
     match execute() {
-        Ok(true) => {}
-        Ok(false) => std::process::exit(3),
+        Ok(0) => {}
+        Ok(code) => std::process::exit(code),
         Err(_) => {
             eprintln!(
                 "Live trial failed; verify private configuration, fixed model/runtime and supervisor"
@@ -643,6 +712,54 @@ mod tests {
             s.mode.status().unwrap()["tracking_auto_recovery_pending"],
             true
         );
+    }
+    #[test]
+    fn spin_on_run_is_explicit_continuous_only_and_enables_the_online_checks() {
+        for continuous in [false, true] {
+            assert_eq!(
+                spin_policy(Err(std::env::VarError::NotPresent), continuous).unwrap(),
+                (SpinPolicy::Off, false)
+            );
+            for value in ["", "2", "true", "01", " 1", "on"] {
+                assert!(spin_policy(Ok(value.into()), continuous).is_err());
+            }
+            assert!(
+                spin_policy(Err(std::env::VarError::NotUnicode("x".into())), continuous).is_err()
+            );
+        }
+        assert_eq!(
+            spin_policy(Ok("0".into()), false).unwrap(),
+            (SpinPolicy::Off, false)
+        );
+        assert!(spin_policy(Ok("1".into()), false).is_err());
+        assert_eq!(
+            spin_policy(Ok("0".into()), true).unwrap(),
+            (SpinPolicy::Off, true)
+        );
+        assert_eq!(
+            spin_policy(Ok("1".into()), true).unwrap(),
+            (SpinPolicy::RunOnly, true)
+        );
+    }
+    #[test]
+    fn online_check_never_masks_the_trials_own_result_without_a_violation() {
+        let state = State::new_with_tracking_recovery(10, Arc::new(|| 1), true).unwrap();
+        let trial = Trial::new_continuous(1, 60_000_000, false).unwrap();
+        let mut abort = None;
+        let mut none = None;
+        for result in [Ok(true), Ok(false), Err("mode_degraded")] {
+            assert_eq!(
+                online_check(result, &mut none, &trial, &state, &mut abort),
+                result
+            );
+            let mut guard = Some(OnlineGuard::new(60_000_000));
+            // No measurement interval yet: nothing can be judged.
+            assert_eq!(
+                online_check(result, &mut guard, &trial, &state, &mut abort),
+                result
+            );
+        }
+        assert!(abort.is_none());
     }
     #[test]
     fn raw_clock_is_explicit_and_requires_continuous_policy() {
