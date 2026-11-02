@@ -127,6 +127,7 @@ TRIAL = "esp32cam-spin-on-run-v1-live-600-20261101.service"
 
 def live_local(**run):
     """The trial's view: service stopped, so no process and no API at all."""
+
     def refused(name):
         raise OSError("the original service is stopped")
 
@@ -166,7 +167,9 @@ def test_live_phase_rejects_the_original_service_running_in_the_trial():
     assert "service_active_in_trial" in found
     # Process properties are compared again once the service is up.
     other = collect(FakeRun(units=f"{TRIAL} l a r\n", governor="powersave powersave"))
-    assert "invariant:governor" in environment.deviations(base, other, "live", allowed_units=(TRIAL,))
+    assert "invariant:governor" in environment.deviations(
+        base, other, "live", allowed_units=(TRIAL,)
+    )
 
 
 def write_baseline(tmp_path):
@@ -255,3 +258,40 @@ def test_final_check_rejects_a_leftover_unit_without_exception(tmp_path):
     final = post_runner.final_check(out, leftover, base)
     assert "O08" in final["codes"]
     assert "unexpected_unit:esp32cam-post.service" in final["notes"]
+
+
+def test_system_ops_stops_the_original_service_once_and_checks_the_state():
+    from scripts.spin_on_run import system_ops
+
+    calls = []
+    state = {"active": True}
+
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        if "stop" in argv:
+            state["active"] = False
+            return ""
+        return "ActiveState=active\n" if state["active"] else "ActiveState=inactive\n"
+
+    ops = system_ops.SystemOps(
+        trial_unit="t", self_unit="r", base_url="http://x", admin_token=None, run=run
+    )
+    ops.stop_service()
+    stops = [c for c in calls if "stop" in c[0]]
+    assert len(stops) == 1
+    assert stops[0][0] == ["systemctl", "--user", "stop", "esp32cam-server.service"]
+    assert stops[0][1]["timeout"] == system_ops.STOP_TIMEOUT_S
+
+
+def test_system_ops_stop_fails_when_the_service_is_still_active():
+    from scripts.spin_on_run import system_ops
+
+    ops = system_ops.SystemOps(
+        trial_unit="t",
+        self_unit="r",
+        base_url="http://x",
+        admin_token=None,
+        run=lambda argv, **kw: "ActiveState=active\n" if "show" in argv else "",
+    )
+    with pytest.raises(RuntimeError):
+        ops.stop_service()

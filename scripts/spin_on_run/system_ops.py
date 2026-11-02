@@ -17,6 +17,10 @@ import urllib.request
 from . import environment
 
 
+# The service may take a while to drain; the stop is attempted once and not retried.
+STOP_TIMEOUT_S = 60.0
+
+
 class SystemOps:
     def __init__(
         self,
@@ -36,8 +40,8 @@ class SystemOps:
         self.run = run or environment.run_read_only
         self.collector = None
 
-    def _systemctl(self, *args: str) -> str:
-        return self.run(["systemctl", "--user", *args])
+    def _systemctl(self, *args: str, **kwargs) -> str:
+        return self.run(["systemctl", "--user", *args], **kwargs)
 
     def monotonic(self) -> float:
         return time.monotonic()
@@ -47,6 +51,14 @@ class SystemOps:
 
     def stop_trial(self) -> None:
         self._systemctl("stop", f"{self.trial_unit}.service")
+
+    def stop_service(self) -> None:
+        """The planned stop of the original service (plan 7 trial column): one `stop`, then
+        one state read. No retry; the independent recover guard restarts it afterwards."""
+        self._systemctl("stop", environment.SERVICE, timeout=STOP_TIMEOUT_S)
+        state = self._systemctl("show", environment.SERVICE, "--property=ActiveState").strip()
+        if state != "ActiveState=inactive":
+            raise RuntimeError(f"{environment.SERVICE} not inactive after stop: {state}")
 
     def trial_state(self) -> dict:
         show = dict(

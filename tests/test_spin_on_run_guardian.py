@@ -28,8 +28,18 @@ TRIAL = "esp32cam-spin-on-run-v1-live-600-20261105"
 
 def local(**overrides):
     """What `Collector.snapshot_local()` returns while the trial runs."""
-    keys = {k: v for k, v in BASE.items() if k not in {"camera_boot_id", "last_firmware_version", "mode"}}
-    return {**keys, "units_active": [TRIAL + ".service"], "cpus_allowed": "", "nice_policy": "", **overrides}
+    keys = {
+        k: v
+        for k, v in BASE.items()
+        if k not in {"camera_boot_id", "last_firmware_version", "mode"}
+    }
+    return {
+        **keys,
+        "units_active": [TRIAL + ".service"],
+        "cpus_allowed": "",
+        "nice_policy": "",
+        **overrides,
+    }
 
 
 def make_checker(tmp_path):
@@ -179,6 +189,27 @@ class FakeChild:
         self.signals.append(signal.SIGKILL)
 
 
+class FakeServiceOps:
+    """The original service as the systemd user manager holds it: `stop_service` changes it."""
+
+    def __init__(self, fail=False):
+        self.active = True
+        self.fail = fail
+        self.stop_calls = 0
+
+    def stop_service(self):
+        self.stop_calls += 1
+        if self.fail:
+            raise RuntimeError("stop failed")
+        self.active = False
+
+    def read(self, now):
+        fast = local(service_active=self.active)
+        if self.active:
+            fast.update(cpus_allowed=BASE["cpus_allowed"], nice_policy="x")
+        return lg.Reading(60_000, 0, 10 * 1024**3, fast)
+
+
 def drive(tmp_path, child, readings):
     clock = {"t": 0.0}
     it = iter(readings)
@@ -198,9 +229,45 @@ def drive(tmp_path, child, readings):
         env={},
         nonce="0123456789abcdef",
         checker_factory=lambda d: lg.Checker(600, d, dict(BASE), TRIAL),
-        io=lg.IO(monotonic, sleep, lambda now: next(it, reading()), lambda *a: child, lambda: 5),
+        io=lg.IO(
+            monotonic,
+            sleep,
+            lambda now: next(it, reading()),
+            lambda *a: child,
+            lambda: 5,
+            lambda: None,
+        ),
     )
     return result, run_dir
+
+
+def drive_with_ops(tmp_path, ops, stop_service=None):
+    """Like `drive`, but readings come from the fake service state and the stop goes through it."""
+    clock = {"t": 0.0}
+    child = FakeChild(live_for=3.0)
+    spawned = []
+
+    def spawn(*args):
+        spawned.append(ops.active)  # the service state at the moment the child starts
+        return child
+
+    def sleep(seconds):
+        clock["t"] += seconds
+        child.live_for -= seconds
+
+    run_dir = tmp_path / "trial"
+    result = lg.execute(
+        run_dir=run_dir,
+        seconds=600,
+        argv=[sys.executable],
+        env={},
+        nonce="0123456789abcdef",
+        checker_factory=lambda d: lg.Checker(600, d, dict(BASE), TRIAL),
+        io=lg.IO(
+            lambda: clock["t"], sleep, ops.read, spawn, lambda: 5, stop_service or ops.stop_service
+        ),
+    )
+    return result, run_dir, spawned
 
 
 def test_normal_completion_writes_a_completed_marker(tmp_path):
@@ -227,3 +294,32 @@ def test_the_guardian_does_not_restore_anything_after_stopping():
     for forbidden in ("systemctl", "request_eco", "disable", "after.json"):
         assert forbidden not in source
     assert not re.search(r"\bota\b", source.lower()) and "3232" not in source
+
+
+def test_the_planned_stop_runs_once_before_the_child_and_the_first_tick(tmp_path):
+    ops = FakeServiceOps()
+    result, run_dir, spawned = drive_with_ops(tmp_path, ops)
+    assert ops.stop_calls == 1 and spawned == [False]  # stopped before the child started
+    assert result["codes"] == [] and (run_dir / "marker").read_text() == "completed\n"
+    assert json.loads((run_dir / "service-stop.json").read_text()) == {"stopped": True}
+    assert ops.active is False  # the guardian does not start it again
+
+
+def test_without_the_planned_stop_the_first_tick_is_a_deviation(tmp_path):
+    ops = FakeServiceOps()
+    result, run_dir, _ = drive_with_ops(tmp_path, ops, stop_service=lambda: None)
+    assert ops.stop_calls == 0 and ops.active is True
+    assert result["codes"] == ["A04"] and (run_dir / "marker").read_text() == "abort A04\n"
+
+
+def test_a_failed_stop_refuses_the_start_and_leaves_recovery_to_the_guard(tmp_path):
+    ops = FakeServiceOps(fail=True)
+    result, run_dir, spawned = drive_with_ops(tmp_path, ops)
+    assert ops.stop_calls == 1  # no retry
+    assert spawned == []  # the child never started
+    assert result["start_refused"] and result["codes"] == ["A04"]
+    assert (run_dir / "marker").read_text() == "abort A04\n"
+    end = json.loads((run_dir / "child-end.json").read_text())
+    assert end["child_started"] is False and end["guardian_stopped_child"] is False
+    assert json.loads((run_dir / "service-stop.json").read_text())["stopped"] is False
+    assert ops.active is True  # restoring it is the independent guard's job, not the guardian's

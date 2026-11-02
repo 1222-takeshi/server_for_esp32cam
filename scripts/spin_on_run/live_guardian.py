@@ -175,6 +175,8 @@ class IO:
         callable  # (argv, env, stdout, stderr) -> child with .stdin/.poll/.wait/.send_signal/.kill
     )
     utc_ms: callable
+    # Stops the original service once, before the child starts and before the first tick.
+    stop_service: callable
 
 
 def execute(
@@ -192,6 +194,19 @@ def execute(
     """The trial unit's main loop. Writes `child-end.json` and the end marker, then returns."""
     native, stderr = prepare_run_dir(run_dir)
     checker = checker_factory(run_dir)
+    try:
+        io.stop_service()  # the planned stop; exactly one call, never retried
+    except Exception as error:  # noqa: BLE001 - any failure refuses the start
+        native.close()
+        stderr.close()
+        checker.add("A04")  # the trial column's expected state was not reached
+        end = {"exit": None, "signalled": False, "guardian_stopped_child": False}
+        end["child_started"] = False
+        common.write_json(run_dir / "child-end.json", end)
+        common.write_json(run_dir / "service-stop.json", {"stopped": False, "error": str(error)})
+        write_marker(run_dir, checker.codes)
+        return {"codes": checker.codes, "warnings": [], "child": end, "start_refused": True}
+    common.write_json(run_dir / "service-stop.json", {"stopped": True})
     child = io.spawn(argv, env, native, stderr)
     native.close()
     stderr.close()

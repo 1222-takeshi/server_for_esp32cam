@@ -259,7 +259,12 @@ def _execute(cfg: dict, run_dir: Path, baseline: dict, ops: system_ops.SystemOps
             cfg["seconds"], d, baseline, cfg["trial_unit"]
         ),
         io=live_guardian.IO(
-            time.monotonic, time.sleep, read, spawn, lambda: int(time.time() * 1000)
+            time.monotonic,
+            time.sleep,
+            read,
+            spawn,
+            lambda: int(time.time() * 1000),
+            ops.stop_service,
         ),
     )
     return 0 if not summary["codes"] else 1
