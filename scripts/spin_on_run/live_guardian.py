@@ -20,8 +20,6 @@ from .live_checker import DURATION_US  # noqa: F401 - re-exported for callers
 TEMP_STOP_MILLIC = 80_000
 TEMP_WARN_MILLIC = 75_000
 STALE_S = 3.0
-MODE_PERIOD_S = 5.0
-MODE_VALID_S = 10.0
 FREE_STOP = 1024**3
 FREE_START = 2 * 1024**3
 STAGE_LIMIT = {600: 64 * 1024**2, 3600: 256 * 1024**2}
@@ -39,7 +37,7 @@ class Reading:
     temp_millic: int | None
     throttled: int | None
     free_bytes: int | None
-    fast: dict | None  # boot id, unit sha, units, dropin (no network)
+    fast: dict | None  # `Collector.snapshot_local()`: no network, no service API
 
 
 @dataclass
@@ -48,12 +46,10 @@ class Checker:
     run_dir: Path
     baseline: dict
     trial_unit: str
-    collector: environment.Collector
     codes: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     _good_vitals: float | None = None
-    _good_mode: float | None = None
-    _last_mode_try: float | None = None
+    _good_fast: float | None = None
     _started: float | None = None
     _rows: int = 0
 
@@ -64,7 +60,7 @@ class Checker:
     def tick(self, now: float, reading: Reading, child_alive: bool) -> list[str]:
         """Evaluate one second. Order follows the plan table so ties keep the top code."""
         if self._started is None:
-            self._started = self._good_vitals = self._good_mode = now
+            self._started = self._good_vitals = self._good_fast = now
         if reading.temp_millic is not None and reading.throttled is not None:
             self._good_vitals = now
             self._rows += 1
@@ -78,7 +74,7 @@ class Checker:
         if self._capacity_exceeded(reading):
             self.add("A03")
         self._invariants(now, reading)
-        if now - self._good_vitals > STALE_S or now - self._good_mode > MODE_VALID_S:
+        if now - self._good_vitals > STALE_S or now - self._good_fast > STALE_S:
             self.add("A05")
         if self._logs_lost(now):
             self.add("A08")
@@ -110,23 +106,14 @@ class Checker:
         return False
 
     def _invariants(self, now: float, r: Reading) -> None:
-        if r.fast is not None:
-            current = {**self.baseline, **r.fast}
-            if environment.deviations(
-                self.baseline, current, "live", allowed_units=(self.trial_unit + ".service",)
-            ):
-                self.add("A04")
-        if self._last_mode_try is None or now - self._last_mode_try >= MODE_PERIOD_S:
-            self._last_mode_try = now
-            try:
-                snapshot = self.collector.snapshot()
-            except Exception:  # noqa: BLE001 - a failed read only ages the last good value
-                return
-            self._good_mode = now
-            if environment.deviations(
-                self.baseline, snapshot, "live", allowed_units=(self.trial_unit + ".service",)
-            ):
-                self.add("A04")
+        """Judge the local snapshot; it never touches the original service's API."""
+        if r.fast is None:
+            return  # only ages the last good value (A05 after STALE_S)
+        self._good_fast = now
+        if environment.deviations(
+            self.baseline, r.fast, "live", allowed_units=(self.trial_unit + ".service",)
+        ):
+            self.add("A04")
 
     def _logs_lost(self, now: float) -> bool:
         if any(not (self.run_dir / name).exists() for name in LOGS):

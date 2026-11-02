@@ -193,11 +193,7 @@ def _execute(cfg: dict, run_dir: Path, baseline: dict, ops: system_ops.SystemOps
         except OSError:
             free = None
         try:
-            fast = {
-                k: v
-                for k, v in collector.snapshot().items()
-                if k in {"pi_boot_id", "unit_sha", "units_active", "dropin_paths"}
-            }
+            fast = collector.snapshot_local()  # never the service API: it is stopped
         except Exception:  # noqa: BLE001
             fast = None
         return live_guardian.Reading(temp, throttled, free, fast)
@@ -214,7 +210,7 @@ def _execute(cfg: dict, run_dir: Path, baseline: dict, ops: system_ops.SystemOps
         env=env,
         nonce=env["ESP32CAM_RUST_TRIAL_NONCE"],
         checker_factory=lambda d: live_guardian.Checker(
-            cfg["seconds"], d, baseline, cfg["trial_unit"], collector
+            cfg["seconds"], d, baseline, cfg["trial_unit"]
         ),
         io=live_guardian.IO(
             time.monotonic, time.sleep, read, spawn, lambda: int(time.time() * 1000)

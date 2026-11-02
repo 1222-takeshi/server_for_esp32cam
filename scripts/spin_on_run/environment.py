@@ -33,6 +33,11 @@ RESTORED_MODE = {
     "acknowledged": True,
     "actuation_state": "hold",
 }
+# Readable only through the original Python service's HTTP API, which is
+# stopped for the duration of a live trial (plan section 7).
+SERVICE_API_KEYS = ("camera_boot_id", "last_firmware_version")
+# Properties of the original service process; absent while it is stopped.
+SERVICE_PROCESS_KEYS = ("cpus_allowed", "nice_policy")
 UNIT_GLOB = "esp32cam-*"
 SERVICE = "esp32cam-server.service"
 UNVERIFIED = "unverified"
@@ -69,7 +74,12 @@ class Collector:
         self.unit_path = unit_path
         self.service_pid = service_pid
 
-    def snapshot(self) -> dict:
+    def snapshot_local(self) -> dict:
+        """Everything readable without the original service's HTTP API.
+
+        The live guardian uses only this: the service is stopped during a trial,
+        so a snapshot that needed the API would fail every time.
+        """
         show = dict(
             line.split("=", 1)
             for line in self.run(
@@ -105,9 +115,6 @@ class Collector:
                 ]
             )
         )
-        mode = self.get_json("mode")
-        ready = self.get_json("ready")
-        device = self.get_json("device")
         return {
             "pi_boot_id": self.run(["cat", "/proc/sys/kernel/random/boot_id"]).strip(),
             "unit_sha": sha,
@@ -117,6 +124,16 @@ class Collector:
             "governor": governors,
             "cpus_allowed": allowed,
             "nice_policy": nice.split("\n", 1)[-1] if nice else "",
+        }
+
+    def snapshot(self) -> dict:
+        """The local snapshot plus the three reads of the original service's API."""
+        local = self.snapshot_local()
+        mode = self.get_json("mode")
+        ready = self.get_json("ready")
+        device = self.get_json("device")
+        return {
+            **local,
             "mode": {
                 "ready": ready.get("status") == "ready",
                 "state": mode.get("state"),
@@ -165,10 +182,20 @@ def deviations(
     """Differences from the phase's expected state; empty means no deviation.
 
     phase: "offline" and "restored" expect the original service and mode; "live"
-    allows the planned Python stop, Tracking and the named trial units only.
+    expects the original service stopped and only the named trial units, and is
+    judged from a local snapshot (no API keys) so it keeps working while the
+    service is down.
     Every phase requires the immutable keys to match the baseline.
     """
-    found = [f"invariant:{key}" for key in FIXED_KEYS if baseline.get(key) != current.get(key)]
+    live = phase == "live"
+    found = []
+    for key in FIXED_KEYS:
+        if live and key in SERVICE_API_KEYS and key not in current:
+            continue  # the native process enforces the camera boot id itself
+        if live and key in SERVICE_PROCESS_KEYS and not current.get("service_active"):
+            continue  # nothing to read while the original service is stopped
+        if baseline.get(key) != current.get(key):
+            found.append(f"invariant:{key}")
     if current.get("unit_sha") != HASHES["original_unit"]:
         found.append("unit_sha_not_original")
     if current.get("dropin_paths"):
@@ -183,8 +210,11 @@ def deviations(
         wanted = RESTORED_MODE
         if any(mode.get(key) != value for key, value in wanted.items()):
             found.append("mode_not_restored")
-    elif phase == "live":
+    elif live:
+        # Trial column of the state table: the original service is stopped.
         extra = [u for u in extra if u != SERVICE]
+        if current.get("service_active"):
+            found.append("service_active_in_trial")
     else:
         found.append(f"unknown_phase:{phase}")
     found += [f"unexpected_unit:{u}" for u in extra]

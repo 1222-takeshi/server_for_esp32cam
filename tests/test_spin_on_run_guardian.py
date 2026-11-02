@@ -26,28 +26,23 @@ BASE = {
 TRIAL = "esp32cam-spin-on-run-v1-live-600-20261105"
 
 
-class Collector:
-    def __init__(self):
-        self.snap = dict(BASE)
-        self.fail = False
-
-    def snapshot(self):
-        if self.fail:
-            raise OSError("down")
-        return dict(self.snap, units_active=[TRIAL + ".service"])
+def local(**overrides):
+    """What `Collector.snapshot_local()` returns while the trial runs."""
+    keys = {k: v for k, v in BASE.items() if k not in {"camera_boot_id", "last_firmware_version", "mode"}}
+    return {**keys, "units_active": [TRIAL + ".service"], "cpus_allowed": "", "nice_policy": "", **overrides}
 
 
-def make_checker(tmp_path, collector=None):
+def make_checker(tmp_path):
     run_dir = tmp_path / "run"
     tmp_path.mkdir(exist_ok=True)
     native, stderr = lg.prepare_run_dir(run_dir)
     native.close()
     stderr.close()
-    return lg.Checker(600, run_dir, dict(BASE), TRIAL, collector or Collector()), run_dir
+    return lg.Checker(600, run_dir, dict(BASE), TRIAL), run_dir
 
 
 def reading(temp=60_000, throttled=0, free=10 * 1024**3, fast=None):
-    return lg.Reading(temp, throttled, free, fast if fast is not None else {})
+    return lg.Reading(temp, throttled, free, local(**(fast or {})))
 
 
 def run_ticks(checker, count, **kw):
@@ -98,17 +93,29 @@ def test_stale_vitals_abort_only_after_three_seconds(tmp_path):
     assert checker.tick(3.5, broken, True) == ["A05"]
 
 
-def test_stale_mode_state_aborts_after_ten_seconds_of_read_errors(tmp_path):
-    collector = Collector()
-    checker, _ = make_checker(tmp_path, collector)
+def test_stale_local_snapshot_aborts_after_three_seconds_of_read_errors(tmp_path):
+    checker, _ = make_checker(tmp_path)
     checker.tick(0.0, reading(), True)
-    collector.fail = True
-    codes = []
-    for second in range(1, 14):
-        codes = checker.tick(float(second), reading(), True)
-        if second <= 10:
-            assert codes == [], second
-    assert codes == ["A05"]
+    no_snapshot = lg.Reading(60_000, 0, 10 * 1024**3, None)
+    for second in (1.0, 2.0, 3.0):
+        assert checker.tick(second, no_snapshot, True) == []
+    assert checker.tick(3.5, no_snapshot, True) == ["A05"]
+
+
+def test_the_checker_never_needs_the_original_services_api(tmp_path):
+    import inspect
+
+    checker, _ = make_checker(tmp_path)
+    assert not hasattr(checker, "collector")
+    assert "snapshot()" not in inspect.getsource(lg.Checker)
+    # Many seconds with the service (and so its API) stopped stay clean.
+    assert run_ticks(checker, 30) == []
+
+
+def test_the_original_service_running_or_restarting_during_the_trial_is_a_deviation(tmp_path):
+    checker, _ = make_checker(tmp_path)
+    running = local(service_active=True, cpus_allowed=BASE["cpus_allowed"], nice_policy="x")
+    assert run_ticks(checker, 1, fast=running) == ["A04"]
 
 
 def test_log_loss_and_oversize_files(tmp_path):
@@ -127,7 +134,7 @@ def test_vitals_row_shortfall_is_log_loss(tmp_path):
     checker, run_dir = make_checker(tmp_path)
     for second in range(6):
         checker.tick(float(second), reading(), True)
-    broken = lg.Reading(None, None, None, {})
+    broken = lg.Reading(None, None, None, local())
     for second in range(6, 12):
         checker.tick(float(second), broken, True)
     assert "A08" in checker.codes or "A05" in checker.codes
@@ -172,7 +179,7 @@ class FakeChild:
         self.signals.append(signal.SIGKILL)
 
 
-def drive(tmp_path, child, readings, collector=None):
+def drive(tmp_path, child, readings):
     clock = {"t": 0.0}
     it = iter(readings)
 
@@ -190,7 +197,7 @@ def drive(tmp_path, child, readings, collector=None):
         argv=[sys.executable],
         env={},
         nonce="0123456789abcdef",
-        checker_factory=lambda d: lg.Checker(600, d, dict(BASE), TRIAL, collector or Collector()),
+        checker_factory=lambda d: lg.Checker(600, d, dict(BASE), TRIAL),
         io=lg.IO(monotonic, sleep, lambda now: next(it, reading()), lambda *a: child, lambda: 5),
     )
     return result, run_dir

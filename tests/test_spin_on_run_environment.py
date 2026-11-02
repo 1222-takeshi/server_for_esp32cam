@@ -24,7 +24,8 @@ class FakeRun:
         text = " ".join(argv)
         if "show" in argv:
             return (
-                f"ActiveState={self.state['active']}\nSubState=running\nMainPID=42\n"
+                f"ActiveState={self.state['active']}\nSubState=running\n"
+                f"MainPID={self.state.get('pid', 42)}\n"
                 f"DropInPaths={self.state['dropin']}\n"
             )
         if "sha256sum" in text:
@@ -121,14 +122,51 @@ def test_self_unit_is_allowed_only_by_exact_name():
     assert environment.deviations(base, now, "restored")
 
 
-def test_live_phase_allows_the_planned_stop_and_tracking():
+TRIAL = "esp32cam-spin-on-run-v1-live-600-20261101.service"
+
+
+def live_local(**run):
+    """The trial's view: service stopped, so no process and no API at all."""
+    def refused(name):
+        raise OSError("the original service is stopped")
+
+    return environment.Collector(
+        run=FakeRun(units=f"{TRIAL} l a r\n", active="inactive", pid=0, **run),
+        get_json=refused,
+        unit_path=UNIT,
+    ).snapshot_local()
+
+
+def test_local_snapshot_needs_no_api_and_carries_no_api_keys():
+    snap = live_local()
+    assert not set(snap) & {"mode", "camera_boot_id", "last_firmware_version"}
+    assert snap["service_active"] is False and snap["cpus_allowed"] == ""
+
+
+def test_live_phase_judges_the_stopped_service_from_the_local_snapshot():
     base = collect()
-    trial = "esp32cam-spin-on-run-v1-live-600-20261101.service"
-    run = FakeRun(units=f"{trial} l a r\n", active="inactive")
-    live = collect(run, {"mode": {"requested_mode": "tracking"}})
-    assert environment.deviations(base, live, "live", allowed_units=(trial,)) == []
-    assert "unexpected_unit:" + trial in environment.deviations(base, live, "live")
+    live = live_local()
+    assert environment.deviations(base, live, "live", allowed_units=(TRIAL,)) == []
+    assert "unexpected_unit:" + TRIAL in environment.deviations(base, live, "live")
     assert environment.deviations(base, live, "bogus")
+    for run, expected in [
+        ({"boot_id": "boot-2\n"}, "invariant:pi_boot_id"),
+        ({"governor": "performance performance"}, "invariant:governor"),
+        ({"sha": "0" * 64 + "  x\n"}, "unit_sha_not_original"),
+        ({"dropin": "/x.conf"}, "dropin_present"),
+    ]:
+        found = environment.deviations(base, live_local(**run), "live", allowed_units=(TRIAL,))
+        assert expected in found, run
+
+
+def test_live_phase_rejects_the_original_service_running_in_the_trial():
+    base = collect()
+    running = collect(FakeRun(units=f"{TRIAL} l a r\n"))
+    found = environment.deviations(base, running, "live", allowed_units=(TRIAL,))
+    assert "service_active_in_trial" in found
+    # Process properties are compared again once the service is up.
+    other = collect(FakeRun(units=f"{TRIAL} l a r\n", governor="powersave powersave"))
+    assert "invariant:governor" in environment.deviations(base, other, "live", allowed_units=(TRIAL,))
 
 
 def write_baseline(tmp_path):
