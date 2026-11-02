@@ -77,11 +77,21 @@ def native_argv(binary: str, model: str, runtime: str) -> list[str]:
     return [binary, model, runtime, "0.0.0.0:8766", "esp32cam-01"]
 
 
-def live_systemd_run(unit: str, seconds: int, guardian: str, run_dir: str) -> list[str]:
+def cli_command(root: str, *args: str) -> list[str]:
+    """The entry point every unit runs, from the deployment root so `scripts` imports."""
+    return [PYTHON, "-m", "scripts.spin_on_run.cli", *args]
+
+
+def _exec(root: str, *args: str) -> str:
+    return " ".join(cli_command(root, *args))
+
+
+def live_systemd_run(unit: str, seconds: int, root: str, config: str, run_dir: str) -> list[str]:
     return [
         "systemd-run",
         "--user",
         f"--unit={unit}",
+        f"--property=WorkingDirectory={root}",
         f"--property=RuntimeMaxSec={RUNTIME_MAX[seconds]}",
         "--property=TimeoutStopSec=5",
         "--property=KillMode=control-group",
@@ -89,55 +99,48 @@ def live_systemd_run(unit: str, seconds: int, guardian: str, run_dir: str) -> li
         "--property=StandardOutput=null",
         "--property=StandardError=null",
         f"--property=OnFailure={RECOVER_UNIT}",
-        f"--property=ExecStopPost={PYTHON} {guardian} enqueue {run_dir}",
-        PYTHON,
-        guardian,
-        "execute",
-        run_dir,
+        f"--property=ExecStopPost={_exec(root, 'live', config, run_dir, 'enqueue')}",
+        *cli_command(root, "live", config, run_dir, "execute"),
     ]
 
 
 def offline_systemd_run(
-    unit: str, post_unit: str, runner: str, post: str, out_dir: str
+    unit: str, root: str, config: str, out_dir: str, *, thread: bool
 ) -> list[str]:
-    start_post = (
-        f"{PYTHON} {post} launch {out_dir} {post_unit}"  # starts the follow-up unit, no blocking
-    )
+    """The offline unit; its stop starts the follow-up unit without blocking."""
     return [
         "systemd-run",
         "--user",
         f"--unit={unit}",
-        "--property=RuntimeMaxSec=1500",
+        f"--property=WorkingDirectory={root}",
+        "--property=RuntimeMaxSec=" + ("900" if thread else "1500"),
         "--property=TimeoutStopSec=30",
         "--property=KillMode=control-group",
-        f"--property=ExecStopPost={start_post}",
-        PYTHON,
-        runner,
-        "run",
-        out_dir,
+        f"--property=ExecStopPost={_exec(root, 'offline-post', config, out_dir, 'launch')}",
+        *cli_command(root, "offline-run", config, out_dir, *(["--thread"] if thread else [])),
     ]
 
 
-def post_systemd_run(post_unit: str, offline_unit: str, post: str, out_dir: str) -> list[str]:
+def post_systemd_run(
+    post_unit: str, offline_unit: str, root: str, config: str, out_dir: str
+) -> list[str]:
     """The follow-up unit: oneshot, ordered after the offline unit, 300 s start timeout."""
     return [
         "systemd-run",
         "--user",
         f"--unit={post_unit}",
+        f"--property=WorkingDirectory={root}",
         "--property=Type=oneshot",
         f"--property=After={offline_unit}.service",
         "--property=TimeoutStartSec=300",
         "--property=TimeoutStopSec=30",
-        f"--property=ExecStopPost={PYTHON} {post} finalize {out_dir}",
+        f"--property=ExecStopPost={_exec(root, 'offline-post', config, out_dir, 'finalize')}",
         "--no-block",
-        PYTHON,
-        post,
-        "run",
-        out_dir,
+        *cli_command(root, "offline-post", config, out_dir, "run"),
     ]
 
 
-def recover_unit_text(trial: str, guardian: str, run_dir: str) -> str:
+def recover_unit_text(trial: str, root: str, config: str, run_dir: str) -> str:
     """Persistent oneshot that completes the restoration after any trial end."""
     return (
         "[Unit]\n"
@@ -147,11 +150,12 @@ def recover_unit_text(trial: str, guardian: str, run_dir: str) -> str:
         "StartLimitIntervalSec=0\n\n"
         "[Service]\n"
         "Type=oneshot\n"
+        f"WorkingDirectory={root}\n"
         "TimeoutStartSec=1260\n"
         "Restart=on-failure\n"
         "RestartSec=15\n"
         "RestartPreventExitStatus=75\n"
-        f"ExecStart={PYTHON} {guardian} recover {run_dir}\n\n"
+        f"ExecStart={_exec(root, 'live', config, run_dir, 'recover')}\n\n"
         "[Install]\n"
         "WantedBy=default.target\n"
     )

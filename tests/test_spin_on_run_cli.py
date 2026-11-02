@@ -25,6 +25,11 @@ def test_units_command_writes_dry_run_files_without_credentials(tmp_path):
     )
     plan = json.loads((offline / "offline-systemd-run.json").read_text())
     assert plan["offline"][2] == "--unit=esp32cam-spin-on-run-v1-offline-20261105"
+    assert plan["offline"][-3:] == [
+        "offline-run",
+        "/home/ubuntu/spin-on-run/config.json",
+        "/home/ubuntu/spin-on-run/run",
+    ]
     assert plan["post"][2] == "--unit=esp32cam-spin-on-run-v1-offline-post-20261105"
     with pytest.raises(FileExistsError):
         cli.main(["units", "--kind", "live", "--date", "20261105", "--out", str(out)])

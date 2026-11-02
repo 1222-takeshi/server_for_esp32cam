@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -54,22 +55,23 @@ def cmd_units(args: argparse.Namespace) -> int:
             seconds=args.seconds,
             credentials={"ESP32CAM_DEVICE_API_KEYS": "placeholder"},
         )
-        run = units.live_systemd_run(trial, args.seconds, args.guardian, args.run_dir)
+        run = units.live_systemd_run(trial, args.seconds, args.root, args.config, args.run_dir)
         request = units.launch_request(env, units.native_argv("frame-live", "m", "r"), run)
         common.write_json(out / "launch-request.dry-run.json", request)
         common.write_new(
-            out / units.RECOVER_UNIT, units.recover_unit_text(trial, args.guardian, args.run_dir)
+            out / units.RECOVER_UNIT,
+            units.recover_unit_text(trial, args.root, args.config, args.run_dir),
         )
     else:
-        offline = f"{units.OFFLINE_PREFIX}-{date}"
-        post = f"{units.OFFLINE_PREFIX}-post-{date}"
+        prefix = units.THREAD_PREFIX if args.thread else units.OFFLINE_PREFIX
+        offline, post = f"{prefix}-{date}", f"{prefix}-post-{date}"
         common.write_json(
             out / "offline-systemd-run.json",
             {
                 "offline": units.offline_systemd_run(
-                    offline, post, args.runner, args.post, args.run_dir
+                    offline, args.root, args.config, args.run_dir, thread=args.thread
                 ),
-                "post": units.post_systemd_run(post, offline, args.post, args.run_dir),
+                "post": units.post_systemd_run(post, offline, args.root, args.config, args.run_dir),
             },
         )
     print(f"wrote {out}")
@@ -129,6 +131,12 @@ def cmd_offline_post(args: argparse.Namespace) -> int:
     cfg = _config(args.config)
     out = Path(args.out)
     baseline = json.loads(Path(cfg["baseline"]).read_text())
+    if args.step == "launch":
+        unit = cfg["post_unit"]
+        command = units.post_systemd_run(
+            unit, cfg["offline_unit"], cfg["root"], args.config, str(out)
+        )
+        return subprocess.run(command, check=False).returncode  # noqa: S603
     if args.step == "run":
         result = post_runner.run_post(
             out,
@@ -172,8 +180,6 @@ def cmd_live(args: argparse.Namespace) -> int:
 
 
 def _execute(cfg: dict, run_dir: Path, baseline: dict, ops: system_ops.SystemOps) -> int:
-    import subprocess
-
     collector = ops.collector
 
     def read(now: float) -> live_guardian.Reading:
@@ -225,10 +231,10 @@ def parser() -> argparse.ArgumentParser:
     u.add_argument("--seconds", type=int, choices=[600, 3600], default=600)
     u.add_argument("--date", required=True)
     u.add_argument("--out", required=True)
-    u.add_argument("--guardian", default="/home/ubuntu/spin-on-run/live_guardian_cli.py")
-    u.add_argument("--runner", default="/home/ubuntu/spin-on-run/offline_cli.py")
-    u.add_argument("--post", default="/home/ubuntu/spin-on-run/post_cli.py")
+    u.add_argument("--root", default="/home/ubuntu/spin-on-run")
+    u.add_argument("--config", default="/home/ubuntu/spin-on-run/config.json")
     u.add_argument("--run-dir", default="/home/ubuntu/spin-on-run/run")
+    u.add_argument("--thread", action="store_true", help="candidate M units")
     u.set_defaults(handler=cmd_units)
     m = sub.add_parser("manifest", help="print the prepared manifest as JSON")
     m.add_argument("--binary", action="append", default=[], help="label=path")
@@ -243,7 +249,7 @@ def parser() -> argparse.ArgumentParser:
     p = sub.add_parser("offline-post")
     p.add_argument("config")
     p.add_argument("out")
-    p.add_argument("step", choices=["run", "finalize", "final-check"])
+    p.add_argument("step", choices=["launch", "run", "finalize", "final-check"])
     p.set_defaults(handler=cmd_offline_post)
     lv = sub.add_parser("live")
     lv.add_argument("config")

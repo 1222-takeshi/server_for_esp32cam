@@ -66,7 +66,7 @@ def test_live_env_input_validation():
 def test_systemd_run_arguments_match_the_plan():
     name = units.trial_unit(600, "20261105")
     assert name == "esp32cam-spin-on-run-v1-live-600-20261105"
-    args = units.live_systemd_run(name, 600, "/g/guardian.py", "/run/x")
+    args = units.live_systemd_run(name, 600, "/root", "/root/c.json", "/run/x")
     for expected in (
         "--property=RuntimeMaxSec=900",
         "--property=TimeoutStopSec=5",
@@ -75,17 +75,25 @@ def test_systemd_run_arguments_match_the_plan():
         "--property=StandardOutput=null",
         "--property=StandardError=null",
         "--property=OnFailure=esp32cam-spin-on-run-v1-live-recover.service",
-        "--property=ExecStopPost=/usr/bin/python3 /g/guardian.py enqueue /run/x",
+        "--property=WorkingDirectory=/root",
+        "--property=ExecStopPost=/usr/bin/python3 -m scripts.spin_on_run.cli live /root/c.json /run/x enqueue",
     ):
         assert expected in args
-    assert args[-4:] == ["/usr/bin/python3", "/g/guardian.py", "execute", "/run/x"]
-    assert "RuntimeMaxSec=4200" in " ".join(units.live_systemd_run("u", 3600, "g", "r"))
+    assert args[-6:] == [
+        "-m",
+        "scripts.spin_on_run.cli",
+        "live",
+        "/root/c.json",
+        "/run/x",
+        "execute",
+    ]
+    assert "RuntimeMaxSec=4200" in " ".join(units.live_systemd_run("u", 3600, "r", "c", "d"))
     with pytest.raises(ValueError):
         units.trial_unit(60, "d")
 
 
 def test_recover_unit_has_the_frozen_directives():
-    text = units.recover_unit_text("trial-x", "/g/guardian.py", "/run/x")
+    text = units.recover_unit_text("trial-x", "/root", "/root/c.json", "/run/x")
     for line in (
         "Conflicts=trial-x.service",
         "After=trial-x.service esp32cam-server.service",
@@ -96,18 +104,23 @@ def test_recover_unit_has_the_frozen_directives():
         "RestartPreventExitStatus=75",
         "WantedBy=default.target",
         "Type=oneshot",
+        "ExecStart=/usr/bin/python3 -m scripts.spin_on_run.cli live /root/c.json /run/x recover",
     ):
         assert line in text.splitlines()
 
 
 def test_offline_post_unit_is_a_300_second_oneshot_after_the_offline_unit():
-    args = units.post_systemd_run("p", "o", "/p.py", "/out")
+    args = units.post_systemd_run("p", "o", "/root", "/c.json", "/out")
     assert "--property=Type=oneshot" in args and "--property=After=o.service" in args
     assert "--property=TimeoutStartSec=300" in args
     assert not any("RuntimeMaxSec" in a for a in args)
     assert any(a.startswith("--property=ExecStopPost=") and "finalize" in a for a in args)
-    assert "--property=RuntimeMaxSec=1500" in units.offline_systemd_run(
-        "o", "p", "/r.py", "/p.py", "/out"
+    offline = units.offline_systemd_run("o", "/root", "/c.json", "/out", thread=False)
+    assert "--property=RuntimeMaxSec=1500" in offline
+    assert offline[-3:] == ["offline-run", "/c.json", "/out"]
+    assert any("offline-post /c.json /out launch" in a for a in offline)
+    assert "--property=RuntimeMaxSec=900" in units.offline_systemd_run(
+        "m", "/r", "/c", "/o", thread=True
     )
 
 
