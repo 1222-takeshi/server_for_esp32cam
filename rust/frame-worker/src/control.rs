@@ -179,7 +179,8 @@ impl SessionClock {
         Protection {
             pending_since_us: self.pending.as_ref().map(|(_, sent)| *sent),
             last_sync_us: self.last_sync,
-            drift_violation: self.window.drift_inconsistent(),
+            drift_violation: self.window.drift_inconsistent()
+                || self.window.drift_estimate_exceeded(),
             input: self.last_input,
         }
     }

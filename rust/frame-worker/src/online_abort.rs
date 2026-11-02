@@ -56,9 +56,10 @@ pub struct Protection {
     pub pending_since_us: Option<u64>,
     /// Receive time of the last accepted clock reply.
     pub last_sync_us: Option<u64>,
-    /// Two retained clock exchanges cannot both hold under the assumed 200 ppm
-    /// drift bound. This is a consistency check on the offset intervals, not an
-    /// estimate of the clock error, and it is not claimed to be equivalent to one.
+    /// The clock error estimated from the retained exchanges is above 200 ppm
+    /// (slope of the offset midpoints), or two retained exchanges cannot both
+    /// hold under that bound (disjoint offset intervals). See
+    /// `ClockWindow::drift_estimate_exceeded` for the exact definition.
     pub drift_violation: bool,
     /// Last input the receiver accepted; its age keeps growing while nothing
     /// new is accepted, whether or not a result is being published.

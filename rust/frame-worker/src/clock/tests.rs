@@ -122,3 +122,97 @@ fn drift_bound_contradiction_is_detected_with_the_same_margin_and_rounding() {
     mixed.add(other).unwrap();
     assert!(!mixed.drift_inconsistent());
 }
+
+fn exchange(device: u64, sent: u64, received: u64) -> ClockSample {
+    ClockSample::from_exchange(1, device, sent, received).unwrap()
+}
+
+fn window_of(samples: &[ClockSample]) -> ClockWindow {
+    let mut window = ClockWindow::default();
+    for sample in samples {
+        window.add(*sample).unwrap();
+    }
+    window
+}
+
+#[test]
+fn midpoint_estimate_is_200_ppm_exclusive() {
+    // Zero-width exchanges: the offset is exact. 100 s of device time at exactly
+    // 200 ppm is 20_000 us.
+    let base = exchange(1_000_000, 1_000_000, 1_000_000);
+    let at = |extra: u64| {
+        exchange(
+            101_000_000,
+            101_000_000 + 20_000 + extra,
+            101_000_000 + 20_000 + extra,
+        )
+    };
+    assert!(!window_of(&[base, at(0)]).drift_estimate_exceeded());
+    assert!(window_of(&[base, at(1)]).drift_estimate_exceeded());
+    // Below the limit, and the sign of the slope does not matter.
+    let slower = exchange(101_000_000, 101_000_000 + 19_999, 101_000_000 + 19_999);
+    assert!(!window_of(&[base, slower]).drift_estimate_exceeded());
+    let behind = exchange(101_000_000, 101_000_000 - 20_001, 101_000_000 - 20_001);
+    assert!(window_of(&[base, behind]).drift_estimate_exceeded());
+}
+
+#[test]
+fn midpoint_estimate_is_stricter_than_the_interval_check() {
+    // Two 20 ms wide exchanges 100 s apart whose midpoints differ by 30_000 us
+    // (300 ppm): the intervals still overlap once widened by 200 ppm, so the
+    // interval check stays quiet while the estimate fires.
+    let a = exchange(1_000_000, 1_000_000, 1_020_000);
+    let b = exchange(101_000_000, 101_030_000, 101_050_000);
+    let window = window_of(&[a, b]);
+    assert!(!window.drift_inconsistent());
+    assert!(window.drift_estimate_exceeded());
+}
+
+#[test]
+fn midpoint_estimate_needs_two_samples_and_a_long_enough_baseline() {
+    assert!(!ClockWindow::default().drift_estimate_exceeded());
+    assert!(!window_of(&[exchange(1_000_000, 1_000_000, 1_000_100)]).drift_estimate_exceeded());
+    // 1 s apart with 2 ms wide exchanges and a 1 ms midpoint step (1000 ppm
+    // looking): the round trip width alone explains it, so no estimate.
+    let a = exchange(1_000_000, 1_000_000, 1_002_000);
+    let b = exchange(2_000_000, 2_001_000, 2_003_000);
+    assert!(!window_of(&[a, b]).drift_estimate_exceeded());
+    // Same device time: no baseline at all.
+    let c = exchange(1_000_000, 1_500_000, 1_500_000);
+    assert!(!window_of(&[a, c]).drift_estimate_exceeded());
+    // The resolution limit is inclusive: widths summing to 4000 us need 10 s.
+    let wide = |dev: u64, step: u64| exchange(dev, dev + step, dev + step + 2_000);
+    assert!(window_of(&[wide(1_000_000, 0), wide(11_000_000, 100_000)]).drift_estimate_exceeded());
+    let wider = exchange(11_000_000, 11_100_000, 11_102_001);
+    assert!(!window_of(&[wide(1_000_000, 0), wider]).drift_estimate_exceeded());
+}
+
+#[test]
+fn midpoint_estimate_uses_the_longest_retained_baseline() {
+    // Steady 100 ppm for 80 s, then a step: the last sample is 300 ppm from the first
+    // while adjacent pairs are short and ambiguous.
+    let samples: Vec<ClockSample> = (0..8u64)
+        .map(|i| {
+            let dev = 1_000_000 + i * 10_000_000;
+            let off = if i == 7 { 24_000 } else { i * 1_000 };
+            exchange(dev, dev + off, dev + off)
+        })
+        .collect();
+    assert!(window_of(&samples).drift_estimate_exceeded());
+    assert!(!window_of(&samples[..7]).drift_estimate_exceeded());
+}
+
+#[test]
+fn midpoint_estimate_does_not_cross_a_boot_change() {
+    let old = exchange(1_000_000, 1_000_000, 1_000_000);
+    // Same wall of host time, a rebooted camera with an unrelated device clock.
+    let new = ClockSample::from_exchange(2, 50_000, 101_000_000, 101_000_000).unwrap();
+    let window = window_of(&[old, new]);
+    assert!(!window.drift_estimate_exceeded());
+    assert!(!window.drift_inconsistent());
+    // After the change only the new boot's samples count.
+    let later = ClockSample::from_exchange(2, 100_050_000, 201_000_000, 201_000_000).unwrap();
+    assert!(!window_of(&[old, new, later]).drift_estimate_exceeded());
+    let drifting = ClockSample::from_exchange(2, 100_050_000, 201_030_001, 201_030_001).unwrap();
+    assert!(window_of(&[old, new, drifting]).drift_estimate_exceeded());
+}
