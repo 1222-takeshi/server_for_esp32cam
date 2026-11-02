@@ -441,7 +441,7 @@ impl<'a> Receiver<'a> {
                     return Err("duration_limit");
                 }
                 // Sampled before any recovery restart can clear the evidence.
-                s.protection = clock.protection().in_force(s.mode.generation());
+                s.protection = clock.protection();
                 // Same lock and fresh decision stamp as the controller's commit.
                 self.restart_clock(&mut s, &mut clock, now, stats)?;
                 stats.note_hold(&s, socket.io_trace());
