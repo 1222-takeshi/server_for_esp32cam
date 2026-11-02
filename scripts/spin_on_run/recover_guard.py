@@ -147,6 +147,7 @@ class Guard:
             "reason": (report or {}).get("reason") if isinstance(report, dict) else None,
             "parse_error": parse_error,
             "max_generation": _max_generation(report),
+            "report_present": isinstance(report, dict),
         }
         aborts = live_checker.abort_codes(
             marker=marker,
@@ -237,9 +238,18 @@ class Guard:
 
     # -- sequence ------------------------------------------------------------
     def used_generation(self) -> int | None:
-        """Report's last generation; without a report, the last version seen."""
-        generation = self.post.get("max_generation") if isinstance(self.post, dict) else None
-        return generation if isinstance(generation, int) else self.last_seen_version()
+        """Report's last generation; without a report, the last version seen.
+
+        A report that is present but does not carry `generation_epochs` is not "no
+        report": what the trial used is unknown then, and R4 must fail rather than
+        fall back to the version recorded before the trial.
+        """
+        post = self.post if isinstance(self.post, dict) else {}
+        if isinstance(post.get("max_generation"), int):
+            return post["max_generation"]
+        if post.get("report_present"):
+            return None
+        return self.last_seen_version()
 
     def attempt(self, number: int) -> bool:
         record = {"attempt": number}
@@ -356,6 +366,11 @@ def final_verdict(run_dir: Path, collector: environment.Collector, baseline: dic
     post = result.get("post", {})
     aborts, failures = post.get("abort_codes", ["A06"]), post.get("failure_codes", [])
     restored = result["ok"] and not found and result.get("post_ok", post_ok(post))
+    if "invariant:camera_boot_id" in found and "A04" not in aborts:
+        # The native process ends on a boot change it sees (A07, recorded first); the
+        # guardian cannot read the camera boot id while the service is stopped, so the
+        # change is confirmed here, after the restore (plan 10.1, last bullet).
+        aborts = [*aborts, "A04"]
     final = live_checker.final_result(aborts, failures, restore_ok=restored)
     final["final_deviations"] = found
     common.write_json(run_dir / "final.json", final)

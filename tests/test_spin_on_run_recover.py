@@ -90,9 +90,12 @@ class FakeOps:
         return self.enabled
 
 
-def run_dir(tmp_path, report=None, marker="completed", child=None):
+def run_dir(tmp_path, report=None, marker="completed", child=None, epochs=True):
     d = tmp_path / "trial"
     d.mkdir(parents=True)
+    if epochs and isinstance(report, dict) and "measurement" not in report:
+        # A complete report carries the generations the trial used (below the ACK of 5).
+        report = {**report, "measurement": {"generation_epochs": [[1, 1], [2, 3]]}}
     (d / "native.json").write_text(json.dumps(report) if report is not None else "")
     (d / "native.stderr").write_bytes(b"")
     if marker:
@@ -342,9 +345,7 @@ class Flaky(FakeOps):
         super().disable_self()
 
 
-@pytest.mark.parametrize(
-    "name", ["stop_trial", "start_service", "mode", "request_eco"]
-)
+@pytest.mark.parametrize("name", ["stop_trial", "start_service", "mode", "request_eco"])
 def test_a_transient_failure_in_r1_to_r4_does_not_end_the_restore(tmp_path, name):
     ops = Flaky(name, eco_after_requests=1)
     g, d = guard(tmp_path, ops=ops, report={"reason": "completed"})
@@ -501,7 +502,51 @@ def test_post_run_is_limited_to_30_seconds_and_a_late_one_blocks_a_pass(tmp_path
     assert rg.post_ok(quick.post_run())
     g.post = info
     out = {"ok": True, "post": info, "post_ok": False}
-    common.write_json(d / "restore-result.json", out) if not (d / "restore-result.json").exists() else None
+    common.write_json(d / "restore-result.json", out) if not (
+        d / "restore-result.json"
+    ).exists() else None
     collector = environment.Collector(run=lambda argv: "", get_json=lambda n: {}, unit_path="/x")
     collector.snapshot = lambda: baseline()
     assert rg.final_verdict(d, collector, baseline())["result"] != "passed"
+
+
+def test_a_report_without_generation_epochs_does_not_fall_back_to_the_baseline_version(tmp_path):
+    # Version 4 is above the baseline's 3, so a silent fallback would pass R4.
+    for name, report in [
+        ("nomeasurement", {"reason": "completed"}),
+        ("noepochs", {"reason": "completed", "measurement": {}}),
+        ("emptyepochs", {"reason": "completed", "measurement": {"generation_epochs": []}}),
+    ]:
+        g, _ = guard(tmp_path / name, ops=FakeOps(version=4), report=report, epochs=False)
+        out = g.run()
+        assert not out["ok"], name
+        assert out["attempts"][0]["R3R4"]["detail"] == "generation used in the trial is unknown"
+    # With the epochs present the same ACK is accepted.
+    ok = {"reason": "completed", "measurement": {"generation_epochs": [[1, 1], [2, 3]]}}
+    g, _ = guard(tmp_path / "present", ops=FakeOps(version=4), report=ok)
+    assert g.run()["ok"]
+    # No report at all is still the documented fallback.
+    g, _ = guard(tmp_path / "absent", ops=FakeOps(version=4), report=None)
+    assert g.run()["ok"]
+
+
+def test_a_camera_boot_change_during_the_trial_is_a_child_exit_first_and_a04_after_the_restore(
+    tmp_path,
+):
+    # The native process leaves on the boot mismatch it sees: a non-zero exit (A07).
+    child = {"exit": 1, "signalled": False, "guardian_stopped_child": False}
+    g, d = guard(tmp_path, report={"reason": "boot_mismatch"}, marker="completed", child=child)
+    out = g.run()
+    assert out["post"]["abort_codes"] == ["A07"]
+    collector = environment.Collector(run=lambda argv: "", get_json=lambda n: {}, unit_path="/x")
+    collector.snapshot = lambda: dict(baseline(), camera_boot_id=BASE["camera_boot_id"] + 1)
+    final = rg.final_verdict(d, collector, baseline())
+    # The first recorded code stays the primary reason; the restore adds A04.
+    assert final["result"] == "aborted" and final["primary"] == "A07"
+    assert json.loads((d / "final.json").read_text())["milestone"] is False
+    assert "invariant:camera_boot_id" in final["final_deviations"]
+    # A boot change seen only after the restore, with nothing aborted before, is A04.
+    quiet, d2 = guard(tmp_path / "quiet", report={"reason": "completed"})
+    quiet.run()
+    final = rg.final_verdict(d2, collector, baseline())
+    assert final["primary"] == "A04" and final["milestone"] is False
