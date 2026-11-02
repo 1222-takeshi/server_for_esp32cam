@@ -91,3 +91,34 @@ fn python_reference_fixtures() {
         assert_eq!(actual, expected, "{case}");
     }
 }
+
+#[test]
+fn drift_bound_contradiction_is_detected_with_the_same_margin_and_rounding() {
+    // Offset interval [sent - device, received - device] for each exchange.
+    let sample = |device: u64, sent: u64, received: u64| {
+        ClockSample::from_exchange(1, device, sent, received).unwrap()
+    };
+    let mut window = ClockWindow::default();
+    assert!(!window.drift_inconsistent());
+    window.add(sample(1_000_000, 1_000_100, 1_000_200)).unwrap();
+    // 10 s of device time allows 2000 us of drift; a gap of exactly 2000 is fine.
+    window
+        .add(sample(11_000_000, 11_002_200, 11_002_300))
+        .unwrap();
+    assert!(!window.drift_inconsistent());
+    let mut window = ClockWindow::default();
+    window.add(sample(1_000_000, 1_000_100, 1_000_200)).unwrap();
+    window
+        .add(sample(11_000_000, 11_002_201, 11_002_301))
+        .unwrap();
+    assert!(window.drift_inconsistent());
+    // Windows of one sample, and samples of different boots, never contradict.
+    let mut single = ClockWindow::default();
+    single.add(sample(1, 1, 2)).unwrap();
+    assert!(!single.drift_inconsistent());
+    let other = ClockSample::from_exchange(2, 11_000_000, 11_500_000, 11_500_001).unwrap();
+    let mut mixed = ClockWindow::default();
+    mixed.add(sample(1_000_000, 1_000_100, 1_000_200)).unwrap();
+    mixed.add(other).unwrap();
+    assert!(!mixed.drift_inconsistent());
+}

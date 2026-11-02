@@ -194,6 +194,8 @@ pub struct Sample {
     pub compute_us: u64,
 }
 pub struct State {
+    /// Latest clock-protection view, refreshed by the receiver on every pass.
+    pub protection: crate::online_abort::Protection,
     clock: Clock,
     clock_fence_us: u64,
     #[cfg(feature = "transport")]
@@ -218,6 +220,7 @@ impl State {
         let copy = clock.clone();
         let mode = OperatingMode::new_with_tracking_recovery(generation, move || copy(), auto)?;
         Ok(Self {
+            protection: Default::default(),
             clock,
             clock_fence_us: 0,
             #[cfg(feature = "transport")]

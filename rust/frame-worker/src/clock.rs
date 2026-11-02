@@ -41,6 +41,14 @@ impl ClockSample {
         })
     }
 
+    /// Offset intervals that stay disjoint after widening by the assumed drift
+    /// over the device time between the two exchanges contradict that bound.
+    fn contradicts(&self, other: &Self) -> bool {
+        let delta = i128::from(self.device_us.abs_diff(other.device_us));
+        let margin = (delta * DRIFT_PPM + 999_999) / 1_000_000;
+        self.low - other.high > margin || other.low - self.high > margin
+    }
+
     pub fn age_bounds(&self, frame: &Frame, now_us: u64) -> Option<AgeBounds> {
         if now_us == 0 || frame.boot != self.boot || now_us.abs_diff(self.received_us) > MAX_AGE_US
         {
@@ -93,6 +101,17 @@ impl ClockWindow {
                 ]
             })
             .collect()
+    }
+
+    /// True when two retained samples of one boot cannot both hold under the
+    /// assumed drift bound. Read-only; it never changes admission decisions.
+    pub fn drift_inconsistent(&self) -> bool {
+        self.samples.iter().enumerate().any(|(i, a)| {
+            self.samples
+                .iter()
+                .skip(i + 1)
+                .any(|b| a.boot == b.boot && a.contradicts(b))
+        })
     }
 
     pub fn age_bounds(&self, frame: &Frame, now_us: u64) -> Option<AgeBounds> {

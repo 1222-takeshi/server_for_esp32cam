@@ -283,6 +283,11 @@ impl Trial {
         }
         Ok(true)
     }
+    /// `[start_us, end_us)` once the first tracking result anchors the interval.
+    pub fn measurement_interval(&self) -> Option<(u64, u64)> {
+        let start = self.start?;
+        Some((start, start.checked_add(self.duration)?))
+    }
     pub fn evaluate(&self, samples: &[Sample]) -> Result<Value> {
         if self.phase != Phase::Done {
             return Err("trial_incomplete");

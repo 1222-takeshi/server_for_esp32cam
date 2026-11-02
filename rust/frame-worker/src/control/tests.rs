@@ -250,3 +250,24 @@ fn arrival_proof_cannot_be_reused_for_another_identity() {
     }
     assert!(proof.fits(&original, 100_000, 0));
 }
+
+#[test]
+fn protection_view_reports_unanswered_ping_and_last_sync_without_changing_state() {
+    let mut clock = SessionClock::default();
+    assert_eq!(clock.protection(5), Protection::default());
+    clock.poll(1_000, true, nonce).unwrap().unwrap();
+    assert_eq!(clock.protection(1_500_001).rtt_us, Some(1_499_001));
+    assert_eq!(clock.protection(1_500_001).sync_age_us, None);
+    clock.pong(1, "0123456789abcdef", 77, 1_300).unwrap();
+    let view = clock.protection(11_001_300);
+    assert_eq!((view.rtt_us, view.sync_age_us), (None, Some(11_000_000)));
+    assert!(!view.drift_violation);
+    // A recovery restart keeps the last sync time visible.
+    clock.poll(60_000, true, nonce).unwrap().unwrap();
+    clock.restart_expired(1_100_001).unwrap();
+    assert_eq!(
+        clock.protection(2_000_000).sync_age_us,
+        Some(2_000_000 - 1_300)
+    );
+    assert_eq!(clock.protection(2_000_000).rtt_us, None);
+}

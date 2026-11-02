@@ -3,6 +3,7 @@
 use crate::{
     Frame, MAX_GENERATION,
     clock::{AgeBounds, ClockSample, ClockWindow},
+    online_abort::Protection,
     operating_mode::Mode,
 };
 use serde_json::{Map, Value, json};
@@ -155,6 +156,7 @@ pub struct SessionClock {
     boot: Option<u64>,
     pending: Option<(String, u64)>,
     last_ping: Option<u64>,
+    last_sync: Option<u64>,
     window: ClockWindow,
     retired: VecDeque<(String, bool)>,
 }
@@ -168,6 +170,18 @@ impl SessionClock {
         };
         let elapsed = now.checked_sub(*sent).ok_or("invalid_host_clock")?;
         Ok((elapsed > 1_000_000).then_some(*sent))
+    }
+    /// Read-only view of the limits this clock enforces, for online evaluation.
+    /// `last_sync` survives a recovery restart so a stalled link stays visible.
+    pub fn protection(&self, now: u64) -> Protection {
+        Protection {
+            rtt_us: self
+                .pending
+                .as_ref()
+                .map(|(_, sent)| now.saturating_sub(*sent)),
+            sync_age_us: self.last_sync.map(|at| now.saturating_sub(at)),
+            drift_violation: self.window.drift_inconsistent(),
+        }
     }
     /// Opt-in recovery only: never renew an expired exchange or old evidence.
     pub fn restart_expired(&mut self, now: u64) -> Result<u64> {
@@ -243,6 +257,7 @@ impl SessionClock {
         let sample = ClockSample::from_exchange(boot, device, *sent, received)?;
         self.bind(boot)?;
         self.window.add(sample)?;
+        self.last_sync = Some(received);
         self.pending = None;
         Ok(())
     }
