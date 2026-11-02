@@ -3,11 +3,12 @@ import re
 import os
 import signal
 import stat
+import subprocess
 import sys
 
 import pytest
 
-from scripts.spin_on_run import common
+from scripts.spin_on_run import cli, common, system_ops
 from scripts.spin_on_run import live_guardian as lg
 
 BASE = {
@@ -323,3 +324,53 @@ def test_a_failed_stop_refuses_the_start_and_leaves_recovery_to_the_guard(tmp_pa
     assert end["child_started"] is False and end["guardian_stopped_child"] is False
     assert json.loads((run_dir / "service-stop.json").read_text())["stopped"] is False
     assert ops.active is True  # restoring it is the independent guard's job, not the guardian's
+
+
+def test_the_cli_hands_the_service_stop_of_its_ops_to_the_guardian(tmp_path, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        cli.live_guardian, "execute", lambda **kw: captured.update(kw) or {"codes": []}
+    )
+    monkeypatch.setattr(cli.units, "validate_live_env", lambda env: None)
+    monkeypatch.setattr(cli.units, "native_argv", lambda *a: ["frame-live"])
+    env_file = tmp_path / "env.json"
+    env_file.write_text(json.dumps({"ESP32CAM_RUST_TRIAL_NONCE": "0123456789abcdef"}))
+    cfg = {
+        "launch_env": str(env_file),
+        "seconds": 600,
+        "frame_live": "f",
+        "model": "m",
+        "ort": "o",
+        "trial_unit": TRIAL,
+    }
+    ops = FakeServiceOps()
+    ops.collector = None
+    assert cli._execute(cfg, tmp_path / "run", dict(BASE), ops) == 0
+    # The callable the guardian holds is the one that stops the original service.
+    assert ops.stop_calls == 0
+    captured["io"].stop_service()
+    assert ops.stop_calls == 1 and ops.active is False
+
+
+def test_a_stop_timeout_refuses_the_start_and_the_stop_is_not_repeated(tmp_path):
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        if "stop" in argv:
+            raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+        return "ActiveState=active\n"
+
+    ops = system_ops.SystemOps(
+        trial_unit="t", self_unit="r", base_url="http://x", admin_token=None, run=run
+    )
+    service = FakeServiceOps()
+    result, run_dir, spawned = drive_with_ops(tmp_path, service, stop_service=ops.stop_service)
+    assert len([argv for argv in calls if "stop" in argv]) == 1  # no second stop
+    assert spawned == []  # the child never started
+    assert result["start_refused"] and result["codes"] == ["A04"]
+    assert (run_dir / "marker").read_text() == "abort A04\n"
+    end = json.loads((run_dir / "child-end.json").read_text())
+    assert end["child_started"] is False and end["guardian_stopped_child"] is False
+    stop = json.loads((run_dir / "service-stop.json").read_text())
+    assert stop["stopped"] is False and "timed out" in stop["error"]
