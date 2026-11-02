@@ -182,3 +182,36 @@ def test_final_result_priority_and_the_milestone():
         "milestone": False,
     }
     assert f([], [], restore_ok=True)["milestone"] is True
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        {"reason": "completed", "continuous_tracking_gate_passed": True},
+        {"reason": "completed", "continuous_tracking_gate_passed": True, "samples": []},
+        {"reason": "completed", "continuous_tracking_gate_passed": True, "measurement": {}},
+        {"reason": "completed", "measurement": None, "samples": []},
+        {"reason": "completed", "measurement": [], "samples": []},
+        {"reason": "completed", "measurement": "x", "samples": []},
+        {"continuous_tracking_gate_passed": True, "measurement": None, "samples": []},
+    ],
+)
+def test_a_report_claiming_completion_without_a_usable_measurement_is_f06(broken):
+    out = lc.check_report(broken, 600)
+    assert "F06" in out["codes"]
+    assert lc.final_result([], out["codes"], restore_ok=True)["milestone"] is False
+
+
+def test_missing_or_mistyped_samples_are_f06_even_with_a_measurement():
+    for samples in (None, "x", {}, 3):
+        report = good_report()
+        if samples is None:
+            del report["samples"]
+        else:
+            report["samples"] = samples
+        assert "F06" in lc.check_report(report, 600)["codes"], samples
+
+
+def test_an_early_stop_without_a_measurement_is_not_also_an_integrity_failure():
+    early = {"reason": "ack_lost", "measurement": None, "measurement_error": "x", "samples": []}
+    assert lc.check_report(early, 600)["codes"] == ["F01"]

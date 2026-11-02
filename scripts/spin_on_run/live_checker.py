@@ -109,6 +109,18 @@ def check_report(report: dict | None, seconds: int) -> dict:
         isinstance(measurement, dict) and measurement.get("injected_hold")
     ):
         add("F06", "injection recorded")
+    claims_completion = report.get("reason") == "completed" or (
+        report.get("continuous_tracking_gate_passed") is True
+    )
+    # A report that stopped early legitimately has no measurement (it carries a
+    # measurement error instead); one that claims completion must carry both.
+    if not isinstance(samples, list):
+        add("F06", "samples missing or not a list")
+    if measurement is None:
+        if claims_completion:
+            add("F06", "measurement missing from a report that claims completion")
+    elif not isinstance(measurement, dict):
+        add("F06", "measurement is not an object")
     if not isinstance(measurement, dict) or not isinstance(samples, list):
         return {"codes": _ordered(codes, FAIL_ORDER), "notes": notes, "windows": windows}
     try:
