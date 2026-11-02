@@ -17,6 +17,7 @@ pub mod detector;
 pub mod host_clock;
 #[cfg(feature = "jpeg")]
 pub mod jpeg;
+pub mod online_abort;
 pub mod operating_mode;
 pub mod pipeline;
 pub mod replay;
