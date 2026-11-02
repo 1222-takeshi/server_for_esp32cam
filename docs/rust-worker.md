@@ -378,10 +378,19 @@ N入力でN-1回、最後の入力の後には入りません。これは推論R
 
 ## オンライン中止判定
 
-連続hold・自然hold予算・閉じた10秒窓の認識数・保護値（公開済み結果の年齢、未応答のclock ping、最終同期からの経過、
-200ppm仮定との矛盾）を `src/online_abort.rs` がnativeの単調時計で評価します。
-評価は受信ループの各周回で `State` から取った値で行い、結果の公開有無に依存しません。
-違反を検出すると公開を止めてreportに `reason`（`continuous_hold`・`natural_hold_budget_exceeded`・
+連続hold・自然hold予算・閉じた10秒窓の認識数・保護値を `src/online_abort.rs` がnativeの単調時計で評価します。
+評価は受信ループの各周回（読取りタイムアウトを含む）で行い、結果の公開有無に依存しません。
+保護値は次の4つで、すべて評価時点の時刻で経過を更新します。
+
+- 直近に受理した入力の年齢上限（到着時に凍結した上限＋到着からの経過）が500msを超える。公開が止まっていても増え続けます。
+- 未応答のclock pingの経過が1秒を超える。
+- 最後に受理したclock応答からの経過が10秒を超える。
+- 保持している2つのclock交換のオフセット区間が、200ppmの仮定幅を足しても重ならない。
+  これは区間の整合性の検査であり、時計誤差の推定値ではありません（コードに推定値はなく、「誤差推定が200ppmを超える」検査と同値とは主張しません）。
+
+結果を公開する時点でも、同じ保護値を公開時刻で検査します（`State::publish_guard`）。違反中は公開せず、
+拒否した事実をcontrollerが次の周回で受け取って中止します。保護値は計測区間の開始前から、hold・窓は計測区間内で評価します。
+違反を検出するとreportに `reason`（`continuous_hold`・`natural_hold_budget_exceeded`・
 `window_below_50`・`protection_violation`）を書き、終了コード20で終了します。閾値は元の値のままです。
 
 ## 実験用ハーネス
@@ -390,3 +399,17 @@ N入力でN-1回、最後の入力の後には入りません。これは推論R
 候補Mのスレッド別CPU sampler、判定表、live用guardian・復旧guard・checker、systemd unitの生成）。
 これらは生成とドライランができるファイルで、Piへの配布・実行は別の工程です。`python -m scripts.spin_on_run.cli units`
 でunit文字列と起動要求のドライランを新規ディレクトリに出力できます。
+
+### 開始の関門
+
+`offline-run`（S・M）と `live ... execute` は、開始前に `start_gate` を通ります。`preflight`（元unit・Eco・ACK・hold・ready、
+FW読取り経路、固定ファイルのSHA、空き容量、温度、liveでは復旧guardの設置・enable・`--check`・Linger・常設guardとの競合）と
+`manifest.verify`（凍結したPythonファイルとbinaryのSHA、登録した計画のSHA、field対応表）のどれかが不合格なら何も起動せず、
+理由を `preflight.json`（offline）または `start-refused.json`（live）に残します。offlineは終了マーカーと `result.json`（V1）も書き、
+終了コードは2です。後続unit（`offline-post run`／`final-check`）も凍結ファイルの変化をO08として扱います。復旧guard・`enqueue` は関門を通しません
+（開始条件が崩れていても復元は実行するため）。configには `binaries`（`frame-worker`・`frame-live`）、`manifest`、`recover_unit_path`、
+`old_guard_units`、候補Mでは `pr616_worker` が必要です。実行するbinaryは検証したbinaryと同じパスです。
+
+候補Mは登録済みの変更なしworker（SHA `91a7e709…`）を使います。このworkerにはフレーム間隔の設定が無いため、
+ハーネスが結果行を受け取ってから40ms待って次の入力を渡します（`pace_gap_s`）。samplerのCPU使用率はsampler自身のプロセス
+（`/proc/self/stat`）で測ります。liveの毎秒監視は元のPython serviceのAPIを使わず、ローカルの読取りだけで行います。
