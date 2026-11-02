@@ -23,6 +23,7 @@ from . import (
     post_runner,
     quality,
     recover_guard,
+    start_gate,
     system_ops,
     thread_cpu,
     units,
@@ -30,7 +31,29 @@ from . import (
 
 
 def _config(path: str) -> dict:
-    return json.loads(Path(path).read_text())
+    cfg = json.loads(Path(path).read_text())
+    cfg["config_path"] = path
+    return cfg
+
+
+def _with_binaries(cfg: dict) -> dict:
+    """The executables that run are exactly the ones the manifest check covers."""
+    found = start_gate.binaries(cfg)
+    return {**cfg, "worker": str(found["frame-worker"]), "frame_live": str(found["frame-live"])}
+
+
+def _gate(cfg: dict, baseline: dict, out: Path, *, live: bool, ops=None) -> dict:
+    platform = offline_runner.LinuxPlatform()
+    return start_gate.evaluate(
+        cfg,
+        live=live,
+        collector=_collector(cfg),
+        baseline=baseline,
+        out_dir=out,
+        free_bytes=platform.free_bytes,
+        temp_millic=platform.temp_millic,
+        ops=ops,
+    )
 
 
 def _collector(cfg: dict) -> environment.Collector:
@@ -120,8 +143,16 @@ def _offline_config(cfg: dict, out_dir: Path, *, thread: bool) -> offline_runner
 
 
 def cmd_offline_run(args: argparse.Namespace) -> int:
-    cfg = _config(args.config)
-    runner = _offline_config(cfg, Path(args.out), thread=args.thread)
+    cfg = _with_binaries(_config(args.config))
+    out = Path(args.out)
+    baseline = json.loads(Path(cfg["baseline"]).read_text())
+    gate = _gate(cfg, baseline, out, live=False)
+    if not gate["ok"]:
+        print(json.dumps(start_gate.refuse_offline(out, gate)["verdict"]))
+        return start_gate.REFUSED_EXIT
+    out.mkdir(parents=True, exist_ok=True)
+    common.write_json(out / "preflight.json", gate)
+    runner = _offline_config(cfg, out, thread=args.thread)
     result = runner.run()
     print(json.dumps(result.get("verdict") or result.get("outcome")))
     return 0 if not runner.codes else 1
@@ -144,11 +175,17 @@ def cmd_offline_post(args: argparse.Namespace) -> int:
             baseline,
             offline_unit=cfg["offline_unit"] + ".service",
             post_unit=cfg["post_unit"] + ".service",
+            frozen_changes=start_gate.frozen_changes(cfg),
         )
         return 0 if result["pass"] else 1
     if args.step == "finalize":
         return 1 if post_runner.finalize_post(out, os.environ.get("SERVICE_RESULT", "")) else 0
-    final = post_runner.final_check(out, _collector(cfg), baseline)
+    final = post_runner.final_check(
+        out,
+        _collector(cfg),
+        baseline,
+        frozen_changes=start_gate.frozen_changes(cfg),
+    )
     print(json.dumps(final["verdict"]))
     return 0
 
@@ -176,6 +213,11 @@ def cmd_live(args: argparse.Namespace) -> int:
     if args.step == "recover":
         guard = recover_guard.Guard(ops, run_dir, baseline, cfg["seconds"])
         return recover_guard.exit_code(guard.run())
+    cfg = _with_binaries(cfg)
+    gate = _gate(cfg, baseline, run_dir, live=True, ops=ops)
+    if not gate["ok"]:
+        start_gate.refuse_live(run_dir, gate)
+        return start_gate.REFUSED_EXIT
     return _execute(cfg, run_dir, baseline, ops)
 
 

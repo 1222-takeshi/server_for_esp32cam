@@ -21,6 +21,7 @@ FROZEN_FILES = (
     "recover_guard.py",
     "units.py",
     "preflight.py",
+    "start_gate.py",
     "system_ops.py",
     "cli.py",
     "manifest.py",

@@ -23,9 +23,14 @@ def run_post(
     *,
     offline_unit: str,
     post_unit: str,
+    frozen_changes: list[str] | None = None,
 ) -> dict:
-    """Steps 3 to 6. The only unit allowed to be active here is this one."""
-    result = {"pass": False, "reasons": []}
+    """Steps 3 to 6. The only unit allowed to be active here is this one.
+
+    `frozen_changes` lists files that differ from the prepared manifest; any
+    entry fails the follow-up (O08), since its own code is then not the frozen code.
+    """
+    result = {"pass": False, "reasons": [f"frozen:{n}" for n in frozen_changes or []]}
     try:
         snapshot = collector.snapshot()
         common.write_json(out_dir / "after.json", snapshot)
@@ -60,9 +65,13 @@ def final_check(
     out_dir: Path,
     collector: environment.Collector,
     baseline: dict,
+    frozen_changes: list[str] | None = None,
 ) -> dict:
     """Second, fail-closed settlement of O06/O08 and the final verdict."""
     extra, notes = [], []
+    if frozen_changes:
+        extra.append("O08")
+        notes += [f"frozen:{name}" for name in frozen_changes]
     result_path = out_dir / "result.json"
     result = json.loads(result_path.read_text()) if result_path.exists() else None
     if result is None:
