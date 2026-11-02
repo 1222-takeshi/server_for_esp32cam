@@ -3,7 +3,7 @@
 use crate::{
     Frame, MAX_GENERATION,
     clock::{AgeBounds, ClockSample, ClockWindow},
-    online_abort::Protection,
+    online_abort::{AcceptedInput, Protection},
     operating_mode::Mode,
 };
 use serde_json::{Map, Value, json};
@@ -157,6 +157,7 @@ pub struct SessionClock {
     pending: Option<(String, u64)>,
     last_ping: Option<u64>,
     last_sync: Option<u64>,
+    last_input: Option<AcceptedInput>,
     window: ClockWindow,
     retired: VecDeque<(String, bool)>,
 }
@@ -172,15 +173,23 @@ impl SessionClock {
         Ok((elapsed > 1_000_000).then_some(*sent))
     }
     /// Read-only view of the limits this clock enforces, for online evaluation.
-    /// `last_sync` survives a recovery restart so a stalled link stays visible.
-    pub fn protection(&self, now: u64) -> Protection {
+    /// `last_sync` and `last_input` survive a recovery restart so a stalled
+    /// link stays visible.
+    pub fn protection(&self) -> Protection {
         Protection {
-            rtt_us: self
-                .pending
-                .as_ref()
-                .map(|(_, sent)| now.saturating_sub(*sent)),
-            sync_age_us: self.last_sync.map(|at| now.saturating_sub(at)),
+            pending_since_us: self.pending.as_ref().map(|(_, sent)| *sent),
+            last_sync_us: self.last_sync,
             drift_violation: self.window.drift_inconsistent(),
+            input: self.last_input,
+        }
+    }
+    /// Records the input the receiver just accepted (see [`Self::admit`]).
+    pub fn note_input(&mut self, arrival: &Arrival, frame: &Frame) {
+        if let Some((_, high)) = arrival.age_bounds(frame, arrival.received_us()) {
+            self.last_input = Some(AcceptedInput {
+                received_us: arrival.received_us(),
+                age_high_us: high,
+            });
         }
     }
     /// Opt-in recovery only: never renew an expired exchange or old evidence.

@@ -3,8 +3,10 @@
 //!
 //! The caller invokes [`OnlineGuard::observe`] on every controller pass, whether
 //! or not a result was published, so a stalled publication path cannot hide a
-//! violation. Hold and protection checks run on every call; the window scan
-//! runs on a one second schedule.
+//! violation. Hold and protection checks run on every call, with every age
+//! evaluated at the current time; the window scan runs on a one second
+//! schedule. A result about to be published is checked against the same limits
+//! by the publisher, which refuses it and reports the refusal here.
 use crate::pipeline::Sample;
 
 pub const CONTINUOUS_HOLD_US: u64 = 15_000_000;
@@ -37,22 +39,54 @@ pub fn hold_budget_us(duration_us: u64) -> u64 {
     duration_us / 100
 }
 
-/// Protection inputs as the clock and session code currently see them.
-/// `None` means no evidence exists yet, which is never a violation.
+/// The most recently accepted input, with the age bound frozen at arrival.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AcceptedInput {
+    pub received_us: u64,
+    pub age_high_us: i128,
+}
+
+/// Protection inputs as the clock and session code currently see them. Times
+/// are anchors in native monotonic microseconds, so every value can be aged to
+/// the moment of evaluation. `None` means no evidence exists yet, which is never
+/// a violation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Protection {
-    /// Age of the oldest unanswered clock exchange.
-    pub rtt_us: Option<u64>,
-    /// Time since the last accepted clock reply.
-    pub sync_age_us: Option<u64>,
-    /// Clock samples contradict the assumed 200 ppm drift bound.
+    /// Send time of the oldest unanswered clock exchange.
+    pub pending_since_us: Option<u64>,
+    /// Receive time of the last accepted clock reply.
+    pub last_sync_us: Option<u64>,
+    /// Two retained clock exchanges cannot both hold under the assumed 200 ppm
+    /// drift bound. This is a consistency check on the offset intervals, not an
+    /// estimate of the clock error, and it is not claimed to be equivalent to one.
     pub drift_violation: bool,
+    /// Last input the receiver accepted; its age keeps growing while nothing
+    /// new is accepted, whether or not a result is being published.
+    pub input: Option<AcceptedInput>,
 }
 
 impl Protection {
-    pub fn violated(&self) -> bool {
-        self.rtt_us.is_some_and(|v| v > RTT_LIMIT_US)
-            || self.sync_age_us.is_some_and(|v| v > SYNC_LIMIT_US)
+    /// Upper age bound of the last accepted input at `now`.
+    pub fn input_age_high_us(&self, now: u64) -> Option<i128> {
+        self.input
+            .map(|i| i.age_high_us + i128::from(now.saturating_sub(i.received_us)))
+    }
+
+    /// Unanswered clock exchange age at `now`.
+    pub fn rtt_us(&self, now: u64) -> Option<u64> {
+        self.pending_since_us.map(|at| now.saturating_sub(at))
+    }
+
+    /// Time since the last accepted clock reply at `now`.
+    pub fn sync_age_us(&self, now: u64) -> Option<u64> {
+        self.last_sync_us.map(|at| now.saturating_sub(at))
+    }
+
+    pub fn violated(&self, now: u64) -> bool {
+        self.input_age_high_us(now)
+            .is_some_and(|v| v > AGE_LIMIT_US)
+            || self.rtt_us(now).is_some_and(|v| v > RTT_LIMIT_US)
+            || self.sync_age_us(now).is_some_and(|v| v > SYNC_LIMIT_US)
             || self.drift_violation
     }
 }
@@ -65,6 +99,9 @@ pub struct Observation<'a> {
     pub last_hold: Option<(u64, u64)>,
     pub samples: &'a [Sample],
     pub protection: Protection,
+    /// Last time a result was refused at publication because a protection
+    /// limit was already violated at that moment.
+    pub publish_refused_at: Option<u64>,
 }
 
 #[derive(Default)]
@@ -129,7 +166,10 @@ impl OnlineGuard {
         let fresh = o.samples.get(self.checked_samples..).unwrap_or_default();
         self.checked_samples = o.samples.len();
         let stale = fresh.iter().any(|s| s.age_high_us > AGE_LIMIT_US);
-        (stale || o.protection.violated()).then_some(PROTECTION_VIOLATION)
+        let refused = o
+            .publish_refused_at
+            .is_some_and(|at| (start..end).contains(&at));
+        (stale || refused || o.protection.violated(o.now)).then_some(PROTECTION_VIOLATION)
     }
 
     fn scan_due(&mut self, now: u64) -> bool {

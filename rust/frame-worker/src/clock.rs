@@ -104,7 +104,11 @@ impl ClockWindow {
     }
 
     /// True when two retained samples of one boot cannot both hold under the
-    /// assumed drift bound. Read-only; it never changes admission decisions.
+    /// assumed drift bound. This checks the consistency of the offset
+    /// intervals; the code holds no estimate of the clock error, so it is not
+    /// claimed to equal "estimated error above 200 ppm" (it can only fire
+    /// once the measured intervals disagree by more than the bound plus their
+    /// own uncertainty). Read-only; it never changes admission decisions.
     pub fn drift_inconsistent(&self) -> bool {
         self.samples.iter().enumerate().any(|(i, a)| {
             self.samples

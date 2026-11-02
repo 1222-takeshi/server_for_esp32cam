@@ -441,7 +441,7 @@ impl<'a> Receiver<'a> {
                     return Err("duration_limit");
                 }
                 // Sampled before any recovery restart can clear the evidence.
-                s.protection = clock.protection(now);
+                s.protection = clock.protection();
                 // Same lock and fresh decision stamp as the controller's commit.
                 self.restart_clock(&mut s, &mut clock, now, stats)?;
                 stats.note_hold(&s, socket.io_trace());
@@ -578,6 +578,7 @@ impl<'a> Receiver<'a> {
                         stats.reject(&frame, received, "clock", &clock);
                         continue;
                     };
+                    clock.note_input(&arrival, &frame);
                     match self.worker.submit(Job {
                         frame,
                         arrival,

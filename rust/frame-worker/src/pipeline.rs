@@ -196,6 +196,10 @@ pub struct Sample {
 pub struct State {
     /// Latest clock-protection view, refreshed by the receiver on every pass.
     pub protection: crate::online_abort::Protection,
+    /// Opt-in: refuse to publish while a protection limit is violated and
+    /// remember the refusal for the online abort checks.
+    pub publish_guard: bool,
+    pub publish_refused_at: Option<u64>,
     clock: Clock,
     clock_fence_us: u64,
     #[cfg(feature = "transport")]
@@ -221,6 +225,8 @@ impl State {
         let mode = OperatingMode::new_with_tracking_recovery(generation, move || copy(), auto)?;
         Ok(Self {
             protection: Default::default(),
+            publish_guard: false,
+            publish_refused_at: None,
             clock,
             clock_fence_us: 0,
             #[cfg(feature = "transport")]
@@ -535,14 +541,22 @@ impl Worker {
                         latest,
                         counters,
                         samples,
+                        protection,
+                        publish_guard,
+                        publish_refused_at,
                         ..
                     } = &mut *s;
                     let published_at = Cell::new(0);
+                    let refused = Cell::new(false);
                     let published = mode
                         .publish_if(
                             &job.frame,
                             |now| {
                                 published_at.set(now);
+                                if *publish_guard && protection.violated(now) {
+                                    refused.set(true);
+                                    return false;
+                                }
                                 !stop.load(Ordering::Acquire)
                                     && !job.cancelled.load(Ordering::Acquire)
                                     && arrival.fits(&job.frame, published_at.get(), 0)
@@ -571,6 +585,9 @@ impl Worker {
                             },
                         )
                         .unwrap_or(false);
+                    if refused.get() {
+                        *publish_refused_at = Some(published_at.get());
+                    }
                     if published {
                         counters.published = counters.published.saturating_add(1);
                     } else {

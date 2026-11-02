@@ -266,6 +266,7 @@ fn online_check(
         last_hold: s.mode.last_tracking_hold(),
         samples: s.samples(),
         protection: s.protection,
+        publish_refused_at: s.publish_refused_at,
     });
     match found {
         Some(code) => {
@@ -432,6 +433,7 @@ fn execute() -> Result<i32> {
     let mut guard = online_checks.then(|| OnlineGuard::new(duration_us));
     let mut abort = None;
     let mut outcome = receiver.run(&mut socket, |s, now| {
+        s.publish_guard = guard.is_some();
         if continuous {
             let polled = continuous_poll(s, &mut trial, &beats, &mut cached, || clock(), wall_ms);
             return online_check(polled, &mut guard, &trial, s, &mut abort);

@@ -29,6 +29,7 @@ fn at(now: u64, interval: (u64, u64)) -> Observation<'static> {
         last_hold: None,
         samples: &[],
         protection: Protection::default(),
+        publish_refused_at: None,
     }
 }
 
@@ -228,31 +229,32 @@ fn protection_limits_are_exclusive_boundaries() {
         assert_eq!(guard.observe(&o), expected);
     }
     let _ = ok;
+    let now = 100 * S + 2;
     for (protection, expected) in [
         (
             Protection {
-                rtt_us: Some(1_000_000),
+                pending_since_us: Some(now - 1_000_000),
                 ..Default::default()
             },
             None,
         ),
         (
             Protection {
-                rtt_us: Some(1_000_001),
+                pending_since_us: Some(now - 1_000_001),
                 ..Default::default()
             },
             Some(PROTECTION_VIOLATION),
         ),
         (
             Protection {
-                sync_age_us: Some(10_000_000),
+                last_sync_us: Some(now - 10_000_000),
                 ..Default::default()
             },
             None,
         ),
         (
             Protection {
-                sync_age_us: Some(10_000_001),
+                last_sync_us: Some(now - 10_000_001),
                 ..Default::default()
             },
             Some(PROTECTION_VIOLATION),
@@ -267,9 +269,80 @@ fn protection_limits_are_exclusive_boundaries() {
         (Protection::default(), None),
     ] {
         let mut guard = OnlineGuard::new(600 * S);
-        let mut o = at(100 * S + 2, interval);
+        let mut o = at(now, interval);
         o.protection = protection;
         assert_eq!(guard.observe(&o), expected, "{protection:?}");
+    }
+}
+
+fn accepted(received_us: u64, age_high_us: i128) -> Protection {
+    Protection {
+        input: Some(AcceptedInput {
+            received_us,
+            age_high_us,
+        }),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn input_age_is_aged_to_the_current_time_with_an_exclusive_500ms_limit() {
+    let interval = (100 * S, 700 * S);
+    // 100 ms old on arrival: exactly 500 ms after 400 ms, over it one µs later.
+    for (elapsed, expected) in [
+        (399_999, None),
+        (400_000, None),
+        (400_001, Some(PROTECTION_VIOLATION)),
+    ] {
+        let mut guard = OnlineGuard::new(600 * S);
+        let mut o = at(100 * S + elapsed, interval);
+        o.protection = accepted(100 * S, 100_000);
+        assert_eq!(guard.observe(&o), expected, "{elapsed}");
+    }
+    // No input accepted yet is no evidence, not a violation.
+    let dense = steady(100 * S, 301 * S, 100_000);
+    let mut guard = OnlineGuard::new(600 * S);
+    let mut o = at(300 * S, interval);
+    o.samples = &dense;
+    assert_eq!(guard.observe(&o), None);
+}
+
+#[test]
+fn a_stalled_input_is_detected_within_two_seconds_with_publication_fully_stopped() {
+    let interval = (100 * S, 3_700 * S);
+    let violation_at = 400_000; // 100 ms arrival bound reaches 500 ms
+    for pass in [50_000, S] {
+        let mut guard = OnlineGuard::new(3600 * S);
+        let mut detected = None;
+        for step in 0..100u64 {
+            let elapsed = step * pass;
+            let mut o = at(100 * S + elapsed, interval);
+            o.protection = accepted(100 * S, 100_000);
+            if guard.observe(&o) == Some(PROTECTION_VIOLATION) {
+                detected = Some(elapsed);
+                break;
+            }
+        }
+        let detected = detected.expect("violation detected");
+        assert!(detected > violation_at && detected - violation_at <= 2 * S);
+    }
+}
+
+#[test]
+fn a_refused_publication_inside_the_interval_is_a_violation_outside_it_is_not() {
+    let interval = (100 * S, 700 * S);
+    let dense = steady(100 * S, 301 * S, 100_000);
+    for (at_us, expected) in [
+        (100 * S - 1, None),
+        (100 * S, Some(PROTECTION_VIOLATION)),
+        (700 * S - 1, Some(PROTECTION_VIOLATION)),
+        (700 * S, None),
+    ] {
+        let mut guard = OnlineGuard::new(600 * S);
+        let mut o = at(300 * S, interval);
+        o.samples = &dense;
+        o.publish_refused_at = Some(at_us);
+        assert_eq!(guard.observe(&o), expected, "{at_us}");
     }
 }
 
@@ -296,31 +369,21 @@ fn protection_is_detected_within_two_seconds_with_publication_fully_stopped() {
     // The last accepted clock reply predates the interval by 9 s; no result
     // is ever published, and the controller passes every 50 ms.
     let violation_at = S; // sync age passes 10 s one second into the interval
-    let mut guard = OnlineGuard::new(3600 * S);
-    let mut detected = None;
-    for step in 0..100u64 {
-        let elapsed = step * 50_000;
-        let mut o = at(100 * S + elapsed, interval);
-        o.protection.sync_age_us = Some(9 * S + elapsed);
-        if guard.observe(&o).is_some() {
-            detected = Some(elapsed);
-            break;
+    for pass in [50_000, S] {
+        let mut guard = OnlineGuard::new(3600 * S);
+        let mut detected = None;
+        for step in 0..100u64 {
+            let elapsed = step * pass;
+            let mut o = at(100 * S + elapsed, interval);
+            o.protection.last_sync_us = Some(91 * S);
+            if guard.observe(&o).is_some() {
+                detected = Some(elapsed);
+                break;
+            }
         }
+        let detected = detected.expect("violation detected");
+        assert!(detected > violation_at && detected - violation_at <= 2 * S);
     }
-    let detected = detected.expect("violation detected");
-    assert!(detected > violation_at && detected - violation_at <= 2 * S);
-    // Even a coarse one second pass finds it within two seconds.
-    let mut guard = OnlineGuard::new(3600 * S);
-    let mut detected = None;
-    for second in 0..5u64 {
-        let mut o = at(100 * S + second * S, interval);
-        o.protection.sync_age_us = Some(9 * S + second * S);
-        if guard.observe(&o) == Some(PROTECTION_VIOLATION) {
-            detected = Some(second * S);
-            break;
-        }
-    }
-    assert!(detected.unwrap() - violation_at <= 2 * S);
 }
 
 #[test]

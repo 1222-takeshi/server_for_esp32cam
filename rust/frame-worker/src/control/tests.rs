@@ -254,20 +254,51 @@ fn arrival_proof_cannot_be_reused_for_another_identity() {
 #[test]
 fn protection_view_reports_unanswered_ping_and_last_sync_without_changing_state() {
     let mut clock = SessionClock::default();
-    assert_eq!(clock.protection(5), Protection::default());
+    assert_eq!(clock.protection(), Protection::default());
     clock.poll(1_000, true, nonce).unwrap().unwrap();
-    assert_eq!(clock.protection(1_500_001).rtt_us, Some(1_499_001));
-    assert_eq!(clock.protection(1_500_001).sync_age_us, None);
+    let view = clock.protection();
+    assert_eq!(view.rtt_us(1_500_001), Some(1_499_001));
+    assert_eq!(view.sync_age_us(1_500_001), None);
     clock.pong(1, "0123456789abcdef", 77, 1_300).unwrap();
-    let view = clock.protection(11_001_300);
-    assert_eq!((view.rtt_us, view.sync_age_us), (None, Some(11_000_000)));
+    let view = clock.protection();
+    assert_eq!(
+        (view.rtt_us(11_001_300), view.sync_age_us(11_001_300)),
+        (None, Some(11_000_000))
+    );
     assert!(!view.drift_violation);
     // A recovery restart keeps the last sync time visible.
     clock.poll(60_000, true, nonce).unwrap().unwrap();
     clock.restart_expired(1_100_001).unwrap();
+    let view = clock.protection();
+    assert_eq!(view.sync_age_us(2_000_000), Some(2_000_000 - 1_300));
+    assert_eq!(view.rtt_us(2_000_000), None);
+}
+
+#[test]
+fn accepted_input_is_recorded_at_arrival_and_survives_a_recovery_restart() {
+    let mut clock = SessionClock::default();
+    assert_eq!(clock.protection().input, None);
+    clock.poll(100_000, false, nonce).unwrap();
+    clock
+        .pong(1, "0123456789abcdef", 1_000_001, 100_000)
+        .unwrap();
+    let accepted = frame(1, 1_000_001);
+    let arrival = clock.admit(&accepted, 100_000).unwrap();
+    // Admission alone records nothing; the receiver notes what it accepted.
+    assert_eq!(clock.protection().input, None);
+    clock.note_input(&arrival, &accepted);
+    let view = clock.protection();
+    let input = view.input.unwrap();
+    assert_eq!(input.received_us, 100_000);
     assert_eq!(
-        clock.protection(2_000_000).sync_age_us,
-        Some(2_000_000 - 1_300)
+        Some(input.age_high_us),
+        arrival.age_bounds(&accepted, 100_000).map(|b| b.1)
     );
-    assert_eq!(clock.protection(2_000_000).rtt_us, None);
+    assert_eq!(
+        view.input_age_high_us(100_000 + 7),
+        Some(input.age_high_us + 7)
+    );
+    clock.poll(160_000, true, nonce).unwrap().unwrap();
+    clock.restart_expired(1_200_000).unwrap();
+    assert_eq!(clock.protection().input, Some(input));
 }

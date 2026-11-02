@@ -656,3 +656,31 @@ fn observed_slow_compute_skips_old_waiting_frame_and_processes_fresh_frame() {
     assert!(s.samples()[1].published_us - s.samples()[0].published_us < 500_000);
     assert!(s.samples().iter().all(|v| v.age_high_us <= 500_000));
 }
+
+#[test]
+fn publication_is_refused_at_that_moment_only_for_the_opt_in_guard() {
+    use crate::online_abort::Protection;
+    let violated = Protection {
+        drift_violation: true,
+        ..Default::default()
+    };
+    for (guard, published) in [(false, true), (true, false)] {
+        let (state, _clock, _time) = setup();
+        {
+            let mut s = state.lock().unwrap();
+            s.publish_guard = guard;
+            s.protection = violated;
+        }
+        let worker = Worker::start(state.clone(), |_| Ok(vec![])).unwrap();
+        worker.submit(job(&state, 1));
+        wait(&state, 1);
+        worker.stop().unwrap();
+        let s = state.lock().unwrap();
+        assert_eq!(s.counters.published, u64::from(published), "{guard}");
+        assert_eq!(s.samples().len(), usize::from(published));
+        assert_eq!(s.publish_refused_at.is_some(), !published);
+        if let Some(at) = s.publish_refused_at {
+            assert_eq!(at, 100_000);
+        }
+    }
+}
