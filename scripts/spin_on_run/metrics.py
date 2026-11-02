@@ -29,9 +29,16 @@ class MetricsError(ValueError):
     """An input needed for a judgement is missing or malformed."""
 
 
+class FieldError(MetricsError):
+    """A required per-row field is missing, malformed or contradicts the run (plan O06).
+
+    Other `MetricsError`s concern the pooled result only and make it V4.
+    """
+
+
 def _integer(value: object, name: str, *, positive: bool = False) -> int:
     if type(value) is not int or (positive and value <= 0) or value < 0:
-        raise MetricsError(f"{name} is not a usable integer")
+        raise FieldError(f"{name} is not a usable integer")
     return value
 
 
@@ -64,13 +71,13 @@ def ratio(numerator: Fraction | int, denominator: Fraction | int) -> Fraction:
 def run_metrics(rows: list[dict], clk_tck: int, *, gap_us: int = FRAME_GAP_US) -> dict:
     """Per-run values from the 85 rows of one run."""
     if len(rows) != ROWS_PER_RUN:
-        raise MetricsError("row count")
+        raise FieldError("row count")
     _integer(clk_tck, "SC_CLK_TCK", positive=True)
     infer, total, hwm = [], [], []
     for index, row in enumerate(rows):
         usage = row.get("usage")
         if not isinstance(usage, dict):
-            raise MetricsError("usage missing")
+            raise FieldError("usage missing")
         _integer(usage.get("cpu_ticks"), "cpu_ticks")
         _integer(row.get("wall_us"), "wall_us")
         if index >= WARMUP_ROWS:
@@ -84,16 +91,16 @@ def run_metrics(rows: list[dict], clk_tck: int, *, gap_us: int = FRAME_GAP_US) -
     if _integer(last.get("sequence"), "sequence") - _integer(first.get("sequence"), "sequence") != (
         MEASURED_ROWS
     ):
-        raise MetricsError("interval is not 80 frames")
+        raise FieldError("interval is not 80 frames")
     span = last["wall_us"] - first["wall_us"]
     # The plan's bound, plus the tighter one that also detects a missing gap when
     # processing alone already exceeds 80 x 40 ms: the interval covers the 80
     # processed frames and their 80 sleeps, each of at least `gap_us`.
     if span < GAP_COUNT * gap_us or span < sum(total) + GAP_COUNT * gap_us:
-        raise MetricsError("frame gap missing")
+        raise FieldError("frame gap missing")
     delta = last["usage"]["cpu_ticks"] - first["usage"]["cpu_ticks"]
     if delta < 0:
-        raise MetricsError("cpu ticks decreased")
+        raise FieldError("cpu ticks decreased")
     return {
         "infer": infer,
         "total": total,

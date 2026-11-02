@@ -164,6 +164,7 @@ class Runner:
         self._last_sample = platform.monotonic()
         self._started = platform.monotonic()
         self._vitals_file = None
+        self._metrics = self._temperature = None
 
     # -- recording ---------------------------------------------------------
     def record(self, code: str, detail: str = "") -> None:
@@ -364,6 +365,7 @@ class Runner:
                 self.run_one(index, condition)
                 if index < len(self.cfg.order) - 1:
                     self.platform.sleep(self.cfg.idle_s)
+            self.evaluate_metrics()
         except Stop as stop:
             self.record(stop.code, stop.detail)
         except BaseException as error:  # noqa: BLE001 - uncaught harness failure
@@ -376,16 +378,29 @@ class Runner:
         common.write_new(self.cfg.out_dir / "marker", marker + "\n")
         return self.summarize(marker)
 
+    def evaluate_metrics(self) -> None:
+        """Before the marker is written: a malformed per-row field is O06 (plan 5.4, 9.1).
+
+        Pooled problems (empty set, zero denominator, run composition) stay a
+        missing metric and end as V4; nothing is repaired or skipped.
+        """
+        self._metrics = self._temperature = None
+        if self.cfg.summarizer or self.codes:
+            return
+        try:
+            self._metrics = metrics.evaluate(self.runs, self.cfg.clk_tck)
+            self._temperature = metrics.temperature_summary(self.vitals, self.windows)
+        except metrics.FieldError as error:
+            self._metrics = self._temperature = None
+            self.record("O06", f"metrics: {error}")
+        except metrics.MetricsError as error:
+            self._metrics = self._temperature = None
+            self.details.append(f"metrics:{error}")
+
     def summarize(self, marker: str) -> dict:
         if self.cfg.summarizer:
             return self.cfg.summarizer(self, marker)
-        m = temp = None
-        if not self.codes:
-            try:
-                m = metrics.evaluate(self.runs, self.cfg.clk_tck)
-                temp = metrics.temperature_summary(self.vitals, self.windows)
-            except metrics.MetricsError as error:
-                self.details.append(f"metrics:{error}")
+        m, temp = self._metrics, self._temperature
         verdict = metrics.final_verdict(
             self.codes, m, temp, quality_ok=not self.codes, environment_ok=True
         )

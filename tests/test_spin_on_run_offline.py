@@ -145,6 +145,26 @@ def test_short_run_and_stderr_are_independent_harness_failures(setup):
     assert noisy["codes"] == ["O06"] and noisy["verdict"]["id"] == "V1"
 
 
+@pytest.mark.parametrize("mode", ["nogap", "no_usage", "float_infer"])
+def test_a_malformed_required_field_or_a_missing_gap_is_o06_and_indeterminate(setup, mode):
+    runner, out = setup(mode)
+    result = runner.run()
+    assert result["codes"] == ["O06"], result["details"]
+    assert result["marker"] == "abort O06" and (out / "marker").read_text() == "abort O06\n"
+    assert result["verdict"] == {"id": "V1", "result": "indeterminate"}
+    assert result["metrics"] is None
+    assert "metrics:" in "".join(result["details"])
+
+
+def test_a_pooled_metric_problem_stays_v4_without_a_stop_code():
+    from scripts.spin_on_run import metrics
+
+    assert issubclass(metrics.FieldError, metrics.MetricsError)
+    with pytest.raises(metrics.MetricsError) as error:
+        metrics.ratio(1, 0)
+    assert not isinstance(error.value, metrics.FieldError)
+
+
 def test_start_temperature_wait_times_out_as_o04(setup):
     platform = FakePlatform()
     platform.temp = 70_001

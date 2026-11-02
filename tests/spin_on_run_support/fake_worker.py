@@ -42,7 +42,7 @@ for i in range(count):
         row["raw_sha256"] = "different"
     base = 150_000 + (i % 10) * 100
     infer = base if i not in (10, 11) else (150_000 if spin else 300_000)
-    wall += infer + 500 + (40_000 if i else 0)
+    wall += infer + 500 + (40_000 if i and mode != "nogap" else 0)
     ticks += 15
     row.update(
         {
@@ -55,6 +55,10 @@ for i in range(count):
             "force_spinning_stop": "1" if spin else None,
         }
     )
+    if mode == "no_usage" and i == 50:
+        del row["usage"]
+    if mode == "float_infer" and i == 60:
+        row["infer_us"] = 150000.5
     print(json.dumps(row), flush=True)
     last_row_at = time.monotonic()
 if PACED and sys.stdin.buffer.read(1):
