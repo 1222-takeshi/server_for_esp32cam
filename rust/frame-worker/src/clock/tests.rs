@@ -216,3 +216,148 @@ fn midpoint_estimate_does_not_cross_a_boot_change() {
     let drifting = ClockSample::from_exchange(2, 100_050_000, 201_030_001, 201_030_001).unwrap();
     assert!(window_of(&[old, new, drifting]).drift_estimate_exceeded());
 }
+
+/// A camera polled every 50 ms of its own clock with a 5 ms round trip, as in
+/// tracking. The host reads `ppm` parts per million ahead of the device.
+/// Returns the exchanges `[from_s, to_s)` of one boot.
+fn polled(boot: u64, from_s: u64, to_s: u64, ppm: u64, rtt_us: u64) -> Vec<ClockSample> {
+    (from_s * 20..to_s * 20)
+        .map(|k| {
+            let device = 1_000_000 + k * 50_000;
+            let host = 7_000_000_000 + device + (device * ppm + 500_000) / 1_000_000;
+            ClockSample::from_exchange(boot, device, host - rtt_us / 2, host + rtt_us / 2).unwrap()
+        })
+        .collect()
+}
+
+fn feed(window: &mut ClockWindow, samples: &[ClockSample]) {
+    for sample in samples {
+        window.add(*sample).unwrap();
+    }
+}
+
+#[test]
+fn eight_retained_samples_at_50ms_cannot_resolve_200_ppm_but_the_references_can() {
+    let samples = polled(1, 0, 60, 0, 5_000);
+    let mut window = ClockWindow::default();
+    feed(&mut window, &samples[..10]);
+    // The retained eight span 0.35 s: nothing is resolvable yet.
+    assert!(!window.drift_evaluable());
+    assert!(!window.drift_estimate_exceeded());
+    // Two widths of 5 ms resolve 200 ppm from 25 s of device time on (inclusive).
+    let mut window = ClockWindow::default();
+    feed(&mut window, &samples[..500]); // baseline 24.95 s
+    assert!(!window.drift_evaluable());
+    feed(&mut window, &samples[500..501]); // baseline 25.00 s
+    assert!(window.drift_evaluable());
+    // The eight retained samples alone never reach that, however long it runs.
+    assert_eq!(window.samples.len(), 8);
+}
+
+#[test]
+fn drift_above_200_ppm_is_detected_through_the_reference_at_50ms_polling() {
+    for (ppm, exceeded) in [
+        (250, true),
+        (201, true),
+        (200, false),
+        (199, false),
+        (0, false),
+    ] {
+        let mut window = ClockWindow::default();
+        feed(&mut window, &polled(1, 0, 100, ppm, 5_000));
+        assert!(window.drift_evaluable(), "{ppm}");
+        assert_eq!(window.drift_estimate_exceeded(), exceeded, "{ppm} ppm");
+        // Negative drift of the same size is judged the same.
+        assert!(!window.drift_inconsistent(), "{ppm}");
+    }
+}
+
+#[test]
+fn the_estimate_is_not_exceeded_before_it_is_evaluable_and_exceeded_once_it_is() {
+    let mut window = ClockWindow::default();
+    let mut first_evaluable = None;
+    for (i, sample) in polled(1, 0, 100, 400, 5_000).into_iter().enumerate() {
+        window.add(sample).unwrap();
+        if first_evaluable.is_none() && window.drift_evaluable() {
+            first_evaluable = Some(i);
+        }
+        // While it cannot be judged it is never reported as drift.
+        if !window.drift_evaluable() {
+            assert!(!window.drift_estimate_exceeded());
+        }
+    }
+    assert_eq!(first_evaluable, Some(500)); // 25 s
+    assert!(window.drift_estimate_exceeded());
+}
+
+#[test]
+fn a_slow_round_trip_does_not_become_the_reference() {
+    let mut samples = polled(1, 0, 100, 0, 5_000);
+    // The very first exchange of the boot took 150 ms.
+    samples[0] = ClockSample::from_exchange(1, 1_000_000, 7_000_000_000, 7_000_150_000).unwrap();
+    let mut window = ClockWindow::default();
+    feed(&mut window, &samples[..502]);
+    // The narrowest exchange (the second one) is the reference: 25 s from it resolve.
+    assert!(window.drift_evaluable());
+    assert_eq!(window.references[0].1.width(), 5_000);
+}
+
+#[test]
+fn references_are_per_boot_and_retaken_after_a_reboot() {
+    let mut window = ClockWindow::default();
+    feed(&mut window, &polled(1, 0, 60, 300, 5_000));
+    assert!(window.drift_estimate_exceeded());
+    let before = window.samples.back().unwrap().received_us;
+    // A different boot starts later on the host with an unrelated device clock.
+    let rebooted: Vec<ClockSample> = (0..1200u64)
+        .map(|k| {
+            let device = 500_000 + k * 50_000;
+            let host = before + 1_000_000 + k * 50_000;
+            ClockSample::from_exchange(2, device, host - 2_500, host + 2_500).unwrap()
+        })
+        .collect();
+    window.add(rebooted[0]).unwrap();
+    // The first exchange of the new boot: old references are gone, no estimate.
+    assert_eq!(window.references.len(), 1);
+    assert!(!window.drift_evaluable());
+    assert!(!window.drift_estimate_exceeded());
+    feed(&mut window, &rebooted[1..400]);
+    assert!(!window.drift_evaluable()); // 19.95 s of the new boot
+    feed(&mut window, &rebooted[400..501]);
+    assert!(window.drift_evaluable()); // 25 s: judged on the new boot alone
+    assert!(!window.drift_estimate_exceeded());
+    assert!(window.references.iter().all(|(_, s)| s.boot == 2));
+}
+
+#[test]
+fn old_references_are_replaced_and_the_order_checks_still_hold() {
+    let mut window = ClockWindow::default();
+    // 30 s at 400 ppm, then a clock that stays put for ten minutes.
+    feed(&mut window, &polled(1, 0, 30, 400, 5_000));
+    let held: Vec<ClockSample> = (0..12_000u64)
+        .map(|k| {
+            let device = 30_000_000 + 1_000_000 + k * 50_000;
+            ClockSample::from_exchange(
+                1,
+                device,
+                8_000_000_000 + k * 50_000,
+                8_000_005_000 + k * 50_000,
+            )
+            .unwrap()
+        })
+        .collect();
+    feed(&mut window, &held);
+    // At most four periods are kept, the oldest within two minutes.
+    assert_eq!(window.references.len(), 4);
+    let newest = window.samples.back().unwrap().device_us;
+    assert!(newest - window.references[0].1.device_us <= 4 * REFERENCE_SPAN_US);
+    // The 400 ppm of the first minute no longer counts against the clock.
+    assert!(window.drift_evaluable());
+    assert!(!window.drift_estimate_exceeded());
+    // A rejected exchange changes neither samples nor references.
+    let references = window.references.len();
+    let stale = ClockSample::from_exchange(1, 1_000_000, 1, 2).unwrap();
+    assert!(window.add(stale).is_err());
+    assert_eq!(window.references.len(), references);
+    assert_eq!(window.samples.len(), 8);
+}

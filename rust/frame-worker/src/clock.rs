@@ -6,6 +6,9 @@ use std::collections::VecDeque;
 const MAX_RTT_US: u64 = 1_000_000;
 const MAX_AGE_US: u64 = 10_000_000;
 const DRIFT_PPM: i128 = 200;
+/// Device-time length of one reference period, and the number of periods kept.
+const REFERENCE_SPAN_US: u64 = 30_000_000;
+const REFERENCE_PERIODS: usize = 4;
 
 pub type AgeBounds = (i128, i128);
 
@@ -43,6 +46,10 @@ impl ClockSample {
 
     /// Offset intervals that stay disjoint after widening by the assumed drift
     /// over the device time between the two exchanges contradict that bound.
+    fn width(&self) -> i128 {
+        self.high - self.low
+    }
+
     fn contradicts(&self, other: &Self) -> bool {
         let delta = i128::from(self.device_us.abs_diff(other.device_us));
         let margin = (delta * DRIFT_PPM + 999_999) / 1_000_000;
@@ -68,7 +75,7 @@ impl ClockSample {
             (other, self)
         };
         let device = i128::from(b.device_us - a.device_us);
-        let widths = (a.high - a.low) + (b.high - b.low);
+        let widths = a.width() + b.width();
         // widths / 2 / device * 1e6 <= 200  <=>  widths * 5000 <= 2 * device
         if a.boot != b.boot || device == 0 || widths * 5_000 > 2 * device {
             return None;
@@ -96,9 +103,22 @@ impl ClockSample {
 }
 
 /// Single owner; at most eight samples. Each retains its original expiry.
+///
+/// Next to them the window keeps a few *reference* exchanges of the current
+/// boot, used only for the drift estimate and never for an age bound. The
+/// eight retained samples span well under a second while the camera is polled
+/// every 50 ms, far too short to resolve 200 ppm through a round trip of a few
+/// milliseconds. The reference keeps the narrowest exchange of each of the last
+/// [`REFERENCE_PERIODS`] device-time periods of [`REFERENCE_SPAN_US`], so a
+/// baseline of up to about two minutes exists and one slow round trip cannot
+/// become the reference. A period that falls out of the last four is dropped:
+/// the estimate always describes the recent clock, not the whole session. A boot
+/// change clears the references together with the samples and they are taken
+/// again from the new boot.
 #[derive(Default)]
 pub struct ClockWindow {
     samples: VecDeque<ClockSample>,
+    references: VecDeque<(u64, ClockSample)>,
 }
 
 impl ClockWindow {
@@ -109,13 +129,33 @@ impl ClockWindow {
             }
             if sample.boot != last.boot {
                 self.samples.clear();
+                self.references.clear();
             }
         }
         if self.samples.len() == 8 {
             self.samples.pop_front();
         }
         self.samples.push_back(sample);
+        self.note_reference(sample);
         Ok(())
+    }
+
+    fn note_reference(&mut self, sample: ClockSample) {
+        let period = sample.device_us / REFERENCE_SPAN_US;
+        match self.references.back_mut() {
+            Some((p, kept)) if *p == period => {
+                if sample.width() < kept.width() {
+                    *kept = sample;
+                }
+            }
+            Some((p, _)) if *p > period => {} // Not a later period of this boot.
+            _ => {
+                if self.references.len() == REFERENCE_PERIODS {
+                    self.references.pop_front();
+                }
+                self.references.push_back((period, sample));
+            }
+        }
     }
 
     /// Bounded numeric evidence only: boot, device, host sent, host received.
@@ -133,39 +173,51 @@ impl ClockWindow {
             .collect()
     }
 
-    /// True when two retained samples of one boot cannot both hold under the
-    /// assumed drift bound: their offset intervals stay disjoint after
-    /// widening by 200 ppm of the device time between them. This is a
-    /// consistency check on the intervals and fires only once they disagree by
-    /// more than the bound plus their own uncertainty; it is kept as an
-    /// additional check next to [`Self::drift_estimate_exceeded`]. Read-only;
-    /// it never changes admission decisions.
+    /// True when two exchanges of one boot (retained samples or references)
+    /// cannot both hold under the assumed drift bound: their offset intervals
+    /// stay disjoint after widening by 200 ppm of the device time between
+    /// them. This is a consistency check on the intervals and fires only once
+    /// they disagree by more than the bound plus their own uncertainty; it is
+    /// kept as an additional check next to [`Self::drift_estimate_exceeded`].
+    /// Read-only; it never changes admission decisions.
     pub fn drift_inconsistent(&self) -> bool {
         self.pairs().any(|(a, b)| a.contradicts(b))
     }
 
-    /// True when the clock error estimated from the retained samples is above
-    /// 200 ppm: for some pair of same-boot samples the slope of the offset
-    /// midpoints exceeds 200 ppm (strictly; exactly 200 ppm is allowed) and the
-    /// pair is long enough for that slope to be meaningful (see
-    /// `ClockSample::midpoint_drift_exceeds`). Every retained pair is
-    /// considered, so the longest baseline of up to eight exchanges is
-    /// included. With fewer than two samples, or only pairs too short to
-    /// resolve 200 ppm, no estimate exists and the result is `false` (the
-    /// value is still computed on every call, so it is available whenever
-    /// evidence exists). This is a point estimate over interval midpoints, not
-    /// an adjusted fit of the clock model, and it is no claim of equivalence to
-    /// anything beyond that definition. Read-only.
+    /// True when the clock error estimated from the exchanges is above 200 ppm:
+    /// for some pair of same-boot exchanges the slope of the offset midpoints
+    /// exceeds 200 ppm (strictly; exactly 200 ppm is allowed) and the pair is
+    /// long enough for that slope to be meaningful (see
+    /// `ClockSample::midpoint_drift_exceeds`). Every pair of the retained
+    /// samples and the reference exchanges is considered, so the longest
+    /// baseline is included. When no pair resolves 200 ppm there is no estimate
+    /// and the result is `false`; that state is not "no violation" but "not
+    /// evaluable", see [`Self::drift_evaluable`]. This is a point estimate over
+    /// interval midpoints, not an adjusted fit of the clock model, and it is
+    /// no claim of equivalence to anything beyond that definition. Read-only.
     pub fn drift_estimate_exceeded(&self) -> bool {
         self.pairs()
             .any(|(a, b)| a.midpoint_drift_exceeds(b) == Some(true))
     }
 
+    /// Whether the drift estimate is defined: at least one pair of same-boot
+    /// exchanges is long enough, for its round trip widths, to resolve 200 ppm.
+    /// While this is `false` the 200 ppm limit cannot be judged at all.
+    pub fn drift_evaluable(&self) -> bool {
+        self.pairs()
+            .any(|(a, b)| a.midpoint_drift_exceeds(b).is_some())
+    }
+
     fn pairs(&self) -> impl Iterator<Item = (&ClockSample, &ClockSample)> {
-        self.samples.iter().enumerate().flat_map(move |(i, a)| {
-            self.samples
-                .iter()
-                .skip(i + 1)
+        let all: Vec<&ClockSample> = self
+            .references
+            .iter()
+            .map(|(_, s)| s)
+            .chain(self.samples.iter())
+            .collect();
+        (0..all.len()).flat_map(move |i| {
+            let (a, rest) = (all[i], all.split_at(i + 1).1.to_vec());
+            rest.into_iter()
                 .filter(move |b| a.boot == b.boot)
                 .map(move |b| (a, b))
         })
