@@ -37,6 +37,52 @@ impl TaskPartition {
     }
 }
 
+/// Intra-op spinning policy. `Off` keeps the fixed profile (spinning disabled, no
+/// force-stop key). `RunOnly` lets the intra-op workers spin only while a `Run()`
+/// is active; ORT stops them when the last concurrent `Run()` returns.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SpinPolicy {
+    #[default]
+    Off,
+    RunOnly,
+}
+/// The only value ever written to `session.force_spinning_stop`; ORT enables the
+/// option for the exact string "1" and treats anything else as disabled.
+pub const FORCE_SPINNING_STOP_VALUE: &str = "1";
+impl SpinPolicy {
+    /// Explicit experiment setting; library defaults never read the environment.
+    pub fn parse(value: std::result::Result<String, std::env::VarError>) -> Result<Self> {
+        match value {
+            Err(std::env::VarError::NotPresent) => Ok(Self::Off),
+            Ok(value) if value == "0" => Ok(Self::Off),
+            Ok(value) if value == "1" => Ok(Self::RunOnly),
+            _ => Err("invalid spin policy setting".into()),
+        }
+    }
+    pub fn intra_op_spinning(self) -> bool {
+        self == Self::RunOnly
+    }
+    /// Selected session config value; this is the request, not an ORT readback.
+    pub fn force_spinning_stop(self) -> Option<&'static str> {
+        (self == Self::RunOnly).then_some(FORCE_SPINNING_STOP_VALUE)
+    }
+}
+
+/// Session config entries added on top of the fixed builder options.
+pub fn session_config_entries(
+    partition: TaskPartition,
+    spin: SpinPolicy,
+) -> Vec<(&'static str, &'static str)> {
+    let mut entries = Vec::new();
+    if partition == TaskPartition::Dynamic4 {
+        entries.push(("session.dynamic_block_base", "4"));
+    }
+    if let Some(value) = spin.force_spinning_stop() {
+        entries.push(("session.force_spinning_stop", value));
+    }
+    entries
+}
+
 fn geometry(height: usize) -> Result<usize> {
     if ![240, 320].contains(&height) {
         return Err("unsupported image geometry".into());
@@ -194,6 +240,17 @@ impl Detector {
         runtime: &Path,
         partition: TaskPartition,
     ) -> Result<Self> {
+        Self::new_with_policy(model, runtime, partition, SpinPolicy::Off)
+    }
+
+    /// The session keeps its own internal intra-op pool: no global pool, external
+    /// pool or thread manager is configured, which `force_spinning_stop` requires.
+    pub fn new_with_policy(
+        model: &Path,
+        runtime: &Path,
+        partition: TaskPartition,
+        spin: SpinPolicy,
+    ) -> Result<Self> {
         let runtime = runtime.canonicalize()?;
         verify_runtime(&runtime)?;
         let mut bytes = Vec::new();
@@ -208,14 +265,13 @@ impl Detector {
             .with_intra_threads(3)?
             .with_inter_threads(1)?
             .with_parallel_execution(false)?
-            .with_intra_op_spinning(false)?
+            .with_intra_op_spinning(spin.intra_op_spinning())?
             .with_inter_op_spinning(false)?
             .with_optimization_level(GraphOptimizationLevel::All)?;
-        let builder = if partition == TaskPartition::Dynamic4 {
-            builder.with_config_entry("session.dynamic_block_base", "4")?
-        } else {
-            builder
-        };
+        let mut builder = builder;
+        for (key, value) in session_config_entries(partition, spin) {
+            builder = builder.with_config_entry(key, value)?;
+        }
         let session = builder.commit_from_memory(&bytes)?;
         if session.inputs().len() != 1 || session.outputs().len() != 1 {
             return Err("invalid model IO".into());

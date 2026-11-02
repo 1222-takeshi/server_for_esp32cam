@@ -25,6 +25,68 @@ fn task_partition_is_opt_in_strict_and_reports_the_fixed_base() {
     assert!(TaskPartition::parse(Err(std::env::VarError::NotUnicode("invalid".into()))).is_err());
 }
 
+#[test]
+fn spin_policy_is_opt_in_strict_and_only_ever_requests_one() {
+    assert_eq!(SpinPolicy::default(), SpinPolicy::Off);
+    for setting in [Err(std::env::VarError::NotPresent), Ok("0".into())] {
+        let policy = SpinPolicy::parse(setting).unwrap();
+        assert_eq!(policy, SpinPolicy::Off);
+        assert!(!policy.intra_op_spinning());
+        assert_eq!(policy.force_spinning_stop(), None);
+    }
+    let policy = SpinPolicy::parse(Ok("1".into())).unwrap();
+    assert_eq!(policy, SpinPolicy::RunOnly);
+    assert!(policy.intra_op_spinning());
+    assert_eq!(policy.force_spinning_stop(), Some("1"));
+    for value in ["", "2", "true", "01", " 1", "1 ", "-1", "1\n", "on"] {
+        assert!(SpinPolicy::parse(Ok(value.into())).is_err());
+    }
+    assert!(SpinPolicy::parse(Err(std::env::VarError::NotUnicode("x".into()))).is_err());
+}
+
+#[test]
+fn session_config_entries_keep_the_default_profile_and_add_only_the_selected_keys() {
+    assert!(session_config_entries(TaskPartition::Static, SpinPolicy::Off).is_empty());
+    assert_eq!(
+        session_config_entries(TaskPartition::Dynamic4, SpinPolicy::Off),
+        [("session.dynamic_block_base", "4")]
+    );
+    assert_eq!(
+        session_config_entries(TaskPartition::Static, SpinPolicy::RunOnly),
+        [("session.force_spinning_stop", "1")]
+    );
+    for (_, value) in session_config_entries(TaskPartition::Dynamic4, SpinPolicy::RunOnly) {
+        assert!(value == "1" || value == "4");
+    }
+}
+
+#[test]
+fn detector_builder_uses_only_the_per_session_internal_pool() {
+    let source = include_str!("../detector.rs");
+    let production = source.split("#[cfg(test)]").next().unwrap();
+    for forbidden in [
+        "with_global_thread_pool",
+        "with_thread_manager",
+        "with_no_global",
+        "with_inter_op_spinning(true)",
+        "spin_duration_us",
+        "spin_backoff_max",
+    ] {
+        assert!(!production.contains(forbidden), "{forbidden}");
+    }
+    for fixed in [
+        ".with_intra_threads(3)",
+        ".with_inter_threads(1)",
+        ".with_parallel_execution(false)",
+        ".with_inter_op_spinning(false)",
+        "GraphOptimizationLevel::All",
+    ] {
+        assert!(production.contains(fixed), "{fixed}");
+    }
+    // The default constructors cannot reach the spinning path.
+    assert!(production.contains("SpinPolicy::Off)"));
+}
+
 fn prediction(raw: &mut [f32], index: usize, class: usize, score: f32, x: f32) {
     for (channel, value) in [x, 160.0, 80.0, 80.0].into_iter().enumerate() {
         raw[channel * 2100 + index] = value;
