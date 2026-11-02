@@ -141,6 +141,9 @@ class Collector:
                 "effective_mode": mode.get("effective_mode"),
                 "acknowledged": mode.get("acknowledged"),
                 "actuation_state": mode.get("actuation_state"),
+                # Last mode-state version seen; the restore falls back on it when
+                # a trial leaves no report to take the last generation from.
+                "version": mode.get("version"),
             },
             "camera_boot_id": mode.get("boot_id"),
             "last_firmware_version": device.get("last_firmware_version", UNVERIFIED),

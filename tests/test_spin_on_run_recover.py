@@ -115,6 +115,7 @@ def baseline():
             "effective_mode": "eco",
             "acknowledged": True,
             "actuation_state": "hold",
+            "version": 3,
         },
     )
 
@@ -171,13 +172,14 @@ def test_new_generation_ack_must_exceed_the_generation_used_in_the_trial(tmp_pat
     assert not r.ok
     g2, _ = guard(tmp_path / "b", ops=FakeOps(version=5))
     assert g2.r3_r4(4).ok
-    assert g2.r3_r4(None).ok
+    # Nothing known about the trial's generation is never a pass.
+    assert not g2.r3_r4(None).ok
 
 
 def test_eco_is_requested_until_acknowledged(tmp_path):
     ops = FakeOps(eco_after_requests=3)
     g, _ = guard(tmp_path, ops=ops)
-    assert g.r3_r4(None).ok and ops.calls.count("eco") == 3
+    assert g.r3_r4(3).ok and ops.calls.count("eco") == 3
 
 
 def test_service_that_never_gets_ready_fails_after_the_deadline(tmp_path):
@@ -298,3 +300,208 @@ def test_guard_source_never_touches_firmware_or_ota():
     source = inspect.getsource(rg).lower()
     assert not re.search(r"\bota\b|3232|flash|esptool", source)
     assert pytest is not None
+
+
+# -- review fixes: exceptions, restarts, fallbacks and deadlines ----------------
+
+
+class Flaky(FakeOps):
+    """Raises once from the named call (or always, with `always=True`)."""
+
+    def __init__(self, name, *, always=False, error=OSError, **kw):
+        super().__init__(**kw)
+        self.name, self.always, self.error, self.raised = name, always, error, 0
+
+    def _maybe(self, name):
+        if name == self.name and (self.always or self.raised == 0):
+            self.raised += 1
+            raise self.error(name)
+
+    def stop_trial(self):
+        self._maybe("stop_trial")
+        super().stop_trial()
+
+    def start_service(self):
+        self._maybe("start_service")
+        super().start_service()
+
+    def mode(self):
+        self._maybe("mode")
+        return super().mode()
+
+    def request_eco(self, mode):
+        self._maybe("request_eco")
+        super().request_eco(mode)
+
+    def snapshot(self):
+        self._maybe("snapshot")
+        return super().snapshot()
+
+    def disable_self(self):
+        self._maybe("disable_self")
+        super().disable_self()
+
+
+@pytest.mark.parametrize(
+    "name", ["stop_trial", "start_service", "mode", "request_eco"]
+)
+def test_a_transient_failure_in_r1_to_r4_does_not_end_the_restore(tmp_path, name):
+    ops = Flaky(name, eco_after_requests=1)
+    g, d = guard(tmp_path, ops=ops, report={"reason": "completed"})
+    out = g.run()
+    assert out["ok"], out
+    assert ops.raised == 1 and ops.calls[-1] == "disable"
+    assert (d / "restore-result.json").exists() and (d / "after.json").exists()
+
+
+def test_an_exception_in_r5_or_r6_retries_the_attempt_and_still_closes_with_r7(tmp_path):
+    ops = Flaky("snapshot")  # fails the first snapshot (R5 of attempt 1) only
+    g, d = guard(tmp_path, ops=ops, report={"reason": "completed"})
+    out = g.run()
+    assert out["ok"] and len(out["attempts"]) == 2
+    assert "error:OSError" in out["attempts"][0]["R5"]["detail"]
+    assert (d / "restore-result.json").exists()
+
+
+def test_every_step_failing_forever_still_runs_r7_and_saves_the_result(tmp_path):
+    for name in ("mode", "start_service", "snapshot"):
+        ops = Flaky(name, always=True)
+        g, d = guard(tmp_path / name, ops=ops, report={"reason": "completed"})
+        out = g.run()  # must not raise
+        assert not out["ok"] and rg.exit_code(out) == 75
+        assert (d / "restore-result.json").exists(), name
+        assert out["r7"] and ops.calls.count("disable") == 1, name
+    # A failing stop command is judged by the state it leaves: still active is a failure.
+    stuck = Flaky("stop_trial", always=True, stopped=False)
+    g, _ = guard(tmp_path / "stuck", ops=stuck, report={"reason": "completed"})
+    assert not g.run()["ok"] and stuck.calls.count("start") == 0
+
+
+def test_r7_runs_each_part_even_when_the_final_snapshot_fails(tmp_path):
+    ops = Flaky("snapshot", always=True)
+    g, d = guard(tmp_path, ops=ops, report={"reason": "completed"})
+    out = g.run()
+    assert ops.calls.count("disable") == 1  # the guard is still released
+    assert out["r7"]["ok"] is False and any(e.startswith("after") for e in out["r7"]["errors"])
+
+
+def test_an_interrupted_restore_still_closes_with_r7_and_reraises(tmp_path):
+    ops = Flaky("mode", always=True, error=KeyboardInterrupt)
+    g, d = guard(tmp_path, ops=ops, report={"reason": "completed"})
+    with pytest.raises(KeyboardInterrupt):
+        g.run()
+    saved = json.loads((d / "restore-result.json").read_text())
+    assert saved["interrupted"] == "KeyboardInterrupt" and saved["ok"] is False
+    assert ops.calls[-1] == "disable"
+
+
+def test_a_restarted_guard_reuses_outputs_of_the_earlier_start(tmp_path):
+    g, d = guard(tmp_path, report={"reason": "completed"})
+    first = g.post_run()
+    (d / "after.attempt1.json").write_text("{}")
+    (d / "after.json").write_text("{}")
+    again = rg.Guard(FakeOps(), d, baseline(), 600)
+    out = again.run()  # no FileExistsError, nothing overwritten
+    assert out["ok"]
+    assert again.post["native_sha256"] == first["native_sha256"]
+    assert (d / "after.attempt1.r1.json").exists() and (d / "after.r1.json").exists()
+    assert json.loads((d / "after.json").read_text()) == {}
+    # A settled result is returned as is, without touching the system again.
+    ops = FakeOps()
+    settled = rg.Guard(ops, d, baseline(), 600).run()
+    assert settled["ok"] and ops.calls == []
+
+
+def test_post_run_happens_after_the_first_successful_r1_even_if_attempt_one_failed(tmp_path):
+    class Late(FakeOps):
+        def __init__(self):
+            super().__init__()
+            self.stops = 0
+
+        def trial_state(self):
+            self.stops += 1
+            state = super().trial_state()
+            return {**state, "active_state": "active" if self.stops == 1 else "inactive"}
+
+    g, d = guard(tmp_path, ops=Late(), report={"reason": "completed"})
+    out = g.run()
+    assert out["ok"] and out["attempts"][0]["R1"]["ok"] is False
+    assert (d / "post-run-check.json").exists() and out["post"]["native_size"] > 0
+    assert out["post_ok"] is True
+
+
+def test_without_a_report_the_last_seen_version_decides_and_unknown_is_never_a_pass(tmp_path):
+    # No report: the baseline's version 3 is the fallback; an ACK at 3 is not new.
+    g, _ = guard(tmp_path / "old", ops=FakeOps(version=3), report=None)
+    out = g.run()
+    assert not out["ok"] and "generation" in out["attempts"][0]["R3R4"]["detail"] + "ACK"
+    g, _ = guard(tmp_path / "new", ops=FakeOps(version=4), report=None)
+    assert g.run()["ok"]
+    # Neither a report nor a recorded version: not exempt, fail closed.
+    no_version = baseline()
+    no_version["mode"].pop("version")
+    d = run_dir(tmp_path / "none", report=None)
+    out = rg.Guard(FakeOps(version=99), d, no_version, 600).run()
+    assert not out["ok"]
+    assert out["attempts"][0]["R3R4"]["detail"] == "generation used in the trial is unknown"
+
+
+class Slow(FakeOps):
+    """Each call costs time on the clock the guard measures deadlines with."""
+
+    def __init__(self, **cost):
+        super().__init__()
+        self.cost = cost
+
+    def mode(self):
+        self.t += self.cost.get("mode", 0)
+        return super().mode()
+
+    def snapshot(self):
+        self.t += self.cost.get("snapshot", 0)
+        return super().snapshot()
+
+
+def test_r6_is_limited_to_130_seconds_not_140(tmp_path):
+    for cost, expected in [(0.5, True), (0.7, True), (0.8, False), (1.0, False)]:
+        ops = Slow(mode=cost)
+        ops.requests = 1
+        g, _ = guard(tmp_path / str(cost), ops=ops)
+        started = ops.t
+        result = g.r6()
+        # 12 waits of 10 s plus 13 samples of `cost` each.
+        assert ops.t - started == pytest.approx(120 + 13 * cost)
+        assert result.ok is expected, cost
+
+
+def test_r7_is_limited_to_15_seconds(tmp_path):
+    for cost, expected in [(7, True), (16, False)]:
+        ops = Slow(snapshot=cost)
+        g, d = guard(tmp_path / str(cost), ops=ops, report={"reason": "completed"})
+        result = g.r7(True)
+        assert result["ok"] is expected, cost
+        assert (d / "after.json").exists()
+
+
+def test_post_run_is_limited_to_30_seconds_and_a_late_one_blocks_a_pass(tmp_path):
+    class Clock(FakeOps):
+        pass
+
+    g, d = guard(tmp_path, ops=Clock(), report={"reason": "completed"})
+    original = g.read_report
+
+    def slow():
+        g.ops.t += 31
+        return original()
+
+    g.read_report = slow
+    info = g.post_run()
+    assert info["within_deadline"] is False and not rg.post_ok(info)
+    quick, _ = guard(tmp_path / "q", report={"reason": "completed"})
+    assert rg.post_ok(quick.post_run())
+    g.post = info
+    out = {"ok": True, "post": info, "post_ok": False}
+    common.write_json(d / "restore-result.json", out) if not (d / "restore-result.json").exists() else None
+    collector = environment.Collector(run=lambda argv: "", get_json=lambda n: {}, unit_path="/x")
+    collector.snapshot = lambda: baseline()
+    assert rg.final_verdict(d, collector, baseline())["result"] != "passed"
