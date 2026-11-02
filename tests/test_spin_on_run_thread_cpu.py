@@ -145,7 +145,36 @@ def test_decision_table_order():
     assert tc.M_ORDER == "XYYXXY" and tc.M_ORDER.count("Y") == 3
 
 
-def test_m_environment_has_no_spinning_switch_and_keeps_the_gap():
+def test_m_environment_passes_nothing_to_the_unmodified_worker():
     env = tc.m_env("Y")
-    assert env == {"PATH": "/usr/bin:/bin", "ESP32CAM_RUST_BENCH_FRAME_GAP_MS": "40"}
+    assert env == {"PATH": "/usr/bin:/bin"}  # no spinning switch, no gap setting
     assert tc.m_env("X") == env
+    assert tc.FRAME_GAP_S == 0.04
+
+
+def test_the_gap_check_needs_eighty_gaps_of_forty_milliseconds():
+    def rows(span):
+        return [{"wall_us": 0}] * 4 + [{"wall_us": 1_000}] + [{"wall_us": 0}] * 79 + [
+            {"wall_us": 1_000 + span}
+        ]
+
+    assert tc.gap_present(rows(3_200_000))
+    assert not tc.gap_present(rows(3_199_999))
+    assert not tc.gap_present([])
+
+
+def test_m_runs_the_registered_worker_not_the_new_binary():
+    from scripts.spin_on_run import cli, common, start_gate
+
+    assert common.HASHES["pr616_worker"].startswith("91a7e709")
+    source = __import__("inspect").getsource(cli._offline_config)
+    assert 'cfg["pr616_worker"] if thread else cfg["worker"]' in source
+    assert "thread: bool = False" in __import__("inspect").getsource(start_gate.evaluate)
+
+
+def test_sampler_cpu_comes_from_its_own_process_not_the_worker(tmp_path):
+    (tmp_path / "self").mkdir()
+    (tmp_path / "4242").mkdir()
+    (tmp_path / "self" / "stat").write_text(stat_line(30, 12, 5))
+    (tmp_path / "4242" / "stat").write_text(stat_line(900, 900, 5))
+    assert tc.ProcReader(str(tmp_path)).self_ticks(4242) == 42

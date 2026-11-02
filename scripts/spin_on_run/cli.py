@@ -42,11 +42,14 @@ def _with_binaries(cfg: dict) -> dict:
     return {**cfg, "worker": str(found["frame-worker"]), "frame_live": str(found["frame-live"])}
 
 
-def _gate(cfg: dict, baseline: dict, out: Path, *, live: bool, ops=None) -> dict:
+def _gate(
+    cfg: dict, baseline: dict, out: Path, *, live: bool, thread: bool = False, ops=None
+) -> dict:
     platform = offline_runner.LinuxPlatform()
     return start_gate.evaluate(
         cfg,
         live=live,
+        thread=thread,
         collector=_collector(cfg),
         baseline=baseline,
         out_dir=out,
@@ -129,7 +132,8 @@ def _offline_config(cfg: dict, out_dir: Path, *, thread: bool) -> offline_runner
 
     platform = offline_runner.LinuxPlatform(deviations)
     run_cfg = offline_runner.Config(
-        worker=Path(cfg["worker"]),
+        # Candidate M measures the registered unmodified worker, S the new one.
+        worker=Path(cfg["pr616_worker"] if thread else cfg["worker"]),
         model=Path(cfg["model"]),
         ort=Path(cfg["ort"]),
         input_path=Path(cfg["input"]),
@@ -146,7 +150,7 @@ def cmd_offline_run(args: argparse.Namespace) -> int:
     cfg = _with_binaries(_config(args.config))
     out = Path(args.out)
     baseline = json.loads(Path(cfg["baseline"]).read_text())
-    gate = _gate(cfg, baseline, out, live=False)
+    gate = _gate(cfg, baseline, out, live=False, thread=args.thread)
     if not gate["ok"]:
         print(json.dumps(start_gate.refuse_offline(out, gate)["verdict"]))
         return start_gate.REFUSED_EXIT

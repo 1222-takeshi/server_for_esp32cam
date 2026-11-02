@@ -32,7 +32,11 @@ class ProcReader:
             return handle.read()
 
     def self_ticks(self, pid: int) -> int:
-        with open(f"{self.root}/{pid}/stat") as handle:
+        """CPU ticks of the sampler's own process (`/proc/self/stat`), not the worker's.
+
+        `pid` is accepted for the common reader shape and deliberately unused.
+        """
+        with open(f"{self.root}/self/stat") as handle:
             return parse_stat(handle.read())[0]
 
 
@@ -232,9 +236,22 @@ class SamplerHandle:
         return {"samples": self.samples, "t0": self.t0, "stuck": self._thread.is_alive()}
 
 
+FRAME_GAP_S = 0.04
+
+
+def gap_present(rows: list[dict]) -> bool:
+    """Plan 5.4: 80 gaps of 40 ms lie between the end of row 4 and the end of row 84."""
+    from .common import FRAME_GAP_US, GAP_COUNT
+
+    try:
+        return rows[84]["wall_us"] - rows[4]["wall_us"] >= GAP_COUNT * FRAME_GAP_US
+    except (KeyError, IndexError, TypeError):
+        return False
+
+
 def m_env(condition: str, extra: dict | None = None) -> dict:
-    """Same worker and fixed profile for X and Y: no spinning switch, 40 ms frame gap."""
-    env = {"PATH": "/usr/bin:/bin", "ESP32CAM_RUST_BENCH_FRAME_GAP_MS": "40"}
+    """The unmodified worker takes no setting at all; the gap is the harness's (see `Config`)."""
+    env = {"PATH": "/usr/bin:/bin"}
     env.update(extra or {})
     return env
 
@@ -273,8 +290,10 @@ def configure(cfg, platform, reader=None):
             for r in runs:
                 pooled[r["condition"]] += [row["infer_us"] for row in r["rows"][5:85]]
             infer = combine_infer(pooled["X"], pooled["Y"])
+        gaps = all(gap_present(r["rows"]) for r in runs)
+        result["frame_gap_present"] = gaps
         result["outcome"] = outcome(
-            harness_failure=bool(runner.codes) or len(runs) != 6,
+            harness_failure=bool(runner.codes) or len(runs) != 6 or not gaps,
             runs=evaluations,
             infer=infer,
             m6=not runner.codes,
@@ -289,6 +308,7 @@ def configure(cfg, platform, reader=None):
         return result
 
     cfg.order = M_ORDER
+    cfg.pace_gap_s = FRAME_GAP_S
     cfg.env_for = m_env
     cfg.start_hook = start
     cfg.stop_hook = lambda handle: handle.stop()

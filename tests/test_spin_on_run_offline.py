@@ -185,11 +185,63 @@ def test_files_are_read_only_and_never_overwritten(setup):
         assert stat.S_IMODE(path.stat().st_mode) == 0o400, path.name
 
 
-def test_candidate_m_dry_run_reaches_a_decision_without_sampler_data_for_x(setup):
+def envelopes(count=ROWS_PER_RUN, size=48, payload=b"jpeg-bytes"):
+    one = b"ECF2" + bytes(size - 8) + len(payload).to_bytes(4, "big") + payload
+    return one * count
+
+
+def test_split_frames_cuts_whole_envelopes_and_rejects_anything_else():
+    stream = envelopes(3) + b"ECF1" + bytes(32) + (2).to_bytes(4, "big") + b"ab"
+    frames = offline_runner.split_frames(stream)
+    assert [len(f) for f in frames] == [48 + 10] * 3 + [40 + 2]
+    assert b"".join(frames) == stream
+    for bad in (b"x", envelopes(1)[:-1], b"ECF3" + bytes(60), envelopes(1) + b"ECF2"):
+        with pytest.raises(ValueError):
+            offline_runner.split_frames(bad)
+    zero = b"ECF2" + bytes(40) + (0).to_bytes(4, "big")
+    with pytest.raises(ValueError):
+        offline_runner.split_frames(zero)
+
+
+class RealSleep(FakePlatform):
+    def sleep(self, seconds):
+        import time
+
+        time.sleep(seconds)
+
+
+def test_paced_input_hands_over_one_envelope_per_result_after_the_gap(setup, tmp_path):
+    (tmp_path / "input.ecf2").write_bytes(envelopes())
+    log = tmp_path / "gaps.log"
+    runner, _ = setup(
+        "ok",
+        RealSleep(),
+        order="A",
+        pace_gap_s=0.02,
+    )
+    runner.cfg.extra_env.update(FAKE_PACED="1", FAKE_LOG=str(log))
+    runner.run()
+    assert runner.codes == [] and len(runner.runs) == 1
+    gaps = [float(x) for x in log.read_text().split()]
+    assert len(gaps) == ROWS_PER_RUN - 1  # nothing is waited for after the last row
+    assert min(gaps) >= 0.02
+
+
+def test_paced_input_that_is_not_a_replay_stream_is_a_harness_failure(setup, tmp_path):
+    (tmp_path / "input.ecf2").write_bytes(b"x")
+    runner, _ = setup("ok", order="A", pace_gap_s=0.01)
+    result = runner.run()
+    assert result["codes"] == ["O06"]
+
+
+def test_candidate_m_dry_run_reaches_a_decision_without_sampler_data_for_x(setup, tmp_path):
     from scripts.spin_on_run import thread_cpu
 
+    (tmp_path / "input.ecf2").write_bytes(envelopes())
     runner, out = setup("ok")
+    runner.cfg.extra_env["FAKE_PACED"] = "1"
     thread_cpu.configure(runner.cfg, runner.platform, reader=_NoProc())
+    assert runner.cfg.pace_gap_s == thread_cpu.FRAME_GAP_S
     result = runner.run()
     assert [r["condition"] for r in runner.runs] == list("XYYXXY")
     assert result["codes"] == [] and result["outcome"]["id"] in {"M-D2", "M-D3"}

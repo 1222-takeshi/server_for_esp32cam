@@ -38,6 +38,23 @@ from .common import (
 )
 
 PLANNED = {"O01", "O02", "O03", "O04", "O05"}
+HEADER_SIZES = {b"ECF1": 40, b"ECF2": 48}
+
+
+def split_frames(data: bytes) -> list[bytes]:
+    """Cuts a replay stream into whole envelopes (header length field, big endian)."""
+    frames, at = [], 0
+    while at < len(data):
+        size = HEADER_SIZES.get(data[at : at + 4])
+        if size is None or at + size > len(data):
+            raise ValueError("replay stream is not made of whole envelopes")
+        length = int.from_bytes(data[at + size - 4 : at + size], "big")
+        end = at + size + length
+        if length < 1 or end > len(data):
+            raise ValueError("replay envelope length")
+        frames.append(data[at:end])
+        at = end
+    return frames
 
 
 class Platform(Protocol):
@@ -120,6 +137,9 @@ class Config:
     start_hook: Callable[[int, str], object] = None  # (child pid, condition) -> handle
     stop_hook: Callable[[object], object] = None  # handle -> collected data
     summarizer: Callable[["Runner", str], dict] = None
+    # Unmodified workers have no frame gap setting: the harness then hands over
+    # one envelope at a time and waits this long after each result line.
+    pace_gap_s: float | None = None
 
 
 def child_env(condition: str, extra: dict | None = None) -> dict:
@@ -194,7 +214,10 @@ class Runner:
     # -- one run -----------------------------------------------------------
     def spawn(self, condition: str, stderr_path: Path):
         argv = [*self.cfg.prefix, str(self.cfg.worker), str(self.cfg.model), str(self.cfg.ort)]
-        stdin = open(self.cfg.input_path, "rb")  # noqa: SIM115 - closed in run_one
+        paced = self.cfg.pace_gap_s is not None
+        if paced:
+            self._frames = split_frames(Path(self.cfg.input_path).read_bytes())
+        stdin = subprocess.PIPE if paced else open(self.cfg.input_path, "rb")  # noqa: SIM115
         stderr = open(stderr_path, "wb")  # noqa: SIM115
         child = subprocess.Popen(
             argv,
@@ -203,7 +226,27 @@ class Runner:
             stderr=stderr,
             env=(self.cfg.env_for or child_env)(condition, self.cfg.extra_env),
         )
+        if paced:
+            stdin = child.stdin
+            self.hand_over(child, 0)
         return child, stdin, stderr
+
+    def hand_over(self, child, index: int) -> None:
+        """Writes envelope `index`; closes the pipe after the last one."""
+        try:
+            child.stdin.write(self._frames[index])
+            child.stdin.flush()
+            if index == len(self._frames) - 1:
+                child.stdin.close()
+        except (BrokenPipeError, ValueError):
+            pass  # a child that is gone is noticed by the read loop
+
+    def after_row(self, child, rows_done: int) -> None:
+        """Gap after a result line, then the next envelope (never after the last)."""
+        if self.cfg.pace_gap_s is None or rows_done >= len(self._frames):
+            return
+        self.platform.sleep(self.cfg.pace_gap_s)
+        self.hand_over(child, rows_done)
 
     def stop_child(self, child) -> None:
         if child.poll() is None:
@@ -253,6 +296,7 @@ class Runner:
                         self.accept_line(index, condition, rows, line)
                         if len(rows) - 1 in (4, ROWS_PER_RUN - 1):
                             self._recv[len(rows) - 1] = self.platform.monotonic()
+                        self.after_row(child, len(rows))
             if pending.strip():
                 raise Stop("O06", "unterminated output line")
         except Stop as stop:

@@ -48,6 +48,8 @@ HASHES = {
     "input": "d9bda20070c002a3eb466571b0044d81029b41f2cbcf1635dc02385c76f28885",
     "golden": "00baa4577c85d91944721d2e95127cbc5d9f26f038cf6aa5b7dae651c9bf909c",
     "original_unit": "4c6e6d6533b89d20260a9a7665a6520e9b9f569e692746eb4d997dd4d66fb7a6",
+    # Candidate M runs this unmodified worker (plan section 6).
+    "pr616_worker": "91a7e70992ec023aaf08a2e9eee3d05b8be57b204b50c6a5e8a27e77cd536c75",
 }
 
 

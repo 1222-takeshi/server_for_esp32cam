@@ -78,6 +78,7 @@ def evaluate(
     cfg: dict,
     *,
     live: bool,
+    thread: bool = False,
     collector: environment.Collector,
     baseline: dict,
     out_dir: Path,
@@ -95,10 +96,14 @@ def evaluate(
         snapshot = {"last_firmware_version": environment.UNVERIFIED}
         notes.append(f"snapshot_unavailable:{type(error).__name__}")
     hashes = {label: _sha(cfg.get(label)) for label in FIXED_FILES}
+    expected = {}
+    if thread:  # candidate M runs the registered unmodified worker
+        hashes["pr616_worker"] = _sha(cfg.get("pr616_worker"))
+        expected["pr616_worker"] = common.HASHES["pr616_worker"]
     ctx = preflight.Context(
         snapshot=snapshot,
         file_hashes=hashes,
-        expected_hashes={},
+        expected_hashes=expected,
         free_bytes=free_bytes(out_dir if out_dir.exists() else out_dir.parent),
         temp_millic=temp_millic(),
         live=live,
