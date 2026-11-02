@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import urllib.error
 import urllib.request
 from collections.abc import Callable
 
@@ -129,17 +130,27 @@ class Collector:
         }
 
 
-def http_getter(base: str, key: str | None, timeout: float = 5.0) -> Callable[[str], dict]:
-    """GET helper; `key` is sent as a header and never returned or logged."""
+def http_getter(
+    base: str, admin_token: str | None, camera_id: str = "esp32cam-01", timeout: float = 5.0
+) -> Callable[[str], dict]:
+    """GET helper for the three reads a snapshot needs; the token is sent, never returned."""
+    paths = {
+        "mode": f"api/cameras/{camera_id}/operating",
+        "ready": "healthz/ready",
+        "device": f"api/cameras/{camera_id}/desired-config",
+    }
 
     def get(name: str) -> dict:
-        request = urllib.request.Request(f"{base.rstrip('/')}/{name}")
-        if key:
-            request.add_header("X-API-Key", key)
-        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
-            if response.status != 200:
-                raise OSError("unexpected status")
-            return json.loads(response.read(1 << 20))
+        request = urllib.request.Request(f"{base.rstrip('/')}/{paths[name]}")
+        if admin_token and name == "device":
+            request.add_header("Authorization", f"Bearer {admin_token}")
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
+                return json.loads(response.read(1 << 20))
+        except urllib.error.HTTPError as error:
+            if name == "ready" and error.code == 503:  # degraded still carries a status body
+                return json.loads(error.read(1 << 20))
+            raise
 
     return get
 
