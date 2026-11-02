@@ -556,6 +556,82 @@ fn firmware_clock_hello_ack_and_result_cross_the_real_socket() {
     camera.join().unwrap();
     worker.stop().unwrap();
 }
+/// The receiver stores the clock's protection view on every pass and notes each
+/// accepted input; removing either leaves the online checks blind.
+#[test]
+fn every_receiver_pass_refreshes_the_protection_view_and_accepted_input_is_noted() {
+    let (state, worker, clock) = setup();
+    let (mut client, mut server) = pair();
+    let camera = thread::spawn(move || {
+        client.send(Message::Text(json!({"type":"profile.hello","schema":2,"boot_id":1,"generation_floor":0,"profiles":["eco","tracking"]}).to_string().into())).unwrap();
+        let mut ack = None;
+        let mut synced = false;
+        let mut sent = false;
+        while let Ok(Message::Text(raw)) = client.read() {
+            let v: Value = serde_json::from_str(&raw).unwrap();
+            match v["type"].as_str().unwrap() {
+                "clock.ping" => {
+                    client.send(Message::Text(json!({"type":"clock.pong","id":v["id"],"boot_id":1,"device_us":clock()+1_000_000}).to_string().into())).unwrap();
+                    synced = true;
+                }
+                "profile.set" => {
+                    let applied = clock() + 1_000_000;
+                    let generation = v["generation"].as_u64().unwrap();
+                    client.send(Message::Text(json!({"type":"profile.ack","boot_id":1,"generation":generation,"mode":v["mode"],"applied_us":applied}).to_string().into())).unwrap();
+                    ack = Some((generation, applied));
+                }
+                _ => panic!(),
+            }
+            if synced
+                && !sent
+                && let Some((generation, applied)) = ack
+            {
+                let capture = (clock() + 1_000_000).max(applied + 1);
+                client
+                    .send(Message::Binary(envelope(1, 1, capture, generation).into()))
+                    .unwrap();
+                sent = true;
+            }
+        }
+    });
+    let receiver = Receiver::new(
+        &worker,
+        Limits {
+            duration_us: 2_000_000,
+            ..Limits::default()
+        },
+    )
+    .unwrap();
+    // What each controller pass finds in the stored view: (last sync, input).
+    let mut passes: Vec<(Option<u64>, Option<u64>)> = vec![];
+    let outcome = receiver.run(&mut server, |s, _| {
+        passes.push((
+            s.protection.last_sync_us,
+            s.protection.input.map(|i| i.received_us),
+        ));
+        Ok(s.counters.published == 0)
+    });
+    assert_eq!(outcome.reason, "completed");
+    // Before the first reply nothing is known; later passes see the sync time
+    // without any other trigger than the pass itself.
+    assert_eq!(passes[0], (None, None));
+    assert!(passes.iter().any(|p| p.0.is_some() && p.1.is_none()));
+    // The accepted frame is noted at arrival and seen by the next pass.
+    let noted = passes.last().unwrap().1;
+    assert!(noted.is_some_and(|at| at >= 100_000), "{passes:?}");
+    assert_eq!(
+        passes.last().unwrap().1,
+        state
+            .lock()
+            .unwrap()
+            .protection
+            .input
+            .map(|i| i.received_us)
+    );
+    drop(server);
+    camera.join().unwrap();
+    worker.stop().unwrap();
+}
 #[test]
 fn concurrent_session_cannot_disconnect_the_existing_owner() {
     let (state, worker, _) = setup();
