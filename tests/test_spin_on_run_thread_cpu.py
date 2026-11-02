@@ -143,3 +143,9 @@ def test_decision_table_order():
     assert f(infer={"m5_infer": False}) == "M-D3"
     assert f(runs=runs[:2]) == "M-D3"
     assert tc.M_ORDER == "XYYXXY" and tc.M_ORDER.count("Y") == 3
+
+
+def test_m_environment_has_no_spinning_switch_and_keeps_the_gap():
+    env = tc.m_env("Y")
+    assert env == {"PATH": "/usr/bin:/bin", "ESP32CAM_RUST_BENCH_FRAME_GAP_MS": "40"}
+    assert tc.m_env("X") == env

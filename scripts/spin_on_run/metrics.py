@@ -176,16 +176,16 @@ def temperature_summary(samples: list[dict], windows: list[tuple[str, float, flo
     """`samples`: `{t, temp_millic, throttled}`; `windows`: (condition, start, end)."""
     if not samples:
         raise MetricsError("no vitals")
-    peaks = {"A": None, "B": None}
+    peaks: dict = {}
     for cond, start, end in windows:
         inside = [s["temp_millic"] for s in samples if start <= s["t"] <= end]
         if inside:
-            peaks[cond] = max(inside + ([peaks[cond]] if peaks[cond] is not None else []))
+            peaks[cond] = max(inside + [peaks.get(cond, inside[0])])
     return {
         "temp_max_millic": max(s["temp_millic"] for s in samples),
         "throttled_all_zero": all(s["throttled"] == 0 for s in samples),
-        "temp_a_max": peaks["A"],
-        "temp_b_max": peaks["B"],
+        "temp_a_max": peaks.get("A"),
+        "temp_b_max": peaks.get("B"),
     }
 
 

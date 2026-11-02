@@ -16,6 +16,7 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from collections.abc import Callable
 from typing import Protocol
 
 from . import common, metrics, quality
@@ -115,6 +116,10 @@ class Config:
     temp_wait_s: float = START_TEMP_WAIT_S
     order: str = ORDER
     extra_env: dict = field(default_factory=dict)
+    env_for: Callable[[str, dict], dict] = None  # condition -> child environment
+    start_hook: Callable[[int, str], object] = None  # (child pid, condition) -> handle
+    stop_hook: Callable[[object], object] = None  # handle -> collected data
+    summarizer: Callable[["Runner", str], dict] = None
 
 
 def child_env(condition: str, extra: dict | None = None) -> dict:
@@ -196,7 +201,7 @@ class Runner:
             stdin=stdin,
             stdout=subprocess.PIPE,
             stderr=stderr,
-            env=child_env(condition, self.cfg.extra_env),
+            env=(self.cfg.env_for or child_env)(condition, self.cfg.extra_env),
         )
         return child, stdin, stderr
 
@@ -221,7 +226,11 @@ class Runner:
         selector.register(child.stdout, selectors.EVENT_READ)
         pending = b""
         planned: Stop | None = None
+        handle = None
+        self._recv = {}
         try:
+            if self.cfg.start_hook:
+                handle = self.cfg.start_hook(child.pid, condition)
             while True:
                 now = self.platform.monotonic()
                 self.sample(now)
@@ -242,11 +251,14 @@ class Runner:
                     *lines, pending = pending.split(b"\n")
                     for line in lines:
                         self.accept_line(index, condition, rows, line)
+                        if len(rows) - 1 in (4, ROWS_PER_RUN - 1):
+                            self._recv[len(rows) - 1] = self.platform.monotonic()
             if pending.strip():
                 raise Stop("O06", "unterminated output line")
         except Stop as stop:
             planned = stop
         finally:
+            collected = self.cfg.stop_hook(handle) if self.cfg.stop_hook and handle else None
             selector.close()
             self.stop_child(child)
             child.stdout.close()
@@ -267,7 +279,15 @@ class Runner:
             raise Stop("O06", f"child exit {child.returncode}")
         if len(rows) != ROWS_PER_RUN:
             raise Stop("O06", f"rows={len(rows)}")
-        self.runs.append({"condition": condition, "rows": rows})
+        self.runs.append(
+            {
+                "condition": condition,
+                "rows": rows,
+                "recv": dict(self._recv),
+                "collected": collected,
+                "started": started,
+            }
+        )
 
     def accept_line(self, index: int, condition: str, rows: list[dict], line: bytes) -> None:
         try:
@@ -313,6 +333,8 @@ class Runner:
         return self.summarize(marker)
 
     def summarize(self, marker: str) -> dict:
+        if self.cfg.summarizer:
+            return self.cfg.summarizer(self, marker)
         m = temp = None
         if not self.codes:
             try:

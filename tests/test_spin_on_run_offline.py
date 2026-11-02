@@ -183,3 +183,25 @@ def test_files_are_read_only_and_never_overwritten(setup):
     runner.run()
     for path in out.iterdir():
         assert stat.S_IMODE(path.stat().st_mode) == 0o400, path.name
+
+
+def test_candidate_m_dry_run_reaches_a_decision_without_sampler_data_for_x(setup):
+    from scripts.spin_on_run import thread_cpu
+
+    runner, out = setup("ok")
+    thread_cpu.configure(runner.cfg, runner.platform, reader=_NoProc())
+    result = runner.run()
+    assert [r["condition"] for r in runner.runs] == list("XYYXXY")
+    assert result["codes"] == [] and result["outcome"]["id"] in {"M-D2", "M-D3"}
+    assert [bool(r["collected"]) for r in runner.runs] == [False, True, True, False, False, True]
+    assert (out / "result.json").exists()
+
+
+class _NoProc:
+    """Every /proc read fails, as on a kernel without the files."""
+
+    def tids(self, pid):
+        raise FileNotFoundError
+
+    def self_ticks(self, pid):
+        raise FileNotFoundError

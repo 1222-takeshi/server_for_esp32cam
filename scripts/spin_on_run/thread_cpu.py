@@ -206,3 +206,91 @@ def outcome(*, harness_failure: bool, runs: list[dict], infer: dict, m6: bool, m
     if not good or not infer.get("m5_infer"):
         return {"id": "M-D3", "result": "measurement_failed"}
     return {"id": "M-D4", "result": "measurement_succeeded"}
+
+
+class SamplerHandle:
+    """Runs `run_sampler` in a thread for one child; never used for X runs."""
+
+    def __init__(self, reader, pid: int, clock, sleep):
+        import threading
+
+        self.clock = clock
+        self.t0 = clock()
+        self._stop = threading.Event()
+        self.samples: list[dict] = []
+        self._thread = threading.Thread(
+            target=lambda: self.samples.extend(
+                run_sampler(reader, pid, clock, sleep, self._stop.is_set, t0=self.t0)
+            ),
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self) -> dict:
+        self._stop.set()
+        self._thread.join(2.0)
+        return {"samples": self.samples, "t0": self.t0, "stuck": self._thread.is_alive()}
+
+
+def m_env(condition: str, extra: dict | None = None) -> dict:
+    """Same worker and fixed profile for X and Y: no spinning switch, 40 ms frame gap."""
+    env = {"PATH": "/usr/bin:/bin", "ESP32CAM_RUST_BENCH_FRAME_GAP_MS": "40"}
+    env.update(extra or {})
+    return env
+
+
+def configure(cfg, platform, reader=None):
+    """Turns an offline `Config` into the candidate M experiment (`XYYXXY`)."""
+    from . import common
+
+    reader = reader or ProcReader()
+
+    def start(pid: int, condition: str):
+        if condition != "Y":
+            return None
+        return SamplerHandle(reader, pid, platform.monotonic, platform.sleep)
+
+    def summarize(runner, marker: str) -> dict:
+        from . import metrics
+
+        runs = runner.runs
+        result = {"marker": marker, "codes": runner.codes, "details": runner.details}
+        try:
+            temp = metrics.temperature_summary(runner.vitals, runner.windows)
+        except metrics.MetricsError:
+            temp = None
+        m7 = bool(temp) and temp["temp_max_millic"] < 80_000 and temp["throttled_all_zero"]
+        evaluations, infer = [], {"m5_infer": False}
+        if not runner.codes and len(runs) == 6:
+            ys = [r for r in runs if r["condition"] == "Y"]
+            for r in ys:
+                data = r["collected"] or {}
+                window = (r["recv"][4], r["recv"][84])
+                evaluations.append(
+                    evaluate_run(data.get("samples", []), window, data.get("t0", 0.0), cfg.clk_tck)
+                )
+            pooled = {c: [] for c in "XY"}
+            for r in runs:
+                pooled[r["condition"]] += [row["infer_us"] for row in r["rows"][5:85]]
+            infer = combine_infer(pooled["X"], pooled["Y"])
+        result["outcome"] = outcome(
+            harness_failure=bool(runner.codes) or len(runs) != 6,
+            runs=evaluations,
+            infer=infer,
+            m6=not runner.codes,
+            m7=m7,
+        )
+        result["runs"] = [
+            {k: (str(v) if isinstance(v, Fraction) else v) for k, v in e.items()}
+            for e in evaluations
+        ]
+        result["infer"] = {k: str(v) for k, v in infer.items()}
+        common.write_json(cfg.out_dir / "result.json", result)
+        return result
+
+    cfg.order = M_ORDER
+    cfg.env_for = m_env
+    cfg.start_hook = start
+    cfg.stop_hook = lambda handle: handle.stop()
+    cfg.summarizer = summarize
+    return cfg
