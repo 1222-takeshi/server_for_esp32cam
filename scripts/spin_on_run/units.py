@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 
 from .common import sha256_bytes
 
@@ -25,7 +26,11 @@ LIVE_ENV_KEYS = {
     "ESP32CAM_RUST_TRIAL_ADAPTIVE_RESERVE",
     "ESP32CAM_RUST_TRIAL_AUTO_RECOVERY",
     "ESP32CAM_RUST_TRIAL_SPIN_ON_RUN",
+    "ESP32CAM_RUST_TRIAL_FRAME_LOG",
 }
+# v2 spec D7: R3 writes every frame record once, at the end, to this file of the stage dir.
+FRAME_LOG_KEY = "ESP32CAM_RUST_TRIAL_FRAME_LOG"
+FRAME_LOG_NAME = "frames.jsonl"
 CREDENTIAL_KEYS = {
     "ESP32CAM_DEVICE_API_KEYS",
     "ESP32CAM_DEVICE_API_KEY",
@@ -39,10 +44,27 @@ def trial_unit(seconds: int, date: str) -> str:
     return f"{LIVE_PREFIX}-{seconds}-{date}"
 
 
+def frame_log_path(run_dir: str) -> str:
+    """Absolute path of the R3 frame log inside the stage (evidence) directory."""
+    parts = str(run_dir).split(os.sep)
+    if not os.path.isabs(run_dir) or ".." in parts or "." in parts[1:]:
+        raise ValueError("the stage directory must be an absolute path without dot segments")
+    return os.path.join(os.path.normpath(run_dir), FRAME_LOG_NAME)
+
+
 def live_env(
-    *, nonce: str, camera_boot: int, seconds: int, credentials: dict[str, str]
+    *,
+    nonce: str,
+    camera_boot: int,
+    seconds: int,
+    credentials: dict[str, str],
+    run_dir: str | None = None,
 ) -> dict[str, str]:
-    """The closed environment set. Hold injection is never part of it."""
+    """The closed environment set. Hold injection is never part of it.
+
+    With `run_dir` (the v2 live start) R3 frame logging is switched on and writes
+    `<run_dir>/frames.jsonl`; without it the variable is absent, as in v1.
+    """
     if len(nonce) != 16 or any(c not in "0123456789abcdef" for c in nonce):
         raise ValueError("nonce must be 16 lowercase hex characters")
     if seconds not in RUNTIME_MAX or camera_boot <= 0:
@@ -62,6 +84,8 @@ def live_env(
         "ESP32CAM_RUST_TRIAL_AUTO_RECOVERY": "1",
         "ESP32CAM_RUST_TRIAL_SPIN_ON_RUN": "1",
     }
+    if run_dir is not None:
+        env[FRAME_LOG_KEY] = frame_log_path(run_dir)
     return {**env, **credentials}
 
 
@@ -71,6 +95,19 @@ def validate_live_env(env: dict[str, str]) -> None:
         raise ValueError(f"environment outside the frozen set: {sorted(extra)}")
     if env.get("ESP32CAM_RUST_TRIAL_SPIN_ON_RUN") != "1":
         raise ValueError("the live trial must select run-only spinning")
+    if FRAME_LOG_KEY in env:
+        path = env[FRAME_LOG_KEY]
+        if (
+            path != frame_log_path(os.path.dirname(path))
+            or os.path.basename(path) != FRAME_LOG_NAME
+        ):
+            raise ValueError("the frame log must be an absolute <stage dir>/frames.jsonl")
+
+
+def check_frame_log(env: dict[str, str], run_dir: str) -> None:
+    """The v2 live start must write the frame log into this very stage directory."""
+    if env.get(FRAME_LOG_KEY) != frame_log_path(run_dir):
+        raise ValueError("ESP32CAM_RUST_TRIAL_FRAME_LOG is not <run dir>/frames.jsonl")
 
 
 def native_argv(binary: str, model: str, runtime: str) -> list[str]:

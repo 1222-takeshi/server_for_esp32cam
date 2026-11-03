@@ -45,6 +45,9 @@ def frozen_changes(cfg: dict, package_dir: Path | None = None) -> list[str]:
         changed.append("plan_sha256")
     if frozen.get("field_map") != live_checker.FIELD_MAP:
         changed.append("field_map")
+    for key, current in manifest.frozen_environment().items():
+        if frozen.get(key) != current:
+            changed.append(key)
     return changed
 
 
@@ -129,6 +132,14 @@ def evaluate(
         problems = ["no_ops"] if ops is None else recover_guard.check_only(ops, baseline)
         ctx.recover_check_exit = 0 if not problems else 1
         ctx.old_guard_conflict = _old_guard_conflict(run, cfg.get("old_guard_units"))
+        if "launch_env" in cfg:
+            ctx.frame_log_expected = units.frame_log_path(str(out_dir))
+            try:
+                launch_env = json.loads(Path(cfg["launch_env"]).read_text())
+                ctx.frame_log_actual = launch_env.get(units.FRAME_LOG_KEY)
+            except (OSError, ValueError, AttributeError):
+                ctx.launch_env_readable = False
+            ctx.frame_log_exists = Path(ctx.frame_log_expected).exists()
     result = preflight.preflight(ctx, baseline)
     changed = frozen_changes(cfg, package_dir)
     result["O05"] += [f"frozen:{name}" for name in changed]

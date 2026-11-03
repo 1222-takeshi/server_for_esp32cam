@@ -102,6 +102,8 @@ def world(tmp_path, monkeypatch):
         "launch_env": str(tmp_path / "env.json"),
     }
     (tmp_path / "c.json").write_text(json.dumps(cfg))
+    # v2: the launch environment names the R3 frame log inside the stage directory.
+    (tmp_path / "env.json").write_text(json.dumps({units.FRAME_LOG_KEY: units.frame_log_path(out)}))
     return tmp_path, cfg, out
 
 

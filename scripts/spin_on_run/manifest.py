@@ -36,6 +36,14 @@ PLAN = {
 }
 
 
+def frozen_environment() -> dict:
+    """What the live launch environment may contain, frozen with the files (spec D7)."""
+    return {
+        "live_env_keys": sorted(units.LIVE_ENV_KEYS),
+        "frame_log": {"env": units.FRAME_LOG_KEY, "file": units.FRAME_LOG_NAME},
+    }
+
+
 def build(
     package_dir: Path, binaries: dict[str, Path], base_commit: str, issue: int | None
 ) -> dict:
@@ -47,7 +55,7 @@ def build(
         "implementation_issue": issue,
         "files": {name: common.sha256_file(package_dir / name) for name in FROZEN_FILES},
         "binaries": {label: common.sha256_file(path) for label, path in binaries.items()},
-        "live_env_keys": sorted(units.LIVE_ENV_KEYS),
+        **frozen_environment(),
         "live_env_credential_keys": sorted(units.CREDENTIAL_KEYS),
         "field_map": live_checker.FIELD_MAP,
         "ort_api": "SessionBuilder::with_config_entry (ort 2.0.0-rc.11, session/builder/mod.rs:141)",

@@ -31,6 +31,11 @@ class Context:
     recover_enabled: bool = False
     recover_check_exit: int | None = None
     old_guard_conflict: bool | None = None
+    # v2: the launch environment must name <stage dir>/frames.jsonl for the R3 frame log.
+    frame_log_expected: str | None = None
+    frame_log_actual: str | None = None
+    launch_env_readable: bool = True
+    frame_log_exists: bool = False
     notes: list[str] = field(default_factory=list)
 
 
@@ -67,4 +72,11 @@ def preflight(ctx: Context, baseline: dict | None = None) -> dict:
             o05.append("recover_check_failed")
         if ctx.old_guard_conflict is not False:
             o07.append("conflict with the standing guard cannot be excluded")
+        if ctx.frame_log_expected is not None:
+            if not ctx.launch_env_readable:
+                o05.append("launch_env_unreadable")
+            elif ctx.frame_log_actual != ctx.frame_log_expected:
+                o05.append("frame_log_env")
+            if ctx.frame_log_exists:
+                o05.append("frame_log_exists")
     return {"ok": not (o05 or o07), "O05": o05, "O07": o07, "notes": ctx.notes}

@@ -25,6 +25,7 @@ FREE_START = 2 * 1024**3
 STAGE_LIMIT = {600: 64 * 1024**2, 3600: 256 * 1024**2}
 REPORT_LIMIT = 16 * 1024**2
 FILE_LIMIT = 4 * 1024**2
+FRAMES_LIMIT = 32 * 1024**2  # R3 frame log: about 0.5 KiB per frame, 3,600 s is about 10 MiB
 STDERR_LIMIT = 64 * 1024
 LOGS = ("native.json", "native.stderr", "vitals.jsonl")
 IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".ecf2")
@@ -101,6 +102,8 @@ class Checker:
             limit = REPORT_LIMIT if path.name == "native.json" else FILE_LIMIT
             if path.name == "native.stderr":
                 limit = STDERR_LIMIT
+            if path.name == "frames.jsonl":
+                limit = FRAMES_LIMIT
             if path.stat().st_size > limit:
                 return True
         return False

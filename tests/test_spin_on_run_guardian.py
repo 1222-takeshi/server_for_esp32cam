@@ -334,7 +334,14 @@ def test_the_cli_hands_the_service_stop_of_its_ops_to_the_guardian(tmp_path, mon
     monkeypatch.setattr(cli.units, "validate_live_env", lambda env: None)
     monkeypatch.setattr(cli.units, "native_argv", lambda *a: ["frame-live"])
     env_file = tmp_path / "env.json"
-    env_file.write_text(json.dumps({"ESP32CAM_RUST_TRIAL_NONCE": "0123456789abcdef"}))
+    env_file.write_text(
+        json.dumps(
+            {
+                "ESP32CAM_RUST_TRIAL_NONCE": "0123456789abcdef",
+                "ESP32CAM_RUST_TRIAL_FRAME_LOG": str(tmp_path / "run" / "frames.jsonl"),
+            }
+        )
+    )
     cfg = {
         "launch_env": str(env_file),
         "seconds": 600,

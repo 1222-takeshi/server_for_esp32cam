@@ -81,6 +81,7 @@ def cmd_units(args: argparse.Namespace) -> int:
             camera_boot=1,
             seconds=args.seconds,
             credentials={"ESP32CAM_DEVICE_API_KEYS": "placeholder"},
+            run_dir=args.run_dir,
         )
         run = units.live_systemd_run(trial, args.seconds, args.root, args.config, args.run_dir)
         request = units.launch_request(env, units.native_argv("frame-live", "m", "r"), run)
@@ -250,6 +251,7 @@ def _execute(cfg: dict, run_dir: Path, baseline: dict, ops: system_ops.SystemOps
 
     env = json.loads(Path(cfg["launch_env"]).read_text())
     units.validate_live_env(env)
+    units.check_frame_log(env, str(run_dir))
     summary = live_guardian.execute(
         run_dir=run_dir,
         seconds=cfg["seconds"],

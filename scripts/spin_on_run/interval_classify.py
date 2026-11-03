@@ -121,9 +121,9 @@ def _inference_reasons(frames: list[dict], low: int, high: int) -> list[str]:
     for frame in frames:
         sequence = frame.get("sequence")
         compute = frame.get("compute_us")
-        if compute is not None and compute >= COMPUTE_US:
-            if _inside(frame.get("finished_us"), low, high):
-                reasons.append(f"compute:{sequence}:{compute}")
+        slow = compute is not None and compute >= COMPUTE_US
+        if slow and _inside(frame.get("finished_us"), low, high):
+            reasons.append(f"compute:{sequence}:{compute}")
         wait = _gap(frame.get("received_us"), frame.get("begun_us"))
         if wait is not None and wait >= QUEUE_WAIT_US and _inside(frame.get("begun_us"), low, high):
             reasons.append(f"queue_wait:{sequence}:{wait}")
