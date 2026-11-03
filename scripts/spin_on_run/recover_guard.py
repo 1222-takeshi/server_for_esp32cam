@@ -159,9 +159,11 @@ class Guard:
         )
         info["abort_codes"] = aborts
         info["not_started"] = not aborts and live_checker.not_started(report)
-        info["failure_codes"] = (
-            [] if aborts else live_checker.check_report(report, self.seconds)["codes"]
-        )
+        checked = None if aborts else live_checker.check_report(report, self.seconds)
+        info["failure_codes"] = [] if checked is None else checked["codes"]
+        info["interval_unjudgeable"] = bool(checked and checked["interval_unjudgeable"])
+        if checked and checked["interval"] is not None:
+            self.save("interval-gate.json", checked["interval"])
         info["within_deadline"] = self.within(started, PR_S)
         self.save("post-run-check.json", info)
         return info
@@ -380,7 +382,11 @@ def final_verdict(run_dir: Path, collector: environment.Collector, baseline: dic
         # change is confirmed here, after the restore (plan 10.1, last bullet).
         aborts = [*aborts, "A04"]
     final = live_checker.final_result(
-        aborts, failures, restore_ok=restored, not_started=post.get("not_started") is True
+        aborts,
+        failures,
+        restore_ok=restored,
+        not_started=post.get("not_started") is True,
+        interval_unjudgeable=post.get("interval_unjudgeable") is True,
     )
     final["final_deviations"] = found
     common.write_json(run_dir / "final.json", final)

@@ -17,6 +17,7 @@ FROZEN_FILES = (
     "post_runner.py",
     "thread_cpu.py",
     "live_checker.py",
+    "interval_gate.py",
     "live_guardian.py",
     "recover_guard.py",
     "units.py",

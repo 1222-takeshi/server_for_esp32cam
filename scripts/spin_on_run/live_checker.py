@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from collections import Counter
 
+from . import interval_gate
+
 WINDOW_US = 10_000_000
 MIN_RECOGNITIONS = 50
 AGE_LIMIT_US = 500_000
@@ -39,7 +41,7 @@ ONLINE_REASONS = {
 # milestone is not reached.
 NOT_STARTED_REASON = "clock_unresolved"
 ABORT_ORDER = [f"A{n:02d}" for n in range(1, 15)]
-FAIL_ORDER = [f"F{n:02d}" for n in range(1, 8)]
+FAIL_ORDER = [f"F{n:02d}" for n in range(1, 9)]  # F08: interval_p99 (v2 spec D5)
 MARKER_ONLY = {"A06", "A10"}
 
 
@@ -104,14 +106,22 @@ def not_started(report: object) -> bool:
 
 
 def check_report(report: dict | None, seconds: int) -> dict:
-    """Failure codes F01-F07 for a finished trial; `report` None means unreadable.
+    """Failure codes F01-F08 for a finished trial; `report` None means unreadable.
 
     A start refused with `clock_unresolved` and no measurement has no failure codes.
+    F08 (interval_p99) and `interval_unjudgeable` come from the published-interval
+    gate, which only a report with reason `completed` is subject to (v2 spec D5).
     """
     codes: list[str] = []
     notes: list[str] = []
     if not_started(report):
-        return {"codes": [], "notes": [f"{NOT_STARTED_REASON}:not started"], "windows": None}
+        return {
+            "codes": [],
+            "notes": [f"{NOT_STARTED_REASON}:not started"],
+            "windows": None,
+            "interval": None,
+            "interval_unjudgeable": False,
+        }
 
     def add(code: str, note: str) -> None:
         if code not in codes:
@@ -121,7 +131,7 @@ def check_report(report: dict | None, seconds: int) -> dict:
     if not isinstance(report, dict):
         add("F01", "native.json unreadable")
         add("F06", "native.json empty or malformed")
-        return {"codes": _ordered(codes, FAIL_ORDER), "notes": notes, "windows": None}
+        return _checked(codes, notes, None, None)
     if (
         report.get("reason") != "completed"
         or report.get("continuous_tracking_gate_passed") is not True
@@ -147,7 +157,7 @@ def check_report(report: dict | None, seconds: int) -> dict:
     elif not isinstance(measurement, dict):
         add("F06", "measurement is not an object")
     if not isinstance(measurement, dict) or not isinstance(samples, list):
-        return {"codes": _ordered(codes, FAIL_ORDER), "notes": notes, "windows": windows}
+        return _checked(codes, notes, windows, None)
     try:
         start, end = measurement["start_us"], measurement["end_us"]
         if not (_is_int(start) and _is_int(end)) or end - start != DURATION_US[seconds]:
@@ -200,7 +210,20 @@ def check_report(report: dict | None, seconds: int) -> dict:
             add("F07", "recovery is not a new-generation ACK recovery")
     except (KeyError, TypeError, ValueError, IndexError) as error:
         add("F06", f"schema: {type(error).__name__}")
-    return {"codes": _ordered(codes, FAIL_ORDER), "notes": notes, "windows": windows}
+    interval = interval_gate.evaluate(report, seconds)
+    if interval["applicable"] and interval["gate"] == "fail":
+        add("F08", f"interval p99 {interval['p99_us']} us over {interval_gate.GATE_P99_US}")
+    return _checked(codes, notes, windows, interval if interval["applicable"] else None)
+
+
+def _checked(codes: list[str], notes: list[str], windows: dict | None, interval: dict | None):
+    return {
+        "codes": _ordered(codes, FAIL_ORDER),
+        "notes": notes,
+        "windows": windows,
+        "interval": interval,
+        "interval_unjudgeable": bool(interval and interval["gate"] == "unjudgeable"),
+    }
 
 
 def _ordered(codes: list[str], order: list[str]) -> list[str]:
@@ -238,12 +261,20 @@ def abort_codes(
 
 
 def final_result(
-    aborts: list[str], failures: list[str], *, restore_ok: bool, not_started: bool = False
+    aborts: list[str],
+    failures: list[str],
+    *,
+    restore_ok: bool,
+    not_started: bool = False,
+    interval_unjudgeable: bool = False,
 ) -> dict:
     """Aborts outrank failures; a pass with a failed restore is not a milestone.
 
-    A start refused by the native clock gate is neither: no abort, no failure, no
-    milestone (the trial was not evaluable).
+    Order: abort (A) > not started > failure (F01-F08) > interval_unjudgeable > pass.
+    A start refused by the native clock gate is neither abort nor failure: no
+    milestone (the trial was not evaluable). `interval_unjudgeable` (too few
+    intervals for the p99 gate) is neither a failure nor a pass: the attempt is
+    consumed and the milestone is not reached.
     """
     if aborts:
         return {"result": "aborted", "primary": aborts[0], "milestone": False}
@@ -255,6 +286,14 @@ def final_result(
         }
     if failures:
         return {"result": "failed", "primary": failures[0], "milestone": False}
+    if interval_unjudgeable:
+        return {
+            "result": "interval_unjudgeable"
+            if restore_ok
+            else "interval_unjudgeable_restore_failed",
+            "primary": "interval_unjudgeable",
+            "milestone": False,
+        }
     if not restore_ok:
         return {"result": "passed_restore_failed", "primary": None, "milestone": False}
     return {"result": "passed", "primary": None, "milestone": True}
