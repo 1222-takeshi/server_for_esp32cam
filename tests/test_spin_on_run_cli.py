@@ -76,6 +76,15 @@ def test_package_has_no_ota_firmware_or_privilege_code():
     assert "ssh" not in "".join(p.read_text() for p in on_device).lower().replace("flask", "")
 
 
+def test_r2_sampler_ships_in_the_package_but_only_the_cli_r2_subcommand_uses_it():
+    # r2_sampler.py is a Mac-side tool, yet it is not excluded from the package that is frozen
+    # and copied to the Pi: cli.py imports it for the `r2` subcommand and the manifest hashes
+    # it with r2_remote.sh. Nothing else may depend on it, and nothing on the Pi calls `r2`.
+    assert {"r2_sampler.py", "r2_remote.sh"} <= set(manifest.FROZEN_FILES)
+    users = {p.name for p in PACKAGE.glob("*.py") if "r2_sampler" in p.read_text()}
+    assert users == {"cli.py", "manifest.py"}  # the subcommand and the SHA list, nothing else
+
+
 def test_system_ops_commands_are_fixed_argument_lists_and_keep_the_token_out():
     calls = []
     ops = system_ops.SystemOps(

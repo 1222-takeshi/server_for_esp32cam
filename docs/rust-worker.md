@@ -571,6 +571,13 @@ Mac側の `r2-sampler.jsonl`（新規作成のみ）に保存します。起動�
   シェル組み込みだけです。`tests/test_spin_on_run_r2_sampler.py` が静的許可リストでscriptを検査し、書込み・削除・kill・systemctl・
   sudo・tee・ファイルへのリダイレクト（`/dev/null` を除く）・cp/mv などを含まないことを固定しています。テストは fake ssh（ローカルのsh）
   で、scriptの文面そのままを偽の `/proc` に対して実行します。
+- **Mac側ツールであり、Piでは実行しない**: `r2_sampler.py` は Mac から Pi へ ssh する唯一のモジュールで、Pi 上では実行しません
+  （`cli r2` は Mac で呼びます）。ただし現状、Pi へ凍結・配置するパッケージからは**除外していません**。`cli.py` が `r2` サブコマンドの
+  ために `r2_sampler` を import するため、パッケージから外すと Pi 側の `cli` が起動しません。また `manifest.FROZEN_FILES` は
+  `r2_sampler.py` と `r2_remote.sh` のSHAも固定します（読み取り専用の担保を含む内容を、試験中に差し替えられないようにするため）。
+  `tests/test_spin_on_run_cli.py` がこの現状（FROZEN_FILES への登録、`cli.py` と `manifest.py` 以外が参照しないこと）を固定し、
+  ssh 禁止テストは `r2_sampler.py` だけを名前で除外しています。除外するには、`cli.py` での遅延 import と FROZEN_FILES の見直し
+  （Mac側用のmanifestを別に持つ）が要り、凍結の範囲が変わるため、このPRでは行いません。
 - **欠測の扱い**: ssh の起動失敗・非0終了・途中切断・`@end` 無しの終了は、`gap` レコードとして記録するだけで、呼び出し側の
   例外にも試験の合否・進行にも影響しません（再接続はしません）。
 - **オーバーヘッドの予算**: サンプラ全体（リモートのsh・ss・pgrep・sleep などの子プロセス込み）のCPU使用は1コア（4コア中）の
