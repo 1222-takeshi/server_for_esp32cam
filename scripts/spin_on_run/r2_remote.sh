@@ -9,7 +9,10 @@ ip=$1
 seconds=$2
 proc=$3
 ifc=$4
-ticks=$((seconds * 10))
+# The loop ends on elapsed device time (/proc/uptime), not on a tick count: each round
+# costs more than its 0.1 s sleep (ss, pgrep), so a count would overrun `seconds`.
+# `max_ticks` only stops a loop whose uptime is stuck or unreadable.
+max_ticks=$((seconds * 20))
 hz=$(getconf CLK_TCK 2>/dev/null)
 echo "@hello 1 ${hz:-100}"
 
@@ -20,14 +23,25 @@ dump() {
     done < "$1"
 }
 
+# Centiseconds of /proc/uptime ("123.45") as an integer in $cs; integer arithmetic only.
+uptime_cs() {
+    read -r up idle < /proc/uptime
+    whole=${up%%.*}
+    frac=${up#*.}00
+    frac=${frac%"${frac#??}"}
+    frac=${frac#0}
+    cs=$((whole * 100 + ${frac:-0}))
+}
+
 have_iw=0
 command -v iw >/dev/null 2>&1 && have_iw=1
 have_vc=0
 command -v vcgencmd >/dev/null 2>&1 && have_vc=1
 pid=
 n=0
-while [ "$n" -lt "$ticks" ]; do
-    read -r up idle < /proc/uptime
+uptime_cs
+deadline=$((cs + seconds * 100))
+while [ "$cs" -lt "$deadline" ] && [ "$n" -lt "$max_ticks" ]; do
     echo "@tick $n $up"
     echo "@ss"
     ss -tin dst "$ip" 2>/dev/null
@@ -74,5 +88,6 @@ while [ "$n" -lt "$ticks" ]; do
     fi
     n=$((n + 1))
     sleep 0.1
+    uptime_cs
 done
 echo "@end $n"

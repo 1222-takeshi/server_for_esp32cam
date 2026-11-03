@@ -224,7 +224,7 @@ def test_budget_is_ten_percent_of_one_core():
 SS_TEXT = "\n".join(SS) + "\n"
 
 
-def make_fake(tmp_path, *, ticks_per_sleep=0, iw=False):
+def make_fake(tmp_path, *, ticks_per_sleep=0, iw=False, sleep_cs=10):
     """A fake `ssh` (local sh) plus a fake /proc, /sys and command directory."""
     root = tmp_path / "fake"
     for rel in (
@@ -257,11 +257,13 @@ def make_fake(tmp_path, *, ticks_per_sleep=0, iw=False):
         "ss": f'cat "{root}/ss.txt"',
         "pgrep": "echo 4242",
         "vcgencmd": "echo throttled=0x50005",
-        # Each sleep is one tick of 0.1 s: advance the fake uptime and the shell's CPU time.
+        # Each sleep advances the fake uptime by `sleep_cs` centiseconds (10 = one 0.1 s tick;
+        # more models a round that costs extra time) and the shell's CPU time.
         "sleep": textwrap.dedent(
             f"""\
             c=$(cat "{root}/count"); c=$((c + 1)); echo $c > "{root}/count"
-            printf '%s.%s0 0.0\\n' $((1000 + c / 10)) $((c % 10)) > "{root}/proc/uptime"
+            t=$((100000 + c * {sleep_cs}))
+            printf '%d.%02d 0.0\\n' $((t / 100)) $((t % 100)) > "{root}/proc/uptime"
             u=$((c * {ticks_per_sleep}))
             echo "1 (sh) S 1 1 1 0 0 0 0 0 0 0 $u 0 0 0 0 0" > "{root}/proc/self/stat"
             """
@@ -329,6 +331,24 @@ def test_fake_ssh_run_writes_the_jsonl_with_every_section(tmp_path):
     assert [t["mono_ns"] for t in ticks] == sorted(t["mono_ns"] for t in ticks)
     mode = stat.S_IMODE((tmp_path / "evidence" / r2_sampler.OUTPUT_NAME).stat().st_mode)
     assert mode == 0o600
+
+
+def test_a_slow_loop_still_ends_on_elapsed_uptime_within_the_watchdog(tmp_path):
+    # Each round advances the device clock 0.5 s instead of 0.1 s (ss/pgrep cost): the
+    # remote must stop at `seconds` of uptime, so far fewer ticks than seconds * 10.
+    summary, records = sample(tmp_path, seconds=3, sleep_cs=50)
+    ticks = [r for r in records if r["kind"] == "tick"]
+    assert len(ticks) == 6 and summary["ticks"] == 6 and summary["gap"] is None
+    assert records[-1]["kind"] == "end" and summary["ssh_exit"] == 0
+    elapsed = ticks[-1]["pi_uptime_s"] - ticks[0]["pi_uptime_s"]
+    assert elapsed < 3 and elapsed + 0.5 >= 3
+    # the Mac watchdog (seconds + margin) has room: the stream ended by itself
+    assert r2_sampler.WATCHDOG_MARGIN_S >= 30
+
+
+def test_a_frozen_uptime_stops_at_the_tick_cap_not_forever(tmp_path):
+    summary, _records = sample(tmp_path, seconds=1, sleep_cs=0)
+    assert summary["ticks"] == 20 and summary["gap"] is None  # max_ticks = seconds * 20
 
 
 def test_iw_is_recorded_when_the_device_has_it(tmp_path):
