@@ -216,7 +216,11 @@ def abort_codes(
     child_signalled: bool,
     guardian_stopped_child: bool,
 ) -> list[str]:
-    """Abort codes in recorded order: the guardian marker, then the child's end state."""
+    """Abort codes in recorded order: the guardian marker, then the child's end state.
+
+    A start refused with `clock_unresolved` ends with the ordinary non-zero exit 3,
+    which is not A07 as in v1; any other exit (1, 2, 20) or a signal still is.
+    """
     codes: list[str] = []
     if marker and marker.startswith("abort "):
         codes += [c for c in marker.split(" ", 1)[1].split(",") if c in ABORT_ORDER]
@@ -228,7 +232,6 @@ def abort_codes(
     elif (
         (child_exit not in (0, 3, None) or child_signalled)
         and not guardian_stopped_child
-        and not (not_started(report) and not child_signalled)
     ):
         codes.append("A07")
     return list(dict.fromkeys(codes))  # recorded order: the first one is the primary reason

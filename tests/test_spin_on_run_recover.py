@@ -290,9 +290,9 @@ def test_clock_unresolved_before_the_measurement_is_neither_a07_nor_f06_nor_a_fa
     final = rg.final_verdict(d, collector, baseline())
     assert final["result"] == "not_started" and final["primary"] == "clock_unresolved"
     assert final["milestone"] is False
-    # Any other non-zero exit with the same report is still not A07.
+    # Any other non-zero exit with the same report is still A07.
     other, _ = guard(tmp_path / "other", report=report, child={**child, "exit": 1})
-    assert other.post_run()["abort_codes"] == []
+    assert other.post_run()["abort_codes"] == ["A07"]
     # An ordinary early stop after the same kind of report keeps its handling.
     early, _ = guard(
         tmp_path / "early", report={**report, "reason": "ack_lost", "samples": []}, child=child

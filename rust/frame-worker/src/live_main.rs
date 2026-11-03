@@ -4,7 +4,7 @@ use esp32cam_frame_worker::{
     detector::{self, Detector, Result, SpinPolicy},
     host_clock::HostClock,
     jpeg,
-    online_abort::{self, Observation, OnlineGuard},
+    online_abort::{self, OnlineGuard},
     pipeline::{Clock, State, Worker},
     replay,
     session::{Limits, Receiver},
@@ -259,16 +259,11 @@ fn online_check(
         return result;
     };
     let now = s.now();
-    let found = guard.observe(&Observation {
+    let found = guard.observe(&online_abort::observation(
         now,
-        interval: trial.measurement_interval(),
-        hold_started: s.mode.tracking_hold_started(),
-        last_hold: s.mode.last_tracking_hold(),
-        samples: s.samples(),
-        protection: s.protection,
-        publishing: online_abort::publishing(&s.mode),
-        publish_refused_at: s.publish_refused_at,
-    });
+        trial.measurement_interval(),
+        s,
+    ));
     match found {
         Some(code) => {
             *abort = Some((code, now));

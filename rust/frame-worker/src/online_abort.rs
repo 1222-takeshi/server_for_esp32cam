@@ -11,7 +11,7 @@
 //! by the publisher, which refuses it and reports the refusal here.
 use crate::{
     operating_mode::{Mode, OperatingMode},
-    pipeline::Sample,
+    pipeline::{Sample, State},
 };
 
 pub const CONTINUOUS_HOLD_US: u64 = 15_000_000;
@@ -128,6 +128,21 @@ pub struct Observation<'a> {
     /// Set when a result was refused at publication because a protection
     /// limit was already violated at that moment.
     pub publish_refused_at: Option<u64>,
+}
+
+/// The guard's view of `state` at `now`. The single place where `publishing` is
+/// derived and every field is read, so the binary only forwards its State.
+pub fn observation(now: u64, interval: Option<(u64, u64)>, state: &State) -> Observation<'_> {
+    Observation {
+        now,
+        interval,
+        hold_started: state.mode.tracking_hold_started(),
+        last_hold: state.mode.last_tracking_hold(),
+        samples: state.samples(),
+        protection: state.protection,
+        publishing: publishing(&state.mode),
+        publish_refused_at: state.publish_refused_at,
+    }
 }
 
 #[derive(Default)]

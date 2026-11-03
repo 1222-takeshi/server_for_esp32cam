@@ -234,8 +234,8 @@ def test_clock_unresolved_before_the_measurement_is_start_refused_not_a_failure(
     # No samples field at all must not become an integrity failure either.
     bare = {k: v for k, v in NOT_STARTED.items() if k != "samples"}
     assert lc.check_report(bare, 600)["codes"] == []
-    # Any non-zero exit of the child is not A07 for this report (3 is what the
-    # native binary uses; others must not turn a refused start into an abort).
+    # Exit 3 (what the native binary uses) and 0 are not A07, as in v1; any other
+    # exit with this report is still an abort.
     kw = {
         "marker": "completed",
         "service_result": "success",
@@ -244,8 +244,10 @@ def test_clock_unresolved_before_the_measurement_is_start_refused_not_a_failure(
         "child_signalled": False,
         "guardian_stopped_child": False,
     }
-    for code in (3, 1, 2, 20):
+    for code in (0, 3):
         assert lc.abort_codes(**{**kw, "child_exit": code}) == [], code
+    for code in (1, 2, 20):
+        assert lc.abort_codes(**{**kw, "child_exit": code}) == ["A07"], code
     result = lc.final_result([], [], restore_ok=True, not_started=True)
     assert result == {"result": "not_started", "primary": "clock_unresolved", "milestone": False}
     broken = lc.final_result([], [], restore_ok=False, not_started=True)

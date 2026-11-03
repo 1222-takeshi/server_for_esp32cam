@@ -784,3 +784,67 @@ fn publishing_is_tracking_requested_without_a_hold_in_progress() {
     mode.protect("resource_thermal_fault").unwrap();
     assert!(!publishing(&mode)); // back to Eco
 }
+
+fn tracking_state(hold: bool) -> State {
+    let mut s =
+        State::new_with_tracking_recovery(10, std::sync::Arc::new(|| 10 * S), true).unwrap();
+    s.mode.hello(1, 0).unwrap();
+    s.mode
+        .request(Mode::Tracking, s.mode.generation(), true)
+        .unwrap();
+    if hold {
+        s.mode.protect("frames_expired").unwrap();
+    }
+    // The accepted input is 9.7 s old at the evaluation time.
+    s.protection.input = Some(AcceptedInput {
+        received_us: 300_000,
+        age_high_us: 100_000,
+    });
+    s
+}
+
+/// The State-to-Observation wiring (v2 spec D1), judged through the guard.
+#[test]
+fn observation_judges_the_tick_freshness_term_only_while_publishing() {
+    let check = |s: &State| OnlineGuard::new(60 * S).observe(&observation(10 * S, None, s));
+    // Initial Eco: out of scope.
+    let mut eco = tracking_state(false);
+    eco.mode =
+        crate::operating_mode::OperatingMode::new_with_tracking_recovery(10, || 10 * S, true)
+            .unwrap();
+    eco.mode.hello(1, 0).unwrap();
+    assert!(!observation(10 * S, None, &eco).publishing);
+    assert_eq!(check(&eco), None);
+    // Tracking without a hold: the stale input is a violation.
+    let publishing_state = tracking_state(false);
+    assert!(observation(10 * S, None, &publishing_state).publishing);
+    assert_eq!(check(&publishing_state), Some(PROTECTION_VIOLATION));
+    // Tracking with a hold in progress: the same input is not judged.
+    let held = tracking_state(true);
+    let o = observation(10 * S, None, &held);
+    assert!(!o.publishing && o.hold_started.is_some());
+    assert_eq!(check(&held), None);
+    // The clock limits still apply during the hold.
+    let mut clock = tracking_state(true);
+    clock.protection.pending_since_us = Some(0);
+    assert_eq!(check(&clock), Some(PROTECTION_VIOLATION));
+}
+
+#[test]
+fn observation_carries_the_holds_samples_and_refusal_of_the_state() {
+    let mut s = tracking_state(true);
+    s.record_test_sample(sample(5 * S, 100_000));
+    s.publish_refused_at = Some(7 * S);
+    let o = observation(10 * S, Some((S, 20 * S)), &s);
+    assert_eq!(o.now, 10 * S);
+    assert_eq!(o.interval, Some((S, 20 * S)));
+    assert_eq!(o.hold_started, s.mode.tracking_hold_started());
+    assert_eq!(o.last_hold, s.mode.last_tracking_hold());
+    assert_eq!(o.samples.len(), 1);
+    assert_eq!(o.publish_refused_at, Some(7 * S));
+    // A refused publication is a violation on its own.
+    assert_eq!(
+        OnlineGuard::new(60 * S).observe(&o),
+        Some(PROTECTION_VIOLATION)
+    );
+}
