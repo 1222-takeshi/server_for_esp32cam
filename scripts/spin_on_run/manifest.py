@@ -18,6 +18,7 @@ FROZEN_FILES = (
     "thread_cpu.py",
     "live_checker.py",
     "interval_gate.py",
+    "interval_classify.py",
     "r2_sampler.py",
     "r2_remote.sh",
     "live_guardian.py",
