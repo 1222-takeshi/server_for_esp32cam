@@ -455,3 +455,89 @@ liveでは、開始の関門の通過後、試験unitの主プロセス（guardi
 ちょうど1回止めてからframe-liveを起動し、その後に毎秒の監視を始めます（再試行や再停止はしません）。停止後の状態確認で
 `inactive` にならなければframe-liveを起動せず、終了マーカー `abort A04` と `service-stop.json` を残して終了します。
 元のserviceの復旧は、従来どおり独立した復旧guardだけが行います。
+
+### 公開間隔の基準（v2仕様 D5）
+
+`scripts/spin_on_run/interval_gate.py` が、完走（`reason == "completed"`）したliveの600秒・3600秒runの `native.json` から公開間隔を
+計算し、run の証跡ディレクトリに `interval-gate.json` を書きます（復旧guardの試験後検査 `post_run` が1回だけ実行）。
+offline の S・M は公開間隔を持たないので対象外です。完走以外（中止・`clock_unresolved` など）には適用しません。
+
+- **通常区間（N2）**: 計測区間 `[start_us, end_us)` 内の一意な公開結果（キー `(boot_id, sequence)`）を `published_us` 昇順に並べ、
+  隣り合う2件を1間隔 D とします。除外するのは**世代をまたぐ D > 500ms の間隔だけ**（hold開始の途絶。件数を `excluded` に記録）。
+  同一世代の D > 500ms は除外せず、世代をまたぐ D ≤ 500ms も含めます。重複・sequence非増加・boot_id/generation不一致は従来どおりF06です。
+- **ゲート（C。合否に含め、既存の全条件にANDで追加）**: p99 ≤ 250ms（250,000µs）。パーセンタイルは線形補間
+  （`k = (n−1)·p/100`）を整数・有理数（`fractions.Fraction`）で計算し、浮動小数の丸めで境界が動きません
+  （p99 がちょうど250,000は pass、250,001相当は fail）。最小件数は 4.5×秒（600秒で2,700件、3600秒で16,200件）で、未満は
+  `gate: "unjudgeable"` です。
+- **判定と優先順位**: 不合格は新コード **F08**（`interval_p99`）、判定不能は新しい最終結果 **`interval_unjudgeable`**
+  （不合格でも合格でもなく、マイルストーン未達。試行は消費し `max_attempts` は変えません。復元が失敗していれば
+  `interval_unjudgeable_restore_failed`）。優先順位は 中止（A）＞ 開始禁止・測定なし（`not_started`）＞ 不合格（F01〜F08）＞
+  判定不能 ＞ 合格です。既存のF/A/Oコード・判定・閾値は変えていません（`max_gap` 500msは報告専用のまま）。
+- **目標（A。報告のみで、ゲートではない）**: p99 ≤ 250ms かつ最大 ≤ 300ms（300msを超える間隔が0件）なら `target: "met"`、
+  そうでなければ `not_met`。導出（鮮度の導出: 500 − 伸びた間隔の age 項 B の観測最大 180.5 = 319.5ms 未満 → 切り捨てて300ms）を
+  `derivation` に添えます。
+- **run ごとに報告するもの**: `n`、`excluded`、`p99_us`（と厳密値 `p99_us_exact`）、`max_us`、`over_us`（>250/>300/>350 の件数）、
+  `gate`（pass/fail/unjudgeable）、`target`（met/not_met）、`queue_busy`（`receiver.queue_busy`）、`receiver_dropped`
+  （`receiver.dropped`）、`worker_dropped`（`worker.dropped`）。閾値と最小件数は登録後に動かしません。
+- 保存済みの6 runで、提案の N2 の値（`criteria-scoring.json` の `per_run_N2`: n・p99・最大・件数）を再現する回帰テストが
+  あります（`tests/test_spin_on_run_interval_gate.py`）。測定区間を持たない3本（affinity・capture・mss）は、提案と同じく全公開結果
+  から起動・終了端の4.5秒以上の途絶だけを除いて数えます（liveのゲートは測定区間のある完走runにだけ適用されるので、この経路は
+  再現専用です）。
+
+### R2: 試験中のPi読み取り専用サンプラ（v2仕様 D6、計測のみ）
+
+`scripts/spin_on_run/r2_sampler.py`（Mac側）が、読み取り専用のshell `r2_remote.sh` を**標準入力で渡して**
+`ssh <host> sh -s -- <camera_ip> <seconds> <process> <interface>` を1本だけ実行し（Pi上にファイルを作りません）、標準出力を
+Mac側の `r2-sampler.jsonl`（新規作成のみ）に保存します。起動は `python -m scripts.spin_on_run.cli r2 <host> <camera_ip> <out>
+--seconds <秒>`（`--ssh`、`--ssh-option`（例: `-i <鍵>`）、`--process`、`--interface`、`--check`）です。鍵・認証情報は引数/設定で渡し、
+出力には書きません（ssh の標準エラーも捨てます）。
+
+- **読む項目**（Piに無いものは `null`、続行）: `ss -tin dst <camera ip>`（retrans・lost・rto・rcv_rtt・lastrcv）と
+  `/proc/stat`・`/proc/pressure/cpu`・`scaling_cur_freq`・frame-live の `/proc/<pid>/task/*/schedstat`（実行遅延）を約10Hz、
+  `/proc/net/snmp`・`/proc/net/netstat`・`/proc/net/wireless`・`iw dev <if> station dump`・`vcgencmd get_throttled` を1Hz。
+  時刻は Pi の `/proc/uptime`（`pi_uptime_s`）と Mac の単調時計（`mono_ns`）の両方です。
+- **読み取り専用の担保**: リモートscriptが使うコマンドは `read`・`echo`・`ss`・`iw`・`vcgencmd`・`pgrep`・`sleep`・`getconf` と
+  シェル組み込みだけです。`tests/test_spin_on_run_r2_sampler.py` が静的許可リストでscriptを検査し、書込み・削除・kill・systemctl・
+  sudo・tee・ファイルへのリダイレクト（`/dev/null` を除く）・cp/mv などを含まないことを固定しています。テストは fake ssh（ローカルのsh）
+  で、scriptの文面そのままを偽の `/proc` に対して実行します。
+- **欠測の扱い**: ssh の起動失敗・非0終了・途中切断・`@end` 無しの終了は、`gap` レコードとして記録するだけで、呼び出し側の
+  例外にも試験の合否・進行にも影響しません（再接続はしません）。
+- **オーバーヘッドの予算**: サンプラ全体（リモートのsh・ss・pgrep・sleep などの子プロセス込み）のCPU使用は1コア（4コア中）の
+  10%以下（全体の2.5%以下）です。サンプラ自身が `/proc/self/stat`（shell自身と回収済みの子の utime・stime・cutime・cstime）を
+  1Hzで出力し、`r2 ... --check`（と終了時の `end` レコード）が予算超過を判定します。超過はR2データへの注意として報告するだけで、
+  合否には影響させません。sshd 側のCPUは含みません。**Piでは未測定**で、これを既知のリスクとします。
+
+### 伸びた間隔の分類（v2仕様 D8、report専用）
+
+`python -m scripts.spin_on_run.interval_classify <evidence_dir>` が、R3の `frames.jsonl`（と任意で R2 の `r2-sampler.jsonl`、
+時計の対応づけに `native.json`）から、D > 250ms の公開間隔を **到着側（arrival）／推論側（inference）／その他（other）** に分類し、
+`interval-classification.json` を書きます（F/A/合格には使いません）。規則（`cause-isolation-plan` §4.1 の案を固定。閾値は登録時確定）:
+
+- **到着側**: 間隔（published_k〜published_{k+1}）内に受信を完了したフレームのうち、first_byte→last_byte が公称の撮影間隔200msを
+  超える、または隣り合うフレームの first_byte の間隔が撮影間隔+100ms（300ms）を超える。
+- **推論側**: 間隔内に推論を終えたフレームの `compute_us` ≥ 200ms、または間隔内に推論を始めたフレームの received→begun の待ち ≥ 100ms。
+- **その他**: どちらにも当たらない。主分類の優先順位は 到着側 → 推論側 → その他。複数に当たれば両方のフラグを残し、主分類は先に
+  当たったものです。**カメラ起因**（`captured_us` の間隔 > 250ms）と **CPU競合**（R2の schedstat 実行遅延の合計 ≥ 50ms）は
+  排他にしない別フラグです。R2 が無い、または時計を対応づけられない（`native.json` の `host_clock_witness` が無い）場合、
+  CPU競合は `null`（未判定）で、R2 なしでも分類は動きます。
+- **出力**: run ごとの件数、分類別件数、フラグの件数、各間隔の `d_us`・フラグ・主分類・理由・（あれば）TCP と R2 の補助値
+  （再送・OFO・lastrcv・実行遅延・周波数・throttle）。`frames.jsonl` が無い run は `classifiable: false`
+  （`reason: "frames_jsonl_missing"`）と報告し、`native.json` があれば D > 250ms の件数だけを添えます。
+
+### R2・R3 の出力の置き場所
+
+liveの証跡ディレクトリ（`native.json` と同じ場所）に置きます。
+
+| ファイル | 内容 | 生成元 |
+|---|---|---|
+| `frames.jsonl` | R3の全フレーム記録。Pi側のstage dirに書かれ、試験後の回収でMacへ | frame-live（`ESP32CAM_RUST_TRIAL_FRAME_LOG`） |
+| `r2-sampler.jsonl` | R2の読み取り専用サンプラの出力 | Mac側 `r2_sampler.py` |
+| `interval-gate.json` | D5の公開間隔の報告 | 復旧guardの `post_run`（`live_checker`） |
+| `interval-classification.json` | D8の分類（report専用） | `interval_classify.py` |
+
+v2のlive起動では、launch envに `ESP32CAM_RUST_TRIAL_FRAME_LOG=<stage dir>/frames.jsonl`（絶対パス）を含めます
+（`units.live_env(..., run_dir=...)`、`units` サブコマンドのドライランも同じ）。凍結manifestは `live_env_keys` と
+`frame_log`（env名とファイル名）を持ち、開始の関門が、凍結内容の変化、launch envの値が `<stage dir>/frames.jsonl` と一致すること、
+stage dir に `frames.jsonl` がまだ無いことを検査します（不一致は `frame_log_env`・`launch_env_unreadable`・`frame_log_exists` として
+O05）。guardian の毎秒の容量検査では `frames.jsonl` に専用の上限（32MiB。3600秒でも約10MiB）を使います。offline（S・M）の起動には
+付けません。
