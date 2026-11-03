@@ -419,7 +419,7 @@ def test_the_classifier_reads_the_frame_log_the_rust_writer_renders(tmp_path):
     # tests.rs in rust/frame-worker (frame_log) asserts render() produces exactly this file.
     lines = RENDERED.read_text().splitlines()
     rows = [json.loads(line) for line in lines[1:]]
-    assert READ_FIELDS <= set(rows[0])
+    assert set(rows[0]) >= READ_FIELDS
     # Frame 4 is published 300 ms after frame 1, so the interval 1 -> 4 is stretched.
     rows[2]["published_us"] = rows[0]["published_us"] + 300_000
     (tmp_path / ic.FRAMES).write_text("\n".join([lines[0], *map(json.dumps, rows)]) + "\n")
