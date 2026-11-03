@@ -616,14 +616,30 @@ mod tests {
         let arrival = sync.admit(&frame, now).unwrap();
         let state = Arc::new(Mutex::new(s));
         let worker = Worker::start(state.clone(), |_| Ok(vec![])).unwrap();
-        assert_eq!(
-            worker.submit(Job {
+        // `Worker::submit` is nonblocking (`try_lock`) and can report Busy while the worker
+        // thread polls the empty slot; retry until the submission is decided.
+        let hang_guard = Instant::now() + Duration::from_secs(30);
+        let mut pending = Some(frame);
+        loop {
+            let frame = pending.take().unwrap();
+            let retry = Frame {
+                jpeg: frame.jpeg.clone(),
+                ..frame
+            };
+            match worker.submit(Job {
                 frame,
                 arrival,
-                cancelled: Arc::new(AtomicBool::new(false))
-            }),
-            Submit::Queued
-        );
+                cancelled: Arc::new(AtomicBool::new(false)),
+            }) {
+                Submit::Queued => break,
+                Submit::Busy => {
+                    assert!(Instant::now() < hang_guard);
+                    thread::yield_now();
+                    pending = Some(retry);
+                }
+                other => panic!("unexpected submission: {other:?}"),
+            }
+        }
         let deadline = Instant::now() + Duration::from_secs(2);
         while state.lock().unwrap().counters.published == 0 {
             assert!(Instant::now() < deadline);

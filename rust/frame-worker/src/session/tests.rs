@@ -130,14 +130,30 @@ fn hold_diagnostic_retains_first_observation_after_inflight_generation_fence() {
         .unwrap();
     clock.pong(1, "0123456789abcdef", 1000, 100_000).unwrap();
     let arrival = clock.admit(&frame, 100_000).unwrap();
-    assert_eq!(
-        worker.submit(Job {
+    // `Worker::submit` is nonblocking (`try_lock`) and can report Busy while the worker
+    // thread polls the empty slot; retry until the submission is decided.
+    let hang_guard = Instant::now() + Duration::from_secs(30);
+    let mut pending = Some(frame);
+    loop {
+        let frame = pending.take().unwrap();
+        let retry = crate::Frame {
+            jpeg: frame.jpeg.clone(),
+            ..frame
+        };
+        match worker.submit(Job {
             frame,
             arrival,
-            cancelled: Arc::new(AtomicBool::new(false))
-        }),
-        Submit::Queued
-    );
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }) {
+            Submit::Queued => break,
+            Submit::Busy => {
+                assert!(Instant::now() < hang_guard);
+                thread::yield_now();
+                pending = Some(retry);
+            }
+            other => panic!("unexpected submission: {other:?}"),
+        }
+    }
     started.recv_timeout(Duration::from_secs(2)).unwrap();
     let mut stats = Stats::default();
     let io = VecDeque::new();
