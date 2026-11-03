@@ -334,9 +334,10 @@ def test_saved_runs_reproduce_the_proposal_n2_values(run):
     assert summary["over_us"]["gt300"] == expected["n_gt300"]
     assert summary["over_us"]["gt350"] == expected["n_gt350"]
     left_out = expected["excluded"]
-    assert excluded["cross_generation_gap_gt500ms"] == left_out[
-        "cross_generation_gap_gt500ms(hold onset)"
-    ]
+    assert (
+        excluded["cross_generation_gap_gt500ms"]
+        == left_out["cross_generation_gap_gt500ms(hold onset)"]
+    )
     assert excluded["edge_gap_no_measurement_window"] == left_out.get(
         "edge_gap_ge_4.5s_no_measurement_window", 0
     )

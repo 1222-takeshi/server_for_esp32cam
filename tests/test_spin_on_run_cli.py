@@ -45,7 +45,7 @@ def test_manifest_covers_every_package_file_and_the_field_map(tmp_path, capsys):
         == 0
     )
     built = json.loads(capsys.readouterr().out)
-    on_disk = {p.name for p in PACKAGE.glob("*.py")}
+    on_disk = {p.name for p in PACKAGE.glob("*.py")} | {p.name for p in PACKAGE.glob("*.sh")}
     assert set(built["files"]) == on_disk, "every module must be frozen in the manifest"
     assert built["binaries"]["frame-live"] == common.sha256_bytes(b"elf")
     assert built["field_map"]["$.finite_live_gate_passed"] == "continuous_tracking_gate_passed"
@@ -70,9 +70,10 @@ def test_package_has_no_ota_firmware_or_privilege_code():
     for path in PACKAGE.glob("*.py"):
         text = path.read_text()
         assert not forbidden.search(text), path.name
-    assert "ssh" not in "".join(p.read_text() for p in PACKAGE.glob("*.py")).lower().replace(
-        "flask", ""
-    )
+    # R2 (spec D6) is the Mac-side sampler and the only module that talks ssh; the
+    # on-device harness has none.
+    on_device = [p for p in PACKAGE.glob("*.py") if p.name != "r2_sampler.py"]
+    assert "ssh" not in "".join(p.read_text() for p in on_device).lower().replace("flask", "")
 
 
 def test_system_ops_commands_are_fixed_argument_lists_and_keep_the_token_out():

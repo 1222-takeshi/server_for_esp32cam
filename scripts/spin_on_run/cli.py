@@ -22,6 +22,7 @@ from . import (
     offline_runner,
     post_runner,
     quality,
+    r2_sampler,
     recover_guard,
     start_gate,
     system_ops,
@@ -303,6 +304,7 @@ def parser() -> argparse.ArgumentParser:
     lv.add_argument("out")
     lv.add_argument("step", choices=["execute", "enqueue", "recover", "check"])
     lv.set_defaults(handler=cmd_live)
+    r2_sampler.add_subcommand(sub)
     return top
 
 
