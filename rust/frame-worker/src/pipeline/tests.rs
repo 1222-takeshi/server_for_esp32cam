@@ -11,7 +11,7 @@ fn timing_snapshot_observes_blocked_work_without_renewing_or_publishing_it() {
         Ok(vec![])
     })
     .unwrap();
-    worker.submit(job(&state, 1));
+    submit_settled(&worker, || job(&state, 1));
     started.recv_timeout(Duration::from_secs(2)).unwrap();
     {
         let s = state.lock().unwrap();
@@ -89,7 +89,7 @@ fn completed_work_timing_ring_discards_the_oldest_metadata() {
     let (state, _, _) = setup();
     let worker = Worker::start(state.clone(), |_| Ok(vec![])).unwrap();
     for sequence in 1..=10 {
-        worker.submit(job(&state, sequence));
+        submit_settled(&worker, || job(&state, sequence));
         wait(&state, sequence);
     }
     worker.stop().unwrap();
@@ -125,7 +125,7 @@ fn clock_restart_fences_inflight_work_without_ack_or_generation_churn() {
         Ok(vec![])
     })
     .unwrap();
-    worker.submit(job(&state, 1));
+    submit_settled(&worker, || job(&state, 1));
     started.recv_timeout(Duration::from_secs(2)).unwrap();
     let generation = state.lock().unwrap().mode.generation();
     time.store(150_000, Ordering::SeqCst);
@@ -149,7 +149,7 @@ fn clock_restart_fences_inflight_work_without_ack_or_generation_churn() {
         .unwrap();
     fresh.arrival = proof.admit(&fresh.frame, 200_000).unwrap();
     time.store(200_000, Ordering::SeqCst);
-    assert_eq!(worker.submit(fresh), Submit::Queued);
+    assert_eq!(submit_job_settled(&worker, &fresh), Submit::Queued);
     wait(&state, 2);
     worker.stop().unwrap();
     let mut s = state.lock().unwrap();
@@ -168,7 +168,7 @@ fn clock_restart_skips_waiting_work_before_inference() {
         panic!("expired admission must not infer")
     })
     .unwrap();
-    worker.submit(waiting);
+    submit_job_settled(&worker, &waiting);
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     while state.lock().unwrap().counters.dropped == 0 {
         assert!(std::time::Instant::now() < deadline);
@@ -212,6 +212,38 @@ fn job(state: &Arc<Mutex<State>>, seq: u64) -> Job {
         arrival,
         cancelled: Arc::new(AtomicBool::new(false)),
     }
+}
+// `Worker::submit` is intentionally nonblocking: the slot is claimed with `try_lock`, so
+// it can return Busy while the worker thread is merely polling the (empty) slot, and the
+// job is then dropped. Retry until the submission is actually decided; the deadline only
+// turns a poisoned slot (permanent Busy) into a failure instead of a hang.
+fn submit_settled(worker: &Worker, mut make: impl FnMut() -> Job) -> Submit {
+    let hang_guard = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        match worker.submit(make()) {
+            Submit::Busy => {
+                assert!(std::time::Instant::now() < hang_guard);
+                thread::yield_now();
+            }
+            decided => return decided,
+        }
+    }
+}
+// Busy consumes the job, so retry with a copy. The copy shares `cancelled`: it is the same
+// logical job, and only the copy that is actually queued is ever observed by the worker.
+fn submit_job_settled(worker: &Worker, job: &Job) -> Submit {
+    submit_settled(worker, || Job {
+        frame: Frame {
+            boot: job.frame.boot,
+            sequence: job.frame.sequence,
+            captured_us: job.frame.captured_us,
+            sent_us: job.frame.sent_us,
+            generation: job.frame.generation,
+            jpeg: job.frame.jpeg.clone(),
+        },
+        arrival: job.arrival,
+        cancelled: job.cancelled.clone(),
+    })
 }
 fn wait(state: &Arc<Mutex<State>>, inferred: u64) {
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
@@ -270,10 +302,13 @@ fn running_one_and_latest_waiting_one_without_io_blocking() {
         Ok(vec![])
     })
     .unwrap();
-    assert_eq!(worker.submit(job(&state, 1)), Submit::Queued);
+    assert_eq!(submit_settled(&worker, || job(&state, 1)), Submit::Queued);
     started.recv_timeout(Duration::from_secs(2)).unwrap();
-    assert_eq!(worker.submit(job(&state, 2)), Submit::Queued);
-    assert_eq!(worker.submit(job(&state, 3)), Submit::Overwritten);
+    assert_eq!(submit_settled(&worker, || job(&state, 2)), Submit::Queued);
+    assert_eq!(
+        submit_settled(&worker, || job(&state, 3)),
+        Submit::Overwritten
+    );
     release.send(()).unwrap();
     wait(&state, 2);
     worker.stop().unwrap();
@@ -295,7 +330,7 @@ fn completed_stale_or_old_generation_never_publishes() {
             Ok(vec![])
         })
         .unwrap();
-        worker.submit(job(&state, 1));
+        submit_settled(&worker, || job(&state, 1));
         started.recv_timeout(Duration::from_secs(2)).unwrap();
         if stale {
             time.store(600_001, Ordering::SeqCst);
@@ -327,7 +362,7 @@ fn completed_stale_or_old_generation_never_publishes() {
 fn inference_errors_and_panics_latch_hold_and_latest_is_fenced() {
     let (state, _clock, time) = setup();
     let worker = Worker::start(state.clone(), |_| Ok(vec![])).unwrap();
-    worker.submit(job(&state, 1));
+    submit_settled(&worker, || job(&state, 1));
     wait(&state, 1);
     worker.stop().unwrap();
     assert!(state.lock().unwrap().latest().unwrap().is_some());
@@ -342,7 +377,7 @@ fn inference_errors_and_panics_latch_hold_and_latest_is_fenced() {
             Err("bad model")
         })
         .unwrap();
-        worker.submit(job(&state, 1));
+        submit_settled(&worker, || job(&state, 1));
         wait(&state, 1);
         worker.stop().unwrap();
         let mut s = state.lock().unwrap();
@@ -363,7 +398,7 @@ fn reserve_and_cancelled_jobs_skip_native_work_and_invalid_payloads_are_bounded(
         } else {
             time.store(435_001, Ordering::SeqCst);
         }
-        worker.submit(pending);
+        submit_job_settled(&worker, &pending);
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
         while state.lock().unwrap().counters.dropped == 0 {
             assert!(std::time::Instant::now() < deadline);
@@ -400,7 +435,7 @@ fn old_session_failure_cannot_degrade_a_new_acknowledged_mode() {
     .unwrap();
     let job = job(&state, 1);
     let token = job.cancelled.clone();
-    worker.submit(job);
+    submit_job_settled(&worker, &job);
     started.recv_timeout(Duration::from_secs(2)).unwrap();
     {
         let mut s = state.lock().unwrap();
@@ -439,7 +474,7 @@ fn invalid_output_is_never_published() {
                 .collect())
         })
         .unwrap();
-        worker.submit(job(&state, 1));
+        submit_settled(&worker, || job(&state, 1));
         wait(&state, 1);
         worker.stop().unwrap();
         let s = state.lock().unwrap();
@@ -486,14 +521,14 @@ fn sample_capacity_retains_first_evidence_and_counts_subsequent_loss() {
         MAX_SAMPLES - 1
     ];
     let worker = Worker::start(state.clone(), |_| Ok(vec![])).unwrap();
-    worker.submit(job(&state, 1));
+    submit_settled(&worker, || job(&state, 1));
     wait(&state, 1);
     {
         let s = state.lock().unwrap();
         assert_eq!(s.samples().len(), MAX_SAMPLES);
         assert_eq!(s.counters.evidence_lost, 0);
     }
-    worker.submit(job(&state, 2));
+    submit_settled(&worker, || job(&state, 2));
     wait(&state, 2);
     worker.stop().unwrap();
     let mut s = state.lock().unwrap();
@@ -623,11 +658,11 @@ fn observed_slow_compute_skips_old_waiting_frame_and_processes_fresh_frame() {
         true,
     )
     .unwrap();
-    worker.submit(make(1, 1_000_000, 50_000));
+    submit_settled(&worker, || make(1, 1_000_000, 50_000));
     started.recv_timeout(Duration::from_secs(2)).unwrap();
     let pending = make(2, 1_111_566, 52_001);
     assert!(pending.arrival.fits(&pending.frame, 1_274_715, 165_000));
-    worker.submit(pending);
+    submit_job_settled(&worker, &pending);
     time.store(1_111_566, Ordering::SeqCst);
     release.send(()).unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
@@ -643,7 +678,7 @@ fn observed_slow_compute_skips_old_waiting_frame_and_processes_fresh_frame() {
         assert_eq!(s.drops()[0].reserve_us, 343_394);
     }
     time.store(1_302_337, Ordering::SeqCst);
-    worker.submit(make(3, 1_302_337, 50_000));
+    submit_settled(&worker, || make(3, 1_302_337, 50_000));
     wait(&state, 2);
     worker.stop().unwrap();
     let s = state.lock().unwrap();
@@ -678,7 +713,7 @@ fn publication_is_refused_when_the_input_is_over_500ms_old_at_that_moment() {
             };
         }
         let worker = Worker::start(state.clone(), |_| Ok(vec![])).unwrap();
-        worker.submit(job(&state, 1));
+        submit_settled(&worker, || job(&state, 1));
         wait(&state, 1);
         worker.stop().unwrap();
         let s = state.lock().unwrap();
@@ -702,7 +737,7 @@ fn publication_is_refused_at_that_moment_only_for_the_opt_in_guard() {
             s.protection = violated;
         }
         let worker = Worker::start(state.clone(), |_| Ok(vec![])).unwrap();
-        worker.submit(job(&state, 1));
+        submit_settled(&worker, || job(&state, 1));
         wait(&state, 1);
         worker.stop().unwrap();
         let s = state.lock().unwrap();
