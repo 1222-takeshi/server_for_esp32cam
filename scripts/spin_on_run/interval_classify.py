@@ -91,9 +91,19 @@ def _previous(frames: list[dict], key: str) -> dict[int, dict]:
     return {id(f): ordered[i - 1] for i, f in enumerate(ordered) if i}
 
 
+def _before_in_sequence(frames: list[dict]) -> dict[int, dict]:
+    """Each frame (by id) -> the frame logged just before it in (boot_id, sequence) order.
+
+    Frames without a first byte are kept, so a null never lets the pair skip over it.
+    """
+    numbered = [f for f in frames if type(f.get("sequence")) is int]
+    ordered = sorted(numbered, key=lambda f: (f.get("boot_id") or 0, f["sequence"]))
+    return {id(f): ordered[i - 1] for i, f in enumerate(ordered) if i}
+
+
 def _stall_reasons(frames: list[dict], low: int, high: int) -> tuple[list[str], list[str]]:
     """Arrival and camera reasons from the frames whose reception ended in [low, high]."""
-    before_start = _previous(frames, "first_byte_us")
+    before_start = _before_in_sequence(frames)
     before_capture = _previous(frames, "captured_us")
     arrival: list[str] = []
     camera: list[str] = []
@@ -104,6 +114,7 @@ def _stall_reasons(frames: list[dict], low: int, high: int) -> tuple[list[str], 
         span = _gap(frame.get("first_byte_us"), frame.get("last_byte_us"))
         if span is not None and span > ARRIVAL_SPAN_US:
             arrival.append(f"receive_span:{sequence}:{span}")
+        # The adjacent frame's first byte is unknown (null): not judgeable, never skipped over.
         prior = before_start.get(id(frame))
         start_gap = _gap(prior and prior.get("first_byte_us"), frame.get("first_byte_us"))
         if start_gap is not None and start_gap > ARRIVAL_START_GAP_US:

@@ -74,6 +74,27 @@ def test_a_wide_first_byte_gap_between_adjacent_frames_is_arrival(gap, arrival):
     assert interval["flags"]["arrival"] is arrival
 
 
+def test_a_null_first_byte_neighbour_makes_the_first_byte_gap_unjudgeable():
+    # frame 11 has no first byte (read in one go): frame 12 is 310 ms after frame 10's
+    # first byte, which skipping frame 11 would report as a gap.
+    frames = [
+        frame(10, published_us=LOW, first_byte_us=950_000, last_byte_us=970_000),
+        frame(11, received_us=1_150_000),
+        frame(12, published_us=HIGH, first_byte_us=1_260_000, last_byte_us=1_280_000),
+    ]
+    interval = only(ic.classify(frames))
+    assert interval["flags"]["arrival"] is False
+    assert not any(r.startswith("first_byte_gap") for r in interval["reasons"])
+
+
+def test_a_real_first_byte_gap_across_a_missing_sequence_number_is_still_found():
+    frames = [
+        frame(10, published_us=LOW, first_byte_us=950_000, last_byte_us=970_000),
+        frame(12, published_us=HIGH, first_byte_us=1_260_000, last_byte_us=1_280_000),
+    ]
+    assert only(ic.classify(frames))["flags"]["arrival"] is True
+
+
 @pytest.mark.parametrize(("compute", "inference"), [(199_999, False), (200_000, True)])
 def test_a_long_compute_is_inference(compute, inference):
     frames = pair(compute_us=compute, finished_us=HIGH - 1, begun_us=HIGH - compute - 1)
