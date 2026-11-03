@@ -211,6 +211,8 @@ pub struct State {
     recent_work: std::collections::VecDeque<WorkResult>,
     samples: Vec<Sample>,
     drops: std::collections::VecDeque<DropSample>,
+    /// R3 measurement only (v2 spec D7); never read by a decision.
+    work_log: Option<crate::frame_log::Ring<crate::frame_log::WorkRecord>>,
 }
 impl State {
     pub fn new(generation: u64, clock: Clock) -> Result<Self, ModeError> {
@@ -238,10 +240,42 @@ impl State {
             recent_work: std::collections::VecDeque::with_capacity(8),
             samples: Vec::new(),
             drops: std::collections::VecDeque::with_capacity(32),
+            work_log: None,
         })
     }
     pub fn now(&self) -> u64 {
         (self.clock)()
+    }
+    /// R3: start recording the worker's outcome for every job (preallocated).
+    pub fn enable_work_log(&mut self, capacity: usize) {
+        self.work_log = Some(crate::frame_log::Ring::with_capacity(capacity));
+    }
+    pub fn take_work_log(
+        &mut self,
+    ) -> Option<crate::frame_log::Ring<crate::frame_log::WorkRecord>> {
+        self.work_log.take()
+    }
+    /// Copies already-decided values into the preallocated buffer; no clock
+    /// read, allocation or I/O, and nothing here feeds back into a decision.
+    #[inline]
+    fn log_work(
+        &mut self,
+        job: &Job,
+        times: (Option<u64>, Option<u64>, Option<u64>, Option<u64>),
+        stage: &'static str,
+    ) {
+        if let Some(log) = self.work_log.as_mut() {
+            log.push(crate::frame_log::WorkRecord {
+                boot: job.frame.boot,
+                generation: job.frame.generation.unwrap_or(0),
+                sequence: job.frame.sequence,
+                begun_us: times.0,
+                finished_us: times.1,
+                published_us: times.2,
+                compute_us: times.3,
+                stage,
+            });
+        }
     }
     /// Caller owns State. Invalidate waiting/in-flight jobs even if already held.
     pub fn invalidate_clock(&mut self) -> Result<u64, ModeError> {
@@ -471,6 +505,7 @@ impl Worker {
                         };
                         if let Some(reason) = reason {
                             s.dropped(&job, reason, now, 0, reserve_us);
+                            s.log_work(&job, (None, None, None, None), reason);
                             continue;
                         }
                         // Metadata only; ready_us precedes releasing State and the native call.
@@ -505,6 +540,11 @@ impl Worker {
                         };
                         s.dropped(&job, reason, clock(), compute_us, reserve_us);
                         s.finish_work(begun, finished, clock(), reason);
+                        s.log_work(
+                            &job,
+                            (Some(begun), Some(finished), None, Some(compute_us)),
+                            reason,
+                        );
                         continue;
                     }
                     let Some(detections) = output.filter(|v| {
@@ -522,6 +562,11 @@ impl Worker {
                         s.counters.failures = s.counters.failures.saturating_add(1);
                         let _ = s.mode.protect("inference_failed");
                         s.finish_work(begun, finished, clock(), "inference_failed");
+                        s.log_work(
+                            &job,
+                            (Some(begun), Some(finished), None, Some(compute_us)),
+                            "inference_failed",
+                        );
                         continue;
                     };
                     let frame = Frame {
@@ -607,6 +652,17 @@ impl Worker {
                         } else {
                             "publication_gate"
                         },
+                    );
+                    let stage = if published {
+                        "published"
+                    } else {
+                        "publication_gate"
+                    };
+                    let at = published.then(|| published_at.get());
+                    s.log_work(
+                        &job,
+                        (Some(begun), Some(finished), at, Some(compute_us)),
+                        stage,
                     );
                 }
                 stop.store(true, Ordering::Release);

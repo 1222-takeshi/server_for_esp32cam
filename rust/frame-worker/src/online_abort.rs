@@ -37,6 +37,16 @@ pub fn is_abort_reason(reason: &str) -> bool {
     .contains(&reason)
 }
 
+/// Process exit code of a finished live trial: 0 passed, `EXIT_CODE` for an
+/// online abort, 3 for any other failure.
+pub fn exit_code(passed: bool, reason: &str) -> i32 {
+    match passed {
+        true => 0,
+        false if is_abort_reason(reason) => EXIT_CODE,
+        false => 3,
+    }
+}
+
 /// Natural hold budget: one percent of the measurement interval.
 pub fn hold_budget_us(duration_us: u64) -> u64 {
     duration_us / 100

@@ -69,6 +69,16 @@ pub fn tcp_maxseg(socket: &TcpStream) -> io::Result<u32> {
     }
 }
 
+/// `TCP_INFO` of the accepted socket. Always None: neither `rustix` (no
+/// `TCP_INFO` in its sockopt API) nor `socket2` exposes it, a raw `getsockopt`
+/// needs `libc` (not a direct dependency; adding it would change `Cargo.lock`)
+/// and `unsafe` (forbidden by `#![forbid(unsafe_code)]`). The record keeps the
+/// `tcp` field as null; the retransmission evidence comes from R2 instead.
+pub fn tcp_snapshot(socket: &TcpStream, at_us: u64) -> Option<crate::frame_log::TcpSnapshot> {
+    let _ = (socket, at_us);
+    None
+}
+
 /// No Debug implementation: credentials and request headers must never be logged.
 pub struct Auth {
     path: String,
@@ -122,6 +132,8 @@ struct BoundedStream {
     write_failed: bool,
     quick_ack: bool,
     trace: VecDeque<IoSample>,
+    /// R3 read statistics (v2 spec D7); None unless explicitly enabled.
+    probe: Option<crate::frame_log::Probe>,
 }
 impl BoundedStream {
     fn note(
@@ -210,6 +222,25 @@ impl Read for BoundedStream {
         let begun = Instant::now();
         let result = self.read_inner(buffer);
         self.note_io("read", begun, &result);
+        if let Some(probe) = self.probe.as_mut() {
+            use crate::frame_log::ReadKind;
+            let kind = match &result {
+                Ok(n) if *n > 0 => ReadKind::Data,
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    ReadKind::Timeout
+                }
+                _ => ReadKind::Other,
+            };
+            probe.note_read(
+                begun.elapsed().as_micros().try_into().unwrap_or(u64::MAX),
+                kind,
+            );
+        }
         result
     }
 }
@@ -275,6 +306,7 @@ impl Connection {
             write_failed: false,
             quick_ack,
             trace: VecDeque::with_capacity(32),
+            probe: None,
         };
         let config = WebSocketConfig::default()
             .read_buffer_size(4096)
@@ -309,6 +341,14 @@ impl Connection {
     pub fn tcp_maxseg(&self) -> io::Result<u32> {
         tcp_maxseg(&self.0.get_ref().socket)
     }
+    /// R3: observe the reads that complete each message. Passive.
+    pub fn enable_frame_probe(&mut self, clock: crate::pipeline::Clock) {
+        self.0.get_mut().probe = Some(crate::frame_log::Probe::new(clock));
+    }
+    /// Read statistics of the message `receive` completed last (None unless enabled).
+    pub fn frame_read_summary(&self) -> Option<crate::frame_log::ReadSummary> {
+        self.0.get_ref().probe.as_ref().map(|p| p.last())
+    }
     pub fn io_trace(&self) -> &VecDeque<IoSample> {
         &self.0.get_ref().trace
     }
@@ -338,6 +378,14 @@ impl Connection {
                     _ => ("control", 0),
                 };
                 self.0.get_mut().note(kind, "complete", None, bytes);
+                let stream = self.0.get_mut();
+                if let Some(probe) = stream.probe.as_mut() {
+                    let at = probe.now();
+                    let tcp = (kind == "binary")
+                        .then(|| tcp_snapshot(&stream.socket, at))
+                        .flatten();
+                    probe.complete(tcp);
+                }
                 Ok(Some(message))
             }
             Err(tungstenite::Error::Io(e))

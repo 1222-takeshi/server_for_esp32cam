@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 use esp32cam_frame_worker::{
     detector::{self, Detector, Result, SpinPolicy},
+    frame_log,
     host_clock::HostClock,
     jpeg,
     online_abort::{self, OnlineGuard},
@@ -318,6 +319,7 @@ fn execute() -> Result<i32> {
         std::env::var("ESP32CAM_RUST_TRIAL_DYNAMIC_BLOCKS"),
         continuous,
     )?;
+    let frame_log = frame_log::parse_env(std::env::var(frame_log::ENV), continuous)?;
     let (spin, online_checks) =
         spin_policy(std::env::var("ESP32CAM_RUST_TRIAL_SPIN_ON_RUN"), continuous)?;
     let affinity = esp32cam_frame_worker::cpu_affinity::CpuIsolation::prepare(isolate_io)?;
@@ -422,6 +424,10 @@ fn execute() -> Result<i32> {
     } else {
         receiver
     };
+    let receiver = match frame_log.is_some() {
+        true => receiver.with_frame_log((budget_seconds * 12) as usize)?,
+        false => receiver,
+    };
     let mut guard = online_checks.then(|| OnlineGuard::new(duration_us));
     let mut abort = None;
     let mut outcome = receiver.run(&mut socket, |s, now| {
@@ -435,7 +441,7 @@ fn execute() -> Result<i32> {
     });
     let usage = replay::usage();
     worker.stop().map_err(|_| "worker failed")?;
-    let s = state.lock().map_err(|_| "state unavailable")?;
+    let mut s = state.lock().map_err(|_| "state unavailable")?;
     outcome.stats.finish_diagnostics(&s);
     let measurement = trial.evaluate(s.samples());
     let passed = outcome.reason == "completed" && measurement.is_ok();
@@ -519,11 +525,16 @@ fn execute() -> Result<i32> {
     }
     io::stdout().lock().write_all(&raw)?;
     io::stdout().lock().write_all(b"\n")?;
-    Ok(match passed {
-        true => 0,
-        false if online_abort::is_abort_reason(outcome.reason) => online_abort::EXIT_CODE,
-        false => 3,
-    })
+    // R3: the only write of the frame log, after the measurement and the report.
+    // A failure leaves no file, which the post-processing reports as missing data.
+    if let (Some(path), Some(recv), Some(work)) = (
+        &frame_log,
+        outcome.stats.frame_log.take(),
+        s.take_work_log(),
+    ) {
+        let _ = frame_log::write_once(path, &frame_log::render(&recv, &work));
+    }
+    Ok(online_abort::exit_code(passed, outcome.reason))
 }
 fn main() {
     match execute() {

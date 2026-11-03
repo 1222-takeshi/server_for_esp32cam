@@ -953,3 +953,411 @@ fn rejection_diagnostics_are_bounded_and_preserve_clock_gate() {
     stats.reject(&frame, 24_000_020, "mode", &clock);
     assert_eq!(stats.recent_rejections.back().unwrap().stage, "mode");
 }
+
+// ---- R3 frame recording (v2 spec D7): recording must not change a decision ----
+
+#[derive(Clone, Copy)]
+enum Kind {
+    Normal,
+    Duplicate,
+    WrongGeneration,
+    Stale,
+    Late,
+}
+struct Step {
+    at_us: u64,
+    frames: &'static [Kind],
+    compute_us: u64,
+}
+#[derive(Debug, PartialEq)]
+struct Decisions {
+    reason: &'static str,
+    exit_code: i32,
+    abort: Option<(&'static str, u64)>,
+    counts: [u64; 6],
+    rejections: Vec<(u64, &'static str, u64)>,
+    published: Vec<(u64, u64, u64)>,
+    drops: Vec<(u64, &'static str, u64)>,
+    worker: [u64; 3],
+    holds: (u64, usize, u64),
+    status: [String; 4],
+}
+struct Run {
+    decisions: Decisions,
+    stats: Stats,
+    work: Option<crate::frame_log::Ring<crate::frame_log::WorkRecord>>,
+}
+
+/// Deterministic camera: it speaks only when the receiver's controller says so,
+/// and every time it reads is the injected clock, which stands still while a
+/// step is being decided.
+fn lockstep_camera(
+    mut client: tungstenite::WebSocket<TcpStream>,
+    time: Arc<std::sync::atomic::AtomicU64>,
+    go: std::sync::mpsc::Receiver<&'static [Kind]>,
+    acked: Arc<std::sync::atomic::AtomicU64>,
+) {
+    use std::sync::atomic::Ordering;
+    client
+        .get_mut()
+        .set_read_timeout(Some(Duration::from_millis(10)))
+        .unwrap();
+    client.send(Message::Text(json!({"type":"profile.hello","schema":2,"boot_id":1,"generation_floor":0,"profiles":["eco","tracking"]}).to_string().into())).unwrap();
+    let (mut generation, mut applied, mut sequence, mut last) = (0u64, 0u64, 0u64, 0u64);
+    loop {
+        if let Ok(kinds) = go.try_recv() {
+            let device = time.load(Ordering::SeqCst) + 1_000_000;
+            for kind in kinds {
+                let fresh = (device - 20_000).max(applied + 1).max(last + 1);
+                let (seq, capture, gen_) = match kind {
+                    Kind::Normal => {
+                        sequence += 1;
+                        (sequence, fresh, generation)
+                    }
+                    Kind::Duplicate => (sequence, fresh, generation),
+                    Kind::WrongGeneration => {
+                        sequence += 1;
+                        (sequence, fresh, generation + 5)
+                    }
+                    // 300 ms old: accepted and started, but too old once computed.
+                    Kind::Late => {
+                        sequence += 1;
+                        (
+                            sequence,
+                            (device - 300_000).max(applied + 1).max(last + 1),
+                            generation,
+                        )
+                    }
+                    // Newer than everything before it, but 700 ms old.
+                    Kind::Stale => {
+                        sequence += 1;
+                        (sequence, (device - 700_000).max(applied + 1), generation)
+                    }
+                };
+                if !matches!(kind, Kind::Duplicate) {
+                    last = capture;
+                }
+                if client
+                    .send(Message::Binary(envelope(1, seq, capture, gen_).into()))
+                    .is_err()
+                {
+                    return;
+                }
+            }
+            continue;
+        }
+        match client.read() {
+            Ok(Message::Text(raw)) => {
+                let v: Value = serde_json::from_str(&raw).unwrap();
+                let reply = match v["type"].as_str().unwrap() {
+                    "profile.set" => {
+                        generation = v["generation"].as_u64().unwrap();
+                        applied = time.load(Ordering::SeqCst) + 1_000_000;
+                        json!({"type":"profile.ack","boot_id":1,"generation":generation,"mode":v["mode"],"applied_us":applied})
+                    }
+                    "clock.ping" => {
+                        json!({"type":"clock.pong","boot_id":1,"id":v["id"],"device_us":time.load(Ordering::SeqCst)+1_000_000})
+                    }
+                    _ => panic!(),
+                };
+                if client
+                    .send(Message::Text(reply.to_string().into()))
+                    .is_err()
+                {
+                    return;
+                }
+                if v["type"] == "profile.set" {
+                    acked.store(generation, Ordering::SeqCst);
+                }
+            }
+            Ok(_) => {}
+            Err(tungstenite::Error::Io(e))
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            Err(_) => return,
+        }
+    }
+}
+
+/// Runs the same synthetic time series through a real socket. The controller
+/// advances the clock only after the previous step is decided and its clock
+/// exchange has settled, so every decision is a function of the series alone.
+fn run_lockstep(
+    steps: &'static [Step],
+    interval: Option<(u64, u64)>,
+    record: Option<usize>,
+) -> Run {
+    use crate::online_abort::{self, OnlineGuard};
+    use std::sync::{
+        atomic::{AtomicU64, Ordering},
+        mpsc,
+    };
+    #[derive(Clone, Copy)]
+    enum Phase {
+        Init,
+        Ack(u64),
+        Advance(usize),
+        Settle(usize, u32),
+        Resolve(usize, u64),
+    }
+    let time = Arc::new(AtomicU64::new(100_000));
+    let compute = Arc::new(AtomicU64::new(0));
+    let clock: Clock = {
+        let t = time.clone();
+        Arc::new(move || t.load(Ordering::SeqCst))
+    };
+    let state = Arc::new(Mutex::new(
+        State::new_with_tracking_recovery(10, clock, true).unwrap(),
+    ));
+    let (t, c) = (time.clone(), compute.clone());
+    let worker = Worker::start(state.clone(), move |_| {
+        t.fetch_add(c.load(Ordering::SeqCst), Ordering::SeqCst);
+        Ok(vec![])
+    })
+    .unwrap();
+    let (client, mut server) = pair();
+    let (go_tx, go_rx) = mpsc::channel();
+    let acked = Arc::new(AtomicU64::new(0));
+    let camera = {
+        let (t, a) = (time.clone(), acked.clone());
+        thread::spawn(move || lockstep_camera(client, t, go_rx, a))
+    };
+    let mut receiver = Receiver::new(
+        &worker,
+        Limits {
+            duration_us: 600_000_000,
+            ..Limits::default()
+        },
+    )
+    .unwrap()
+    .with_clock_recovery();
+    if let Some(capacity) = record {
+        receiver = receiver.with_frame_log(capacity).unwrap();
+    }
+    let (mut phase, mut guard, mut abort) = (Phase::Init, OnlineGuard::new(600_000_000), None);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut outcome = receiver.run(&mut server, |s, _| {
+        if Instant::now() > deadline {
+            return Err("test_timeout");
+        }
+        let mut more = true;
+        phase = match phase {
+            Phase::Init if s.mode.status().unwrap()["acknowledged"] == true => {
+                s.mode
+                    .request(Mode::Tracking, s.mode.generation(), true)
+                    .unwrap();
+                Phase::Ack(s.mode.generation())
+            }
+            Phase::Ack(g) if acked.load(Ordering::SeqCst) == g => Phase::Advance(0),
+            Phase::Advance(k) => {
+                time.store(steps[k].at_us, Ordering::SeqCst);
+                compute.store(steps[k].compute_us, Ordering::SeqCst);
+                Phase::Settle(k, 0)
+            }
+            // One pass at the new time polls the clock; the next one sees
+            // whether that exchange is still open.
+            Phase::Settle(k, n) if n >= 2 && s.protection.pending_since_us.is_none() => {
+                let target = s.counters.published + s.counters.dropped + 1;
+                go_tx.send(steps[k].frames).unwrap();
+                Phase::Resolve(k, target)
+            }
+            Phase::Settle(k, n) => Phase::Settle(k, n + 1),
+            Phase::Resolve(k, target) if s.counters.published + s.counters.dropped >= target => {
+                if k + 1 == steps.len() {
+                    more = false;
+                    Phase::Resolve(k, target)
+                } else {
+                    Phase::Advance(k + 1)
+                }
+            }
+            other => other,
+        };
+        let now = s.now();
+        match guard.observe(&online_abort::observation(
+            now,
+            interval.filter(|i| now >= i.0),
+            s,
+        )) {
+            Some(code) => {
+                abort = Some((code, now));
+                Err(code)
+            }
+            None => Ok(more),
+        }
+    });
+    worker.stop().unwrap();
+    let mut s = state.lock().unwrap();
+    outcome.stats.finish_diagnostics(&s);
+    let st = &outcome.final_status;
+    let decisions = Decisions {
+        reason: outcome.reason,
+        exit_code: online_abort::exit_code(outcome.reason == "completed", outcome.reason),
+        abort,
+        counts: [
+            outcome.stats.frames,
+            outcome.stats.admitted,
+            outcome.stats.dropped,
+            outcome.stats.overwritten,
+            outcome.stats.queue_busy,
+            outcome.stats.rejected_ack,
+        ],
+        rejections: outcome
+            .stats
+            .recent_rejections
+            .iter()
+            .map(|r| (r.sequence, r.stage, r.received_us))
+            .collect(),
+        // The age bound can differ by microseconds when a clock exchange lands
+        // between the clock step and the publication; it is bounded instead.
+        published: s
+            .samples()
+            .iter()
+            .map(|v| {
+                assert!(v.age_high_us <= 500_000);
+                (v.sequence, v.published_us, v.compute_us)
+            })
+            .collect(),
+        drops: s
+            .drops()
+            .iter()
+            .map(|d| (d.sequence, d.stage, d.at_us))
+            .collect(),
+        worker: [
+            s.counters.inferred,
+            s.counters.published,
+            s.counters.dropped,
+        ],
+        holds: (
+            s.mode.tracking_hold_events(),
+            outcome.stats.hold_diagnostics.report().len(),
+            outcome.stats.hold_diagnostics_lost,
+        ),
+        status: [
+            "acknowledged",
+            "requested_mode",
+            "actuation_state",
+            "reason",
+        ]
+        .map(|k| st[k].to_string()),
+    };
+    let work = s.take_work_log();
+    drop(s);
+    drop(server);
+    camera.join().unwrap();
+    Run {
+        decisions,
+        stats: outcome.stats,
+        work,
+    }
+}
+
+static MIXED: [Step; 6] = [
+    // The late result would be 550 ms old when it is ready: refused at publication.
+    Step {
+        at_us: 1_000_000,
+        frames: &[Kind::Stale, Kind::Late],
+        compute_us: 250_000,
+    },
+    Step {
+        at_us: 1_400_000,
+        frames: &[Kind::Normal],
+        compute_us: 30_000,
+    },
+    Step {
+        at_us: 1_600_000,
+        frames: &[Kind::Duplicate, Kind::Normal],
+        compute_us: 20_000,
+    },
+    Step {
+        at_us: 1_800_000,
+        frames: &[Kind::WrongGeneration, Kind::Normal],
+        compute_us: 20_000,
+    },
+    Step {
+        at_us: 2_000_000,
+        frames: &[Kind::Normal],
+        compute_us: 20_000,
+    },
+    // After the gap the previous result is stale: a hold is declared.
+    Step {
+        at_us: 2_900_000,
+        frames: &[Kind::Normal],
+        compute_us: 20_000,
+    },
+];
+static STALLED: [Step; 3] = [
+    Step {
+        at_us: 1_000_000,
+        frames: &[Kind::Normal],
+        compute_us: 20_000,
+    },
+    Step {
+        at_us: 1_200_000,
+        frames: &[Kind::Normal],
+        compute_us: 20_000,
+    },
+    // The clock exchange is 11 s old: A14 (sync age above 10 s).
+    Step {
+        at_us: 12_300_000,
+        frames: &[Kind::Normal],
+        compute_us: 20_000,
+    },
+];
+
+#[test]
+fn recording_on_and_off_make_identical_decisions() {
+    for (steps, interval) in [
+        (&MIXED[..], None),
+        (&STALLED[..], Some((12_000_000, 612_000_000))),
+    ] {
+        // `run_lockstep` takes 'static steps; the statics above outlive the test.
+        let steps: &'static [Step] = steps;
+        let off = run_lockstep(steps, interval, None);
+        let on = run_lockstep(steps, interval, Some(1000));
+        assert_eq!(off.decisions, on.decisions);
+        assert!(off.stats.frame_log.is_none() && off.work.is_none());
+        let log = on.stats.frame_log.as_ref().unwrap();
+        assert_eq!(log.items().len() as u64, on.decisions.counts[0]);
+        assert_eq!(log.lost(), 0);
+        for r in log.items() {
+            let read = r.read;
+            assert!(read.tcp.is_none());
+            // A frame already buffered by the read of the previous one needs no
+            // read of its own: its byte times are unknown (null), not guessed.
+            assert_eq!(read.reads == 0, read.first_byte_us.is_none());
+            assert_eq!(read.first_byte_us.is_none(), read.last_byte_us.is_none());
+            assert!(read.first_byte_us <= read.last_byte_us);
+            assert!(read.last_byte_us.is_none_or(|t| t <= r.received_us));
+            assert!(r.bytes > 0);
+        }
+        assert_eq!(
+            on.work.as_ref().unwrap().items().len() as u64,
+            on.decisions.worker[0]
+        );
+        // A buffer that is too small loses records and changes nothing else.
+        let small = run_lockstep(steps, interval, Some(2));
+        assert_eq!(off.decisions, small.decisions);
+        let lost = small.stats.frame_log.as_ref().unwrap();
+        assert_eq!(lost.items().len(), 2.min(off.decisions.counts[0] as usize));
+        assert_eq!(lost.lost(), off.decisions.counts[0].saturating_sub(2));
+        assert_eq!(
+            small.work.as_ref().unwrap().lost(),
+            off.decisions.worker[0].saturating_sub(2)
+        );
+        // The scenarios must exercise what they claim to.
+        let d = &off.decisions;
+        if interval.is_none() {
+            assert_eq!(d.reason, "completed");
+            assert_eq!(d.exit_code, 0);
+            let stages: Vec<_> = d.rejections.iter().map(|r| r.1).collect();
+            assert_eq!(stages, ["age_limit", "order", "mode"]);
+            assert_eq!(d.published.len(), 5, "{d:?}");
+            assert!(d.drops.iter().any(|x| x.1 == "publication_gate"), "{d:?}");
+        } else {
+            assert_eq!(d.abort.map(|a| a.0), Some("protection_violation"), "{d:?}");
+            assert_eq!(d.exit_code, crate::online_abort::EXIT_CODE);
+        }
+    }
+}

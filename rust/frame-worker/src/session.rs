@@ -3,6 +3,7 @@ use crate::{
     FrameOrder,
     control::{self, Control, SessionClock},
     decode,
+    frame_log::{ReadSummary, RecvRecord, Ring},
     operating_mode::Mode,
     pipeline::{Clock, Job, State, Submit, TimingSnapshot, Worker},
     transport::{self, Connection, Message},
@@ -133,8 +134,40 @@ pub struct Stats {
     pub recent_rejections: VecDeque<Rejection>,
     pub first_device: Option<[u64; 6]>,
     pub last_device: Option<[u64; 6]>,
+    /// R3 measurement only (v2 spec D7); never read by a decision.
+    pub frame_log: Option<Ring<RecvRecord>>,
+    frame_pending: Option<usize>,
 }
 impl Stats {
+    /// Record one received frame; a no-op unless R3 is enabled.
+    fn note_frame(
+        &mut self,
+        frame: &crate::Frame,
+        bytes: usize,
+        received_us: u64,
+        read: ReadSummary,
+    ) {
+        let Some(log) = self.frame_log.as_mut() else {
+            return;
+        };
+        self.frame_pending = log.push(RecvRecord {
+            boot: frame.boot,
+            generation: frame.generation.unwrap_or(0),
+            sequence: frame.sequence,
+            captured_us: frame.captured_us,
+            sent_us: frame.sent_us,
+            received_us,
+            bytes,
+            read,
+            stage: None,
+        });
+    }
+    /// The receiver's own outcome for the frame noted last.
+    fn note_stage(&mut self, stage: &'static str) {
+        if let (Some(log), Some(i)) = (self.frame_log.as_mut(), self.frame_pending) {
+            log[i].stage = Some(stage);
+        }
+    }
     fn note_hold(&mut self, state: &State, io: &VecDeque<transport::IoSample>) {
         let Some(started) = state.mode.tracking_hold_started() else {
             return;
@@ -229,6 +262,7 @@ impl Stats {
         } else {
             stage
         };
+        self.note_stage(stage);
         if self.recent_rejections.len() == 32 {
             self.recent_rejections.pop_front();
         }
@@ -285,6 +319,7 @@ pub struct Receiver<'a> {
     worker: &'a Worker,
     limits: Limits,
     recover_clock: bool,
+    frame_log: Option<usize>,
 }
 impl<'a> Receiver<'a> {
     pub fn new(worker: &'a Worker, limits: Limits) -> Result<Self> {
@@ -303,7 +338,18 @@ impl<'a> Receiver<'a> {
             worker,
             limits,
             recover_clock: false,
+            frame_log: None,
         })
+    }
+    /// R3 (v2 spec D7): record every frame in preallocated buffers of
+    /// `capacity` records, on the receiver and on the worker. Measurement only.
+    pub fn with_frame_log(mut self, capacity: usize) -> Result<Self> {
+        self.state
+            .lock()
+            .map_err(|_| "state_unavailable")?
+            .enable_work_log(capacity);
+        self.frame_log = Some(capacity);
+        Ok(self)
     }
     /// Explicit continuous tracking policy; strict sessions retain their default.
     pub fn with_clock_recovery(mut self) -> Self {
@@ -368,6 +414,10 @@ impl<'a> Receiver<'a> {
         mut controller: impl FnMut(&mut State, u64) -> Result<bool>,
     ) -> Outcome {
         let mut stats = Stats::default();
+        if let Some(capacity) = self.frame_log {
+            stats.frame_log = Some(Ring::with_capacity(capacity));
+            socket.enable_frame_probe(self.clock.clone());
+        }
         let token = match self
             .state
             .lock()
@@ -550,6 +600,10 @@ impl<'a> Receiver<'a> {
                         return Err("profile_required");
                     }
                     clock.bind(frame.boot)?;
+                    if stats.frame_log.is_some() {
+                        let read = socket.frame_read_summary().unwrap_or_default();
+                        stats.note_frame(&frame, raw.len(), received, read);
+                    }
                     let wall = socket
                         .io_trace()
                         .back()
@@ -591,6 +645,7 @@ impl<'a> Receiver<'a> {
                             stats.dropped += 1;
                         }
                         Submit::Busy => {
+                            stats.note_stage("busy");
                             stats.queue_busy += 1;
                             stats.dropped += 1;
                         }

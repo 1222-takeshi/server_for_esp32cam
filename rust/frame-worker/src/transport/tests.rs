@@ -118,6 +118,7 @@ fn handshake_byte_and_absolute_deadline_budgets() {
             write_failed: false,
             quick_ack: false,
             trace: VecDeque::with_capacity(32),
+            probe: None,
         };
         let start = Instant::now();
         if oversized {
@@ -228,6 +229,7 @@ fn write_deadline_failure_is_fatal_instead_of_an_idle_read() {
         write_failed: false,
         quick_ack: false,
         trace: VecDeque::with_capacity(32),
+        probe: None,
     };
     assert_eq!(
         stream.write(b"pong").unwrap_err().kind(),
@@ -296,6 +298,7 @@ fn quick_ack_rearms_on_partial_reads_and_keeps_eof_and_timeout() {
         write_failed: false,
         quick_ack: true,
         trace: VecDeque::with_capacity(32),
+        probe: None,
     };
     peer.write_all(b"abc").unwrap();
     for expected in b"abc" {

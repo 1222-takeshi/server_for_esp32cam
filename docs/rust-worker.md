@@ -430,6 +430,76 @@ N入力でN-1回、最後の入力の後には入りません。これは推論R
 `session_final.version` を使用済みgenerationとして扱います。最終結果は `not_started`（復元が失敗していれば
 `not_started_restore_failed`）です。preflight のFW同一性・S実装不可などの O07 は従来どおりです。
 
+## R3: 全フレーム記録（`ESP32CAM_RUST_TRIAL_FRAME_LOG`）
+
+v2 spec D7。公開間隔が伸びた区間の原因（到着側・推論側・その他）を後から分けるための**計測専用**の記録です。
+制御・公開・判定・タイミングに影響する分岐は持ちません（記録の値を読み返す経路は無く、`frame-live` の決定は記録の有無で変わりません）。
+
+- **有効化**: 環境変数 `ESP32CAM_RUST_TRIAL_FRAME_LOG` に出力ファイルの絶対パスを指定します。未設定なら無効で、従来と同じコードパスです
+  （記録用の分岐は `Option` の判定1つ）。値は厳格に検証し、空・相対パス・`.`/`..`/`//` を含む・末尾`/`・制御文字・4096バイト超・
+  親ディレクトリが無い・パスが既に存在する（シンボリックリンクを含む）・Unicodeでない値は起動拒否です。
+  有限試験（`ESP32CAM_RUST_TRIAL_AUTO_RECOVERY=1` の continuous 試験）以外で指定した場合も起動拒否です。
+- **記録**: 受信側は `Stats.frame_log`、worker側は `State` の中に、起動時に容量分を事前確保した固定容量のバッファを持ちます
+  （容量は `(試験秒数+120)×12` 件。3600秒試験で44,640件、受信176B+worker104B で約12.5MB）。実行中のI/Oはありません。
+  worker側の追記は既存の `State` ロックの保持中に、すでに決まった値をコピーするだけです（時計の読み取り・確保・I/Oなし）。
+  容量を超えた記録は捨てて数え、header の `lost_records`（受信側とworker側の合計）に出します。
+- **書出し**: 計測と報告（stdout の native.json）が終わった後、`frame_log::write_once` が1回だけ `frames.jsonl` を
+  `O_EXCL`・モード0400で新規作成します（`fsync`なし）。書出しの失敗は無視され、ファイルが無いこと自体が欠測です。
+  終了コードと報告は変わりません。
+- **`frames.jsonl`**: 1行目が header、以降が受信した順の1フレーム1行です。時刻はすべて native 単調時計のマイクロ秒です
+  （`captured_us`/`sent_us` だけカメラ時計）。
+
+```
+{"v":1,"clock":"native_monotonic_us","nominal_interval_us":200000,"capacity":N,"records":n,"lost_records":m}
+{"sequence":..,"boot_id":..,"generation":..,"first_byte_us":..|null,"last_byte_us":..|null,"bytes":..,
+ "received_us":..,"captured_us":..,"sent_us":..,"begun_us":..|null,"finished_us":..|null,"published_us":..|null,
+ "compute_us":..|null,"stage":"..","reads":..,"max_read_us":..,"read_timeouts":..,"tcp":null|{...}}
+```
+
+| field | 意味 |
+|---|---|
+| `first_byte_us` / `last_byte_us` | そのフレームを完成させた socket read のうち、最初／最後にバイトを返した read の直後の時刻。先の read のバッファに既に入っていたフレーム（連続到着）は自分の read が無く null（`reads`=0）。直前のメッセージの最後の read が次のメッセージの先頭を含む場合、その分は前のメッセージ側に数えられる |
+| `bytes` | WebSocket メッセージ全体の長さ（envelope+JPEG） |
+| `received_us` | 既存の到着時刻（`Receiver::receive` が read 直後に取る値） |
+| `begun_us` / `finished_us` / `compute_us` | workerが推論を始めた／終えた時刻と所要時間。推論に入らなかったフレームは null（`*_before` の破棄、受信側の破棄、未処理） |
+| `published_us` | 公開された時刻。公開されなければ null |
+| `stage` | `published`、worker側の破棄（`cancelled_before`/`clock_before`/`mode_before`/`age_before`/`cancelled_after`/`clock_after`/`mode_after`/`publication_gate`/`inference_failed`）、受信側の破棄（`order`/`mode`/`age_limit`/`clock_unavailable`）、`busy`（提出が Busy）、`overwritten`（1枠のキューで後続フレームに置換された。後続にworker記録があるとき）、`unprocessed`（終了時にキュー内か処理中） |
+| `reads` / `max_read_us` / `read_timeouts` | データを返した read の回数／最初の read を除く read 呼び出しの最大所要時間／最初のバイト以降の50msタイムアウト回数（最初のバイトより前の待ちは数えない） |
+| `tcp` | `TCP_INFO`（`total_retrans`,`retrans`,`lost`,`rto_us`,`rcv_rtt_us`,`at_us`）。**現在は常に null** |
+
+**`TCP_INFO` を取れない理由**: 既存の依存（`rustix` 1.1.5 は sockopt API に `TCP_INFO` が無い、`socket2` 0.6.3 も無い）では取得できません。
+生の `getsockopt` は `libc` の直接依存（`Cargo.lock` が変わる）と `unsafe`（クレートは `#![forbid(unsafe_code)]`）が必要なので、
+新規依存を足さない方針に従い縮退して `tcp` を null にしています。再送の証拠は R2（`ss -tin`）で補います。`tcp_snapshot`（`transport.rs`）が
+この取得点で、将来依存を足すならここだけを差し替えます。
+
+### オーバーヘッドと影響しうる点
+
+設計上の上限は 1 フレームあたり「受信 read ごとの観測（時計1回＋`Instant`1回）＋記録1件の固定長コピー（受信側1件＋worker側1件）」で、
+目標は 50µs/フレーム以下（5Hz で 0.025% 未満）です。`getsockopt` は未実装なので現在は含まれません（実装した場合は syscall 1回分を加算）。
+
+測定（Mac, Apple M5 Pro, arm64, `cargo test --release`、`frame_log::tests::cost_of_recording_one_frame`（`#[ignore]`）、200回の最良値、3回実行して同じ値）:
+
+| 項目 | 値 |
+|---|---|
+| 1フレームの read 観測（30回のデータ read＋1回のタイムアウト。時計は `Instant` の差） | 約 0.50µs |
+| 受信側の記録1件＋stage更新（176B） | 約 0.005µs |
+| worker側の記録1件（104B） | 約 0.003µs |
+| 終了時、18,000フレーム分の整形（JSONL 5.4MB） | 約 5.2ms |
+| 終了時、同じ内容の書出し（`O_EXCL`、tmp） | 約 0.6ms |
+
+上の値は温かいキャッシュでの最良値で、実際の `Instant::elapsed` と host clock 呼び出し（1 read あたり数十ns〜）は含みません。
+31回の read でも桁として 1〜2µs/フレーム（目標の 50µs の 1/25 以下）と見積もります。**ARM の Pi では測っていません**（Mac のみ）。
+
+タイミングに影響しうる点（計画の既知のリスク §16 に転記する）:
+1. **受信ループの read ごとの観測**: read 1回につき時計とInstantの呼び出しが増えます。受信 thread の時間を使い、`max_receive_call_us` の分布がわずかに右へ動く可能性があります。
+2. **記録の書込み**: 事前確保した領域に順に書くため、初めてのページに触れるときのページフォルト（約4KBごと＝受信側で約23件ごと）が実行中に起きえます。キャッシュ・メモリ帯域への影響もあります（Pi では未測定）。
+3. **worker側の追記**: `State` ロックの保持時間が数ns〜数十ns延びます（公開判定のロックと同じ区間）。
+4. **終了時の整形と書出し**: 約12.5MBまでを整形・書出しする間、プロセスの終了が遅れます（Mac で約6ms、Pi の SD カードでは未測定）。報告の stdout は先に書かれるため、報告内容には影響しません。supervisor が子プロセスの終了を待つ時間が伸びるだけです。
+5. **未測定**: Pi 上の実測値、`getsockopt`（未実装）、記録 ON/OFF でのスケジューラ・CPU・熱の差。記録 ON で公開間隔が変わるかは、実機の A/B でしか確認できません。
+
+テスト: `session::tests::recording_on_and_off_make_identical_decisions`（同じ合成時系列・注入時計で ON/OFF の公開集合と順序・破棄 stage・hold・A14 の判定・終了コードが一致。
+容量2の欠測でも一致）、`frame_log::tests`（環境変数、容量超過、schema、`O_EXCL`、read統計、書出し関数が終了時の1か所だけであること）。
+
 ## 実験用ハーネス
 
 `scripts/spin_on_run/` に標準ライブラリのみのPython実装があります（offline 16 runのABBAランナー、

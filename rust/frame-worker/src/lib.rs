@@ -13,6 +13,7 @@ pub mod control;
 #[cfg(feature = "transport")]
 pub mod cpu_affinity;
 pub mod detector;
+pub mod frame_log;
 #[cfg(feature = "transport")]
 pub mod host_clock;
 #[cfg(feature = "jpeg")]
