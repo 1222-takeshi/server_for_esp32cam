@@ -364,3 +364,21 @@ fn cost_of_recording_one_frame() {
         std::mem::size_of::<WorkRecord>()
     );
 }
+
+/// The same bytes are read by `tests/test_spin_on_run_interval_classify.py`, so a renamed
+/// or reordered field breaks the writer and the reader's tests together.
+#[test]
+fn rendered_output_matches_the_fixture_the_classifier_reads() {
+    let mut r = Ring::with_capacity(8);
+    let mut w = Ring::with_capacity(8);
+    r.push(recv(1, None));
+    r.push(recv(2, Some("order")));
+    r.push(recv(4, None));
+    w.push(work(1, "published", true));
+    w.push(work(4, "publication_gate", false));
+    let text = String::from_utf8(render(&r, &w)).unwrap();
+    assert_eq!(
+        text,
+        include_str!("../../../../tests/fixtures/spin_on_run/frames_render.jsonl")
+    );
+}

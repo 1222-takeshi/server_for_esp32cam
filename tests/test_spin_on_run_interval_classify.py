@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -403,3 +404,29 @@ def test_main_writes_the_report_once(tmp_path, capsys):
     empty.mkdir()
     assert ic.main([str(empty)]) == 0
     assert json.loads((empty / "interval-classification.json").read_text())["classifiable"] is False
+
+
+# --- the Rust writer's real output ---------------------------------------------------------
+
+RENDERED = Path(__file__).parent / "fixtures" / "spin_on_run" / "frames_render.jsonl"
+READ_FIELDS = {
+    "sequence", "boot_id", "generation", "first_byte_us", "last_byte_us", "received_us",
+    "captured_us", "begun_us", "finished_us", "published_us", "compute_us", "tcp",
+}  # fmt: skip
+
+
+def test_the_classifier_reads_the_frame_log_the_rust_writer_renders(tmp_path):
+    # tests.rs in rust/frame-worker (frame_log) asserts render() produces exactly this file.
+    lines = RENDERED.read_text().splitlines()
+    rows = [json.loads(line) for line in lines[1:]]
+    assert READ_FIELDS <= set(rows[0])
+    # Frame 4 is published 300 ms after frame 1, so the interval 1 -> 4 is stretched.
+    rows[2]["published_us"] = rows[0]["published_us"] + 300_000
+    (tmp_path / ic.FRAMES).write_text("\n".join([lines[0], *map(json.dumps, rows)]) + "\n")
+    out = ic.evaluate(tmp_path)
+    assert out["classifiable"] is True
+    assert out["frames"]["records"] == 3 and out["frames"]["unreadable_lines"] == 0
+    assert out["frames"]["lost_records"] == 0 and out["frames"]["header"]["v"] == 1
+    interval = only(out)
+    assert (interval["from_sequence"], interval["to_sequence"]) == (1, 4)
+    assert interval["d_us"] == 300_000 and interval["cross_generation"] is False
