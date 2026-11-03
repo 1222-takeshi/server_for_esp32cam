@@ -97,7 +97,7 @@ def summarize(gaps: list[int], seconds: int) -> dict:
         "max_us": max(gaps) if gaps else None,
         "over_us": over,
         "gate": gate,
-        "target": "met" if met else "not_met",
+        "target": "not_judgeable" if n < needed else "met" if met else "not_met",
     }
 
 
@@ -127,5 +127,5 @@ def evaluate(report: object, seconds: int) -> dict:
             raise TypeError("window")
         gaps, excluded = normal_intervals(samples, start, end)
     except (KeyError, TypeError, ValueError):
-        return {**out, "gate": "unjudgeable", "target": "not_met", "n": 0, "error": "schema"}
+        return {**out, "gate": "unjudgeable", "target": "not_judgeable", "n": 0, "error": "schema"}
     return {**out, **summarize(gaps, seconds), "excluded": excluded}

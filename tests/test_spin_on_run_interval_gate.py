@@ -104,7 +104,13 @@ def test_minimum_interval_count(seconds, count, gate):
 
 def test_a_failing_p99_with_too_few_intervals_is_still_unjudgeable():
     out = ig.evaluate(report_from(samples_from([400_000] * 100), seconds=600), 600)
-    assert out["gate"] == "unjudgeable" and out["target"] == "not_met"
+    assert out["gate"] == "unjudgeable" and out["target"] == "not_judgeable"
+
+
+def test_target_is_not_met_when_the_sample_is_too_small_even_if_p99_and_max_are_fine():
+    out = ig.evaluate(report_from(samples_from([NORMAL] * 100), seconds=700), 600)
+    assert out["gate"] == "unjudgeable" and out["over_us"]["gt300"] == 0
+    assert out["target"] == "not_judgeable"  # never "met" on too few intervals
 
 
 # --- exclusion rule (N2) -----------------------------------------------------------
@@ -346,7 +352,10 @@ def test_saved_runs_reproduce_the_proposal_n2_values(run):
     if judged:  # candidate A1 is the same p99 <= 250 ms test as the gate
         assert (summary["gate"] == "pass") == expected["scores"]["A"]["A1"]
     scores = expected["scores"]["A"]
-    assert (summary["target"] == "met") == (scores["A1"] and scores["A2"])
+    if judged:
+        assert (summary["target"] == "met") == (scores["A1"] and scores["A2"])
+    else:
+        assert summary["target"] == "not_judgeable"
     if measurement and report["reason"] == "completed":
         full = ig.evaluate(report, 600)
         assert full["n"] == expected["n"] and full["gate"] == summary["gate"]

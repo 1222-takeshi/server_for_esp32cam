@@ -544,10 +544,11 @@ offline の S・M は公開間隔を持たないので対象外です。完走�
   `interval_unjudgeable_restore_failed`）。優先順位は 中止（A）＞ 開始禁止・測定なし（`not_started`）＞ 不合格（F01〜F08）＞
   判定不能 ＞ 合格です。既存のF/A/Oコード・判定・閾値は変えていません（`max_gap` 500msは報告専用のまま）。
 - **目標（A。報告のみで、ゲートではない）**: p99 ≤ 250ms かつ最大 ≤ 300ms（300msを超える間隔が0件）なら `target: "met"`、
-  そうでなければ `not_met`。導出（鮮度の導出: 500 − 伸びた間隔の age 項 B の観測最大 180.5 = 319.5ms 未満 → 切り捨てて300ms）を
+  そうでなければ `not_met`。間隔数が最小件数（4.5 × 秒）に満たないとき（`gate` が `unjudgeable`）は、p99 と最大が条件を
+  満たしていても `met` にせず `not_judgeable` とします。導出（鮮度の導出: 500 − 伸びた間隔の age 項 B の観測最大 180.5 = 319.5ms 未満 → 切り捨てて300ms）を
   `derivation` に添えます。
 - **run ごとに報告するもの**: `n`、`excluded`、`p99_us`（と厳密値 `p99_us_exact`）、`max_us`、`over_us`（>250/>300/>350 の件数）、
-  `gate`（pass/fail/unjudgeable）、`target`（met/not_met）、`queue_busy`（`receiver.queue_busy`）、`receiver_dropped`
+  `gate`（pass/fail/unjudgeable）、`target`（met/not_met/not_judgeable）、`queue_busy`（`receiver.queue_busy`）、`receiver_dropped`
   （`receiver.dropped`）、`worker_dropped`（`worker.dropped`）。閾値と最小件数は登録後に動かしません。
 - 保存済みの6 runで、提案の N2 の値（`criteria-scoring.json` の `per_run_N2`: n・p99・最大・件数）を再現する回帰テストが
   あります（`tests/test_spin_on_run_interval_gate.py`）。測定区間を持たない3本（affinity・capture・mss）は、提案と同じく全公開結果
