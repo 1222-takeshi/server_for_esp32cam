@@ -5,9 +5,14 @@
 //! or not a result was published, so a stalled publication path cannot hide a
 //! violation. Hold and protection checks run on every call, with every age
 //! evaluated at the current time; the window scan runs on a one second
-//! schedule. A result about to be published is checked against the same limits
+//! schedule. The one exception is the freshness of the last accepted input
+//! (the tick freshness term), which is judged only while a result is being
+//! published, i.e. not during a hold (v2 spec D1). A result about to be published is checked against the same limits
 //! by the publisher, which refuses it and reports the refusal here.
-use crate::pipeline::Sample;
+use crate::{
+    operating_mode::{Mode, OperatingMode},
+    pipeline::Sample,
+};
 
 pub const CONTINUOUS_HOLD_US: u64 = 15_000_000;
 pub const WINDOW_US: u64 = 10_000_000;
@@ -32,6 +37,12 @@ pub fn is_abort_reason(reason: &str) -> bool {
         PROTECTION_VIOLATION,
     ]
     .contains(&reason)
+}
+
+/// Tracking is requested and no tracking hold is in progress (v2 spec D1): the
+/// only time the tick freshness term is judged.
+pub fn publishing(mode: &OperatingMode) -> bool {
+    mode.requested() == Mode::Tracking && mode.tracking_hold_started().is_none()
 }
 
 /// Natural hold budget: one percent of the measurement interval.
@@ -88,9 +99,13 @@ impl Protection {
         self.last_sync_us.map(|at| now.saturating_sub(at))
     }
 
-    pub fn violated(&self, now: u64) -> bool {
-        self.input_age_high_us(now)
-            .is_some_and(|v| v > AGE_LIMIT_US)
+    /// `publishing` gates only the tick freshness term (the age of the last
+    /// accepted input aged to `now`); the clock limits apply on every call.
+    pub fn violated(&self, now: u64, publishing: bool) -> bool {
+        (publishing
+            && self
+                .input_age_high_us(now)
+                .is_some_and(|v| v > AGE_LIMIT_US))
             || self.rtt_us(now).is_some_and(|v| v > RTT_LIMIT_US)
             || self.sync_age_us(now).is_some_and(|v| v > SYNC_LIMIT_US)
             || self.drift_violation
@@ -105,6 +120,11 @@ pub struct Observation<'a> {
     pub last_hold: Option<(u64, u64)>,
     pub samples: &'a [Sample],
     pub protection: Protection,
+    /// Tracking is requested and no tracking hold is in progress. The tick
+    /// freshness term is evaluated only then; a hold waits for a new
+    /// generation's ACK, and the recovery condition keeps requiring a result
+    /// within 500 ms, so the freshness bound still protects the hold.
+    pub publishing: bool,
     /// Set when a result was refused at publication because a protection
     /// limit was already violated at that moment.
     pub publish_refused_at: Option<u64>,
@@ -155,8 +175,11 @@ impl OnlineGuard {
         self.checked_samples = o.samples.len();
         let stale = fresh.iter().any(|s| s.age_high_us > AGE_LIMIT_US);
         let unevaluable = o.interval.is_some() && o.protection.drift_unevaluable;
-        (stale || unevaluable || o.publish_refused_at.is_some() || o.protection.violated(o.now))
-            .then_some(PROTECTION_VIOLATION)
+        (stale
+            || unevaluable
+            || o.publish_refused_at.is_some()
+            || o.protection.violated(o.now, o.publishing))
+        .then_some(PROTECTION_VIOLATION)
     }
 
     fn interval_violation(

@@ -349,3 +349,48 @@ fn recovery_requires_owner_permit_and_never_reuses_an_old_ack() {
         false
     );
 }
+
+/// The recovery condition keeps requiring a result within 500 ms of the
+/// recovery decision: this is what bounds the freshness of a hold's recovery
+/// now that the tick freshness term is not judged during a hold.
+#[test]
+fn recovery_requires_the_latest_result_within_500ms() {
+    for (wait, recovers) in [(500_000u64, true), (500_001, false)] {
+        let time = Arc::new(AtomicU64::new(1));
+        let copy = time.clone();
+        let mut mode = OperatingMode::new_with_tracking_recovery(
+            10,
+            move || copy.load(Ordering::SeqCst),
+            true,
+        )
+        .unwrap();
+        mode.hello(1, 0).unwrap();
+        mode.request(Mode::Tracking, mode.generation(), true)
+            .unwrap();
+        mode.acknowledge(1, mode.generation(), Mode::Tracking, 100)
+            .unwrap();
+        mode.protect("frames_expired").unwrap();
+        mode.acknowledge(1, mode.generation(), Mode::Tracking, 100)
+            .unwrap();
+        for seq in 1..=54 {
+            time.fetch_add(190_000, Ordering::SeqCst);
+            assert!(mode.publish_result(&frame(&mode, seq), || true).unwrap());
+        }
+        // Everything else is satisfied except the owner's permit, so the age
+        // of the latest result at the decision is the only variable.
+        time.fetch_add(wait, Ordering::SeqCst);
+        mode.set_recovery_ready(true);
+        let status = mode.status().unwrap();
+        mode.set_recovery_ready(false);
+        assert_eq!(
+            status["tracking_automatic_recoveries"],
+            u64::from(recovers),
+            "{wait} us"
+        );
+        assert_eq!(
+            mode.tracking_hold_started().is_none(),
+            recovers,
+            "{wait} us"
+        );
+    }
+}

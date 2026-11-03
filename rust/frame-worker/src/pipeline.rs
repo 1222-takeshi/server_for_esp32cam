@@ -553,7 +553,7 @@ impl Worker {
                             &job.frame,
                             |now| {
                                 published_at.set(now);
-                                if *publish_guard && protection.violated(now) {
+                                if *publish_guard && protection.violated(now, true) {
                                     refused.set(true);
                                     return false;
                                 }
