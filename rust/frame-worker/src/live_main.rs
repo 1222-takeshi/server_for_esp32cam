@@ -755,18 +755,28 @@ mod tests {
         }
         assert!(abort.is_none());
     }
-    /// v2 spec D1: the tick freshness term is judged only while Tracking is
-    /// requested and no tracking hold is in progress.
+    /// v2 spec D1b: the online check never judges the freshness of the last
+    /// accepted input on a tick; the clock limits still apply in every mode.
     #[test]
-    fn online_check_judges_the_tick_freshness_term_only_while_publishing() {
+    fn online_check_never_judges_the_tick_freshness_term() {
         use esp32cam_frame_worker::operating_mode::Mode;
-        let mut s = State::new_with_tracking_recovery(10, Arc::new(|| 10_000_000), true).unwrap();
-        s.mode.hello(1, 0).unwrap();
-        // The accepted input is 9.7 s old at the evaluation time.
-        s.protection.input = Some(online_abort::AcceptedInput {
-            received_us: 300_000,
-            age_high_us: 100_000,
-        });
+        let state = |mode: Option<Mode>, hold: bool| {
+            let mut s =
+                State::new_with_tracking_recovery(10, Arc::new(|| 10_000_000), true).unwrap();
+            s.mode.hello(1, 0).unwrap();
+            if let Some(mode) = mode {
+                s.mode.request(mode, s.mode.generation(), true).unwrap();
+            }
+            if hold {
+                s.mode.protect("frames_expired").unwrap();
+            }
+            // The accepted input is 9.7 s old at the evaluation time.
+            s.protection.input = Some(online_abort::AcceptedInput {
+                received_us: 300_000,
+                age_high_us: 100_000,
+            });
+            s
+        };
         let trial = Trial::new_continuous(1, 60_000_000, false).unwrap();
         let check = |s: &State| {
             let mut abort = None;
@@ -779,35 +789,23 @@ mod tests {
             );
             (result, abort.map(|a| a.0))
         };
-        // Eco (initial): out of scope.
-        assert!(!online_abort::publishing(&s.mode));
-        assert_eq!(check(&s), (Ok(true), None));
-        // Tracking, no hold: judged.
-        s.mode
-            .request(Mode::Tracking, s.mode.generation(), true)
-            .unwrap();
-        assert!(online_abort::publishing(&s.mode));
-        assert_eq!(
-            check(&s),
-            (Err("protection_violation"), Some("protection_violation"))
-        );
-        // Tracking with a hold in progress: out of scope again.
-        let mut s2 = State::new_with_tracking_recovery(10, Arc::new(|| 10_000_000), true).unwrap();
-        s2.mode.hello(1, 0).unwrap();
-        s2.mode
-            .request(Mode::Tracking, s2.mode.generation(), true)
-            .unwrap();
-        s2.mode.protect("frames_expired").unwrap();
-        s2.protection.input = s.protection.input;
-        assert!(s2.mode.tracking_hold_started().is_some());
-        assert!(!online_abort::publishing(&s2.mode));
-        assert_eq!(check(&s2), (Ok(true), None));
-        // The clock limits still apply during the hold.
-        s2.protection.pending_since_us = Some(0);
-        assert_eq!(
-            check(&s2),
-            (Err("protection_violation"), Some("protection_violation"))
-        );
+        // Initial Eco, Tracking, and Tracking with a hold in progress.
+        for (mode, hold) in [
+            (None, false),
+            (Some(Mode::Tracking), false),
+            (Some(Mode::Tracking), true),
+        ] {
+            let s = state(mode, hold);
+            assert_eq!(s.mode.tracking_hold_started().is_some(), hold);
+            assert_eq!(check(&s), (Ok(true), None), "{mode:?} {hold}");
+            let mut s = s;
+            s.protection.pending_since_us = Some(0);
+            assert_eq!(
+                check(&s),
+                (Err("protection_violation"), Some("protection_violation")),
+                "{mode:?} {hold}"
+            );
+        }
     }
     #[test]
     fn raw_clock_is_explicit_and_requires_continuous_policy() {

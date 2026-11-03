@@ -1,4 +1,5 @@
 use super::*;
+use crate::operating_mode::Mode;
 
 const S: u64 = 1_000_000;
 
@@ -29,7 +30,6 @@ fn at(now: u64, interval: (u64, u64)) -> Observation<'static> {
         last_hold: None,
         samples: &[],
         protection: Protection::default(),
-        publishing: true,
         publish_refused_at: None,
     }
 }
@@ -287,18 +287,15 @@ fn accepted(received_us: u64, age_high_us: i128) -> Protection {
 }
 
 #[test]
-fn input_age_is_aged_to_the_current_time_with_an_exclusive_500ms_limit() {
+fn a_stale_last_input_is_not_a_tick_violation_and_no_input_is_no_evidence() {
     let interval = (100 * S, 700 * S);
-    // 100 ms old on arrival: exactly 500 ms after 400 ms, over it one µs later.
-    for (elapsed, expected) in [
-        (399_999, None),
-        (400_000, None),
-        (400_001, Some(PROTECTION_VIOLATION)),
-    ] {
+    // 100 ms old on arrival: it passes 500 ms after 400 ms, and a tick (of an
+    // interval without a closed window yet) reads nothing into it, however old.
+    for elapsed in [399_999, 400_000, 400_001, 5 * S, 9 * S] {
         let mut guard = OnlineGuard::new(600 * S);
         let mut o = at(100 * S + elapsed, interval);
         o.protection = accepted(100 * S, 100_000);
-        assert_eq!(guard.observe(&o), expected, "{elapsed}");
+        assert_eq!(guard.observe(&o), None, "{elapsed}");
     }
     // No input accepted yet is no evidence, not a violation.
     let dense = steady(100 * S, 301 * S, 100_000);
@@ -309,23 +306,22 @@ fn input_age_is_aged_to_the_current_time_with_an_exclusive_500ms_limit() {
 }
 
 #[test]
-fn a_stalled_input_is_detected_within_two_seconds_with_publication_fully_stopped() {
+fn a_stalled_input_with_publication_stopped_raises_no_tick_freshness_abort() {
     let interval = (100 * S, 3_700 * S);
-    let violation_at = 400_000; // 100 ms arrival bound reaches 500 ms
+    let dense = steady(100 * S, 105 * S, 100_000);
     for pass in [50_000, S] {
         let mut guard = OnlineGuard::new(3600 * S);
-        let mut detected = None;
         for step in 0..100u64 {
             let elapsed = step * pass;
             let mut o = at(100 * S + elapsed, interval);
+            o.samples = &dense[..dense.partition_point(|s| s.published_us <= o.now)];
             o.protection = accepted(100 * S, 100_000);
-            if guard.observe(&o) == Some(PROTECTION_VIOLATION) {
-                detected = Some(elapsed);
-                break;
+            // Only the window rule can end this, and no window is closed below
+            // 50 results within the first 9 s.
+            if elapsed < 9 * S {
+                assert_eq!(guard.observe(&o), None, "{elapsed}");
             }
         }
-        let detected = detected.expect("violation detected");
-        assert!(detected > violation_at && detected - violation_at <= 2 * S);
     }
 }
 
@@ -431,8 +427,7 @@ fn abort_reasons_are_closed_set_and_exit_code_is_fixed() {
 /// ends, which in the receiver happens only after the new generation has been
 /// acknowledged and a result has been published. Nothing is published during
 /// the hold. The protection view is exactly what the receiver stores: the last
-/// accepted input, aged to the current time. `publishing` is what the live
-/// binary derives: no hold in progress.
+/// accepted input. A tick never judges its age (v2 spec D1b).
 struct Timeline {
     frame_us: u64,
     arrival_age_us: i128,
@@ -509,7 +504,6 @@ impl Timeline {
                     o.hold_started = Some(began);
                 }
             }
-            o.publishing = o.hold_started.is_none();
             if let Some(code) = guard.observe(&o) {
                 return Some((code, now));
             }
@@ -530,32 +524,34 @@ fn timeline(hold: Option<(u64, u64)>) -> Timeline {
 }
 
 #[test]
-fn steady_input_with_a_300ms_arrival_age_and_190ms_frames_is_not_a_violation() {
-    // The age bound peaks at 300 ms + (190 ms - 1 us) just before the next frame.
+fn steady_input_is_not_a_violation_however_slow_the_frames_are_between_publications() {
+    // The age bound at the last pass peaks at 300 ms + (190 ms - 1 us).
     assert_eq!(timeline(None).run((100 * S, 700 * S), 160 * S), None);
+    // 300 ms + 250 ms would have crossed 500 ms under the old tick term; a tick
+    // no longer judges it, and every published sample is still 100 ms.
     let mut slower = timeline(None);
-    slower.frame_us = 260_000; // 300 ms + 250 ms at the last pass is over the limit
-    assert_eq!(
-        slower.run((100 * S, 700 * S), 160 * S).map(|c| c.0),
-        Some(PROTECTION_VIOLATION)
-    );
+    slower.frame_us = 260_000;
+    assert_eq!(slower.run((100 * S, 700 * S), 160 * S), None);
 }
 
+/// Without any publication and any hold, the protection is the window rule
+/// (A13), never the tick: nothing fires while the stream is silent until the
+/// first closed window falls below 50 results.
 #[test]
-fn a_stalled_stream_is_a_violation_without_any_hold_and_with_publication_stopped() {
+fn a_stalled_stream_is_a13_and_never_a_tick_freshness_abort() {
     let mut stalled = timeline(None);
     stalled.stall_from = Some(300 * S);
-    // The last input arrived at or before 300 s with a 300 ms bound; the bound
-    // passes 500 ms about 200 ms later and the next 50 ms pass sees it.
-    let (code, when) = stalled.run((100 * S, 700 * S), 310 * S).unwrap();
-    assert_eq!(code, PROTECTION_VIOLATION);
-    assert!(when <= 300 * S + 400_000, "{when}");
+    // Silent from 300 s (last result 300.3 s): no abort for 9 s.
+    assert_eq!(stalled.run((100 * S, 700 * S), 309 * S), None);
+    let (code, when) = stalled.run((100 * S, 700 * S), 320 * S).unwrap();
+    assert_eq!(code, WINDOW_BELOW_50);
+    assert!((309 * S..=311 * S).contains(&when), "{when}");
 }
 
-/// v2 spec D1: the tick freshness term is judged only while publishing. A
-/// hold has no accepted input by construction (the old generation is rejected
-/// until the new one is acknowledged), so its stale last input is not read as
-/// a violation; the hold limits and the recovery condition bound it instead.
+/// v2 spec D1b: a tick does not judge freshness, in or out of a hold. A hold
+/// has no accepted input by construction (the old generation is rejected until
+/// the new one is acknowledged); the hold limits and the recovery condition
+/// bound it instead.
 #[test]
 fn natural_holds_of_3_and_6_seconds_do_not_trip_the_tick_freshness_term() {
     let interval = (100 * S, 700 * S);
@@ -571,7 +567,7 @@ fn natural_holds_of_3_and_6_seconds_do_not_trip_the_tick_freshness_term() {
 #[test]
 fn a_15_second_hold_is_a11_and_an_over_budget_hold_is_a12_not_a_freshness_abort() {
     // Budget of 3600 s is 36 s, so only the 15 s limit can fire. The accepted
-    // input is long stale here and the term is out of scope: A11 is what ends it.
+    // input is long stale here and a tick does not judge it: A11 is what ends it.
     let interval = (1_000 * S, 4_600 * S);
     let began = 1_200 * S;
     let dense = steady(1_000 * S, 1_300 * S, 100_000);
@@ -583,7 +579,6 @@ fn a_15_second_hold_is_a11_and_an_over_budget_hold_is_a12_not_a_freshness_abort(
         let mut o = at(now, interval);
         o.samples = &dense;
         o.hold_started = Some(began);
-        o.publishing = false;
         o.protection = accepted(began - 100_000, 300_000);
         assert_eq!(guard.observe(&o), expected, "{now}");
     }
@@ -602,54 +597,66 @@ fn a_15_second_hold_is_a11_and_an_over_budget_hold_is_a12_not_a_freshness_abort(
 }
 
 #[test]
-fn input_age_view_is_unchanged_but_judged_only_while_publishing() {
+fn input_age_view_is_judged_only_by_the_check_at_publication() {
     // One input, 300 ms bound at arrival: its age keeps growing whatever
-    // happens to the mode; only whether the term is evaluated depends on it.
+    // happens; only the check at the moment of a publication reads it.
     let view = accepted(10 * S, 300_000);
     assert!(!view.violated(10 * S + 199_999, true));
-    assert!(!view.violated(10 * S + 200_000, true));
+    assert!(!view.violated(10 * S + 200_000, true)); // exactly 500,000: allowed
     assert!(view.violated(10 * S + 200_001, true));
     assert!(view.violated(30 * S, true));
-    assert!(!view.violated(30 * S, false)); // not publishing: out of scope
+    assert!(!view.violated(30 * S, false)); // a tick never reads it
     assert_eq!(view.input_age_high_us(30 * S), Some(20_300_000));
 }
 
+/// (a)/(b) v2 spec D1b: ticks before the hold is declared (127-311 ms after the
+/// last publication in the stored live runs, just under 500 ms, up to the
+/// declaration) and ticks during the hold raise nothing for a stale input.
 #[test]
-fn tick_freshness_is_exactly_500ms_inclusive_while_publishing() {
-    let interval = (100 * S, 700 * S);
-    for (elapsed, expected) in [
-        (399_999, None),
-        (400_000, None),
-        (400_001, Some(PROTECTION_VIOLATION)),
+fn a_tick_never_judges_input_freshness_before_during_or_after_a_hold_is_declared() {
+    let interval = (100 * S, 3_700 * S);
+    let last = 100 * S;
+    let declared = last + 500_000;
+    // Results around the silence keep every closed window above 50.
+    let dense = steady(last, last + 20 * S, 100_000);
+    for elapsed in [
+        127_000,
+        200_001,
+        279_000,
+        311_000,
+        499_999,
+        500_000,
+        500_001,
+        2 * S,
+        14 * S,
     ] {
-        let mut guard = OnlineGuard::new(600 * S);
-        let mut o = at(100 * S + elapsed, interval);
-        o.protection = accepted(100 * S, 100_000);
-        o.publishing = true;
-        assert_eq!(guard.observe(&o), expected, "{elapsed}");
-        // The same time outside publishing is out of scope.
-        let mut guard = OnlineGuard::new(600 * S);
-        o.publishing = false;
-        assert_eq!(guard.observe(&o), None, "{elapsed} not publishing");
+        let mut guard = OnlineGuard::new(3_600 * S);
+        let mut o = at(last + elapsed, interval);
+        o.samples = &dense;
+        o.protection = accepted(last, 300_000);
+        // Before the declaration there is no hold; from it the hold is in progress.
+        o.hold_started = (last + elapsed >= declared).then_some(declared);
+        assert_eq!(guard.observe(&o), None, "{elapsed}");
     }
 }
 
 #[test]
-fn a_published_sample_over_500ms_is_still_a_violation_during_a_hold() {
+fn a_published_sample_over_500ms_is_a_violation_in_and_out_of_a_hold() {
     let interval = (100 * S, 700 * S);
-    for (age, expected) in [(500_000, None), (500_001, Some(PROTECTION_VIOLATION))] {
-        let mut guard = OnlineGuard::new(600 * S);
-        let samples = [sample(100 * S + 1, age)];
-        let mut o = at(100 * S + 2, interval);
-        o.samples = &samples;
-        o.hold_started = Some(100 * S);
-        o.publishing = false;
-        assert_eq!(guard.observe(&o), expected, "{age}");
+    for hold_started in [None, Some(100 * S)] {
+        for (age, expected) in [(500_000, None), (500_001, Some(PROTECTION_VIOLATION))] {
+            let mut guard = OnlineGuard::new(600 * S);
+            let samples = [sample(100 * S + 1, age)];
+            let mut o = at(100 * S + 2, interval);
+            o.samples = &samples;
+            o.hold_started = hold_started;
+            assert_eq!(guard.observe(&o), expected, "{age} {hold_started:?}");
+        }
     }
 }
 
 #[test]
-fn clock_limits_and_an_unevaluable_estimate_are_still_violations_during_a_hold() {
+fn clock_limits_and_an_unevaluable_estimate_are_violations_in_and_out_of_a_hold() {
     let interval = (100 * S, 700 * S);
     let now = 100 * S + 2;
     let unevaluable = Protection {
@@ -694,42 +701,68 @@ fn clock_limits_and_an_unevaluable_estimate_are_still_violations_during_a_hold()
         ),
         (unevaluable, Some(PROTECTION_VIOLATION)),
     ] {
-        let mut guard = OnlineGuard::new(600 * S);
-        let mut o = at(now, interval);
-        o.protection = protection;
-        o.hold_started = Some(now - S);
-        o.publishing = false;
-        assert_eq!(guard.observe(&o), expected, "{protection:?}");
+        for hold_started in [None, Some(now - S)] {
+            let mut guard = OnlineGuard::new(600 * S);
+            let mut o = at(now, interval);
+            o.protection = protection;
+            o.hold_started = hold_started;
+            assert_eq!(
+                guard.observe(&o),
+                expected,
+                "{protection:?} {hold_started:?}"
+            );
+        }
     }
 }
 
-/// Known risk K2 (v2 spec D3), fixed as a fact and not worked around: a hold is
-/// declared 500 ms after the last publication, but the tick freshness term is
-/// "arrival age bound + time since the last accepted input" and crosses 500 ms
-/// earlier (the stored live runs: about 127-311 ms after the last
-/// publication). When the input goes silent the A14 therefore fires before the
-/// hold is declared, and a hold that follows a silent input (`frames_expired`)
-/// is not saved by the v2 exemption. A fail in the live stage is a FAIL.
+/// Known risk K2 is resolved by v2 spec D1b: a hold is declared 500 ms after
+/// the last publication, and the tick no longer crosses 500 ms earlier. When
+/// the input goes silent nothing fires before the declaration (formerly about
+/// 127-311 ms after the last publication); the hold then runs under the hold
+/// limits.
 #[test]
-fn known_risk_k2_freshness_fires_before_the_hold_is_declared() {
+fn silence_before_the_hold_is_declared_raises_no_freshness_abort() {
     let interval = (100 * S, 700 * S);
     let silent_from = 300 * S;
-    let mut stalled = timeline(Some((silent_from, silent_from + 6 * S)));
+    let mut stalled = timeline(Some((silent_from, silent_from + 7 * S)));
     // 300 ms bound on arrival; the last frame is at most 190 ms before 300 s.
-    // The hold is declared only 500 ms after the last publication (~300 s).
     stalled.declared_at = Some(silent_from + 500_000);
+    // Until just after the declaration nothing fires (the old term fired by
+    // silent_from + 250 ms).
+    assert_eq!(stalled.run(interval, silent_from + 600_000), None);
+    // The hold then ends the run through A12 (6 s budget of a 600 s interval),
+    // not through A14.
     let (code, when) = stalled.run(interval, 340 * S).unwrap();
-    assert_eq!(code, PROTECTION_VIOLATION);
-    assert!(
-        when < silent_from + 500_000,
-        "fires before the declaration: {when}"
-    );
-    assert!(when <= silent_from + 250_000, "{when}");
-    // Without the declaration lag (the hold starts at the silence) it is quiet.
+    assert_eq!(code, NATURAL_HOLD_BUDGET);
+    assert!((306 * S..=307 * S).contains(&when), "{when}");
+}
+
+/// A long silence without any publication ends in the hold protections, A12 or
+/// A13 whichever the interval reaches first, and A11 for a hold with results
+/// around it; never in a freshness abort.
+#[test]
+fn a_long_outage_without_publication_ends_in_hold_protections() {
+    let silent_from = 300 * S;
+    let outage = timeline(Some((silent_from, silent_from + 20 * S)));
+    let mut declared = timeline(Some((silent_from, silent_from + 20 * S)));
+    declared.declared_at = Some(silent_from + 500_000);
+    // 600 s interval: budget 6 s, reached at 306.5 s.
+    let (code, when) = declared.run((100 * S, 700 * S), 340 * S).unwrap();
+    assert_eq!(code, NATURAL_HOLD_BUDGET);
+    assert!((306_500_000..=306_600_000).contains(&when), "{when}");
+    // 3600 s interval: budget 36 s; the window rule fires at ~310 s, before A11.
     assert_eq!(
-        timeline(Some((silent_from, silent_from + 6 * S))).run(interval, 340 * S),
-        None
+        outage.run((100 * S, 3_700 * S), 340 * S),
+        Some((WINDOW_BELOW_50, 310 * S))
     );
+    // With dense results around it, the 15 s hold limit is what ends it.
+    let dense = steady(1_000 * S, 1_300 * S, 100_000);
+    let mut guard = OnlineGuard::new(3_600 * S);
+    let mut o = at(1_200 * S + 15 * S, (1_000 * S, 4_600 * S));
+    o.samples = &dense;
+    o.hold_started = Some(1_200 * S);
+    o.protection = accepted(1_200 * S - 400_000, 300_000);
+    assert_eq!(guard.observe(&o), Some(CONTINUOUS_HOLD));
 }
 
 #[test]
@@ -769,22 +802,6 @@ fn an_undefined_clock_estimate_is_a_violation_only_inside_the_measurement_interv
     }
 }
 
-#[test]
-fn publishing_is_tracking_requested_without_a_hold_in_progress() {
-    use crate::operating_mode::OperatingMode;
-    let mut mode = OperatingMode::new_with_tracking_recovery(10, || 1_000, true).unwrap();
-    mode.hello(1, 0).unwrap();
-    assert!(!publishing(&mode)); // initial Eco
-    mode.request(Mode::Tracking, mode.generation(), true)
-        .unwrap();
-    assert!(publishing(&mode));
-    mode.protect("frames_expired").unwrap();
-    assert!(mode.tracking_hold_started().is_some());
-    assert!(!publishing(&mode)); // hold in progress
-    mode.protect("resource_thermal_fault").unwrap();
-    assert!(!publishing(&mode)); // back to Eco
-}
-
 fn tracking_state(hold: bool) -> State {
     let mut s =
         State::new_with_tracking_recovery(10, std::sync::Arc::new(|| 10 * S), true).unwrap();
@@ -803,31 +820,31 @@ fn tracking_state(hold: bool) -> State {
     s
 }
 
-/// The State-to-Observation wiring (v2 spec D1), judged through the guard.
+/// The State-to-Observation wiring (v2 spec D1b), judged through the guard: a
+/// stale last input is not a violation on a tick in any mode.
 #[test]
-fn observation_judges_the_tick_freshness_term_only_while_publishing() {
+fn observation_does_not_judge_a_stale_input_on_a_tick_in_any_mode() {
     let check = |s: &State| OnlineGuard::new(60 * S).observe(&observation(10 * S, None, s));
-    // Initial Eco: out of scope.
+    // Initial Eco.
     let mut eco = tracking_state(false);
     eco.mode =
         crate::operating_mode::OperatingMode::new_with_tracking_recovery(10, || 10 * S, true)
             .unwrap();
     eco.mode.hello(1, 0).unwrap();
-    assert!(!observation(10 * S, None, &eco).publishing);
     assert_eq!(check(&eco), None);
-    // Tracking without a hold: the stale input is a violation.
-    let publishing_state = tracking_state(false);
-    assert!(observation(10 * S, None, &publishing_state).publishing);
-    assert_eq!(check(&publishing_state), Some(PROTECTION_VIOLATION));
-    // Tracking with a hold in progress: the same input is not judged.
+    // Tracking without a hold: the 9.7 s old input is not judged on a tick.
+    let tracking = tracking_state(false);
+    assert_eq!(check(&tracking), None);
+    // Tracking with a hold in progress.
     let held = tracking_state(true);
-    let o = observation(10 * S, None, &held);
-    assert!(!o.publishing && o.hold_started.is_some());
+    assert!(observation(10 * S, None, &held).hold_started.is_some());
     assert_eq!(check(&held), None);
-    // The clock limits still apply during the hold.
-    let mut clock = tracking_state(true);
-    clock.protection.pending_since_us = Some(0);
-    assert_eq!(check(&clock), Some(PROTECTION_VIOLATION));
+    // The clock limits still apply in both.
+    for hold in [false, true] {
+        let mut clock = tracking_state(hold);
+        clock.protection.pending_since_us = Some(0);
+        assert_eq!(check(&clock), Some(PROTECTION_VIOLATION), "{hold}");
+    }
 }
 
 #[test]

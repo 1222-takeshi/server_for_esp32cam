@@ -657,6 +657,36 @@ fn observed_slow_compute_skips_old_waiting_frame_and_processes_fresh_frame() {
     assert!(s.samples().iter().all(|v| v.age_high_us <= 500_000));
 }
 
+/// v2 spec D1b: the freshness limit is judged at the moment a result is
+/// published. The last accepted input (received at the publication time, 100 ms
+/// of clock) aged to that moment: exactly 500,000 us is allowed, one more is
+/// refused and reported to the online abort check.
+#[test]
+fn publication_is_refused_when_the_input_is_over_500ms_old_at_that_moment() {
+    use crate::online_abort::{AcceptedInput, Protection};
+    for (age_high_us, published) in [(500_000, true), (500_001, false)] {
+        let (state, _clock, _time) = setup();
+        {
+            let mut s = state.lock().unwrap();
+            s.publish_guard = true;
+            s.protection = Protection {
+                input: Some(AcceptedInput {
+                    received_us: 100_000,
+                    age_high_us,
+                }),
+                ..Default::default()
+            };
+        }
+        let worker = Worker::start(state.clone(), |_| Ok(vec![])).unwrap();
+        worker.submit(job(&state, 1));
+        wait(&state, 1);
+        worker.stop().unwrap();
+        let s = state.lock().unwrap();
+        assert_eq!(s.counters.published, u64::from(published), "{age_high_us}");
+        assert_eq!(s.publish_refused_at.is_some(), !published, "{age_high_us}");
+    }
+}
+
 #[test]
 fn publication_is_refused_at_that_moment_only_for_the_opt_in_guard() {
     use crate::online_abort::Protection;

@@ -5,14 +5,12 @@
 //! or not a result was published, so a stalled publication path cannot hide a
 //! violation. Hold and protection checks run on every call, with every age
 //! evaluated at the current time; the window scan runs on a one second
-//! schedule. The one exception is the freshness of the last accepted input
-//! (the tick freshness term), which is judged only while a result is being
-//! published, i.e. not during a hold (v2 spec D1). A result about to be published is checked against the same limits
-//! by the publisher, which refuses it and reports the refusal here.
-use crate::{
-    operating_mode::{Mode, OperatingMode},
-    pipeline::{Sample, State},
-};
+//! schedule. The freshness of an input is judged only at the moment a result is
+//! published (v2 spec D1b): the publisher checks a result about to be published
+//! against the limits, refuses it and reports the refusal here, and every
+//! published sample's age bound is checked. Without a publication a tick never
+//! judges freshness; the recovery condition and A11 to A13 protect that time.
+use crate::pipeline::{Sample, State};
 
 pub const CONTINUOUS_HOLD_US: u64 = 15_000_000;
 pub const WINDOW_US: u64 = 10_000_000;
@@ -37,12 +35,6 @@ pub fn is_abort_reason(reason: &str) -> bool {
         PROTECTION_VIOLATION,
     ]
     .contains(&reason)
-}
-
-/// Tracking is requested and no tracking hold is in progress (v2 spec D1): the
-/// only time the tick freshness term is judged.
-pub fn publishing(mode: &OperatingMode) -> bool {
-    mode.requested() == Mode::Tracking && mode.tracking_hold_started().is_none()
 }
 
 /// Natural hold budget: one percent of the measurement interval.
@@ -77,8 +69,8 @@ pub struct Protection {
     /// measurement interval is known the guard treats this as a violation, and
     /// the trial does not start before the estimate is defined.
     pub drift_unevaluable: bool,
-    /// Last input the receiver accepted; its age keeps growing while nothing
-    /// new is accepted, whether or not a result is being published.
+    /// Last input the receiver accepted. Its age is judged only when a result
+    /// is published (the publisher's check), never on a tick.
     pub input: Option<AcceptedInput>,
 }
 
@@ -99,10 +91,11 @@ impl Protection {
         self.last_sync_us.map(|at| now.saturating_sub(at))
     }
 
-    /// `publishing` gates only the tick freshness term (the age of the last
-    /// accepted input aged to `now`); the clock limits apply on every call.
-    pub fn violated(&self, now: u64, publishing: bool) -> bool {
-        (publishing
+    /// The clock limits apply on every call. `at_publication` adds the age of
+    /// the last accepted input aged to `now`; it is true only for the check at
+    /// the moment a result is published, never for a tick (v2 spec D1b).
+    pub fn violated(&self, now: u64, at_publication: bool) -> bool {
+        (at_publication
             && self
                 .input_age_high_us(now)
                 .is_some_and(|v| v > AGE_LIMIT_US))
@@ -120,18 +113,13 @@ pub struct Observation<'a> {
     pub last_hold: Option<(u64, u64)>,
     pub samples: &'a [Sample],
     pub protection: Protection,
-    /// Tracking is requested and no tracking hold is in progress. The tick
-    /// freshness term is evaluated only then; a hold waits for a new
-    /// generation's ACK, and the recovery condition keeps requiring a result
-    /// within 500 ms, so the freshness bound still protects the hold.
-    pub publishing: bool,
     /// Set when a result was refused at publication because a protection
     /// limit was already violated at that moment.
     pub publish_refused_at: Option<u64>,
 }
 
-/// The guard's view of `state` at `now`. The single place where `publishing` is
-/// derived and every field is read, so the binary only forwards its State.
+/// The guard's view of `state` at `now`. The single place where every field is
+/// read, so the binary only forwards its State.
 pub fn observation(now: u64, interval: Option<(u64, u64)>, state: &State) -> Observation<'_> {
     Observation {
         now,
@@ -140,7 +128,6 @@ pub fn observation(now: u64, interval: Option<(u64, u64)>, state: &State) -> Obs
         last_hold: state.mode.last_tracking_hold(),
         samples: state.samples(),
         protection: state.protection,
-        publishing: publishing(&state.mode),
         publish_refused_at: state.publish_refused_at,
     }
 }
@@ -193,7 +180,7 @@ impl OnlineGuard {
         (stale
             || unevaluable
             || o.publish_refused_at.is_some()
-            || o.protection.violated(o.now, o.publishing))
+            || o.protection.violated(o.now, false))
         .then_some(PROTECTION_VIOLATION)
     }
 
