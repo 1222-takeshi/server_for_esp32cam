@@ -215,3 +215,63 @@ def test_missing_or_mistyped_samples_are_f06_even_with_a_measurement():
 def test_an_early_stop_without_a_measurement_is_not_also_an_integrity_failure():
     early = {"reason": "ack_lost", "measurement": None, "measurement_error": "x", "samples": []}
     assert lc.check_report(early, 600)["codes"] == ["F01"]
+
+
+NOT_STARTED = {
+    "reason": "clock_unresolved",
+    "continuous_tracking_gate_passed": False,
+    "measurement": None,
+    "measurement_error": "trial_incomplete",
+    "samples": [],
+    "online_abort": None,
+}
+
+
+def test_clock_unresolved_before_the_measurement_is_start_refused_not_a_failure():
+    assert lc.not_started(NOT_STARTED)
+    out = lc.check_report(NOT_STARTED, 600)
+    assert out["codes"] == [] and out["windows"] is None
+    # No samples field at all must not become an integrity failure either.
+    bare = {k: v for k, v in NOT_STARTED.items() if k != "samples"}
+    assert lc.check_report(bare, 600)["codes"] == []
+    # Any non-zero exit of the child is not A07 for this report (3 is what the
+    # native binary uses; others must not turn a refused start into an abort).
+    kw = {
+        "marker": "completed",
+        "service_result": "success",
+        "report": NOT_STARTED,
+        "child_exit": 3,
+        "child_signalled": False,
+        "guardian_stopped_child": False,
+    }
+    for code in (3, 1, 2, 20):
+        assert lc.abort_codes(**{**kw, "child_exit": code}) == [], code
+    result = lc.final_result([], [], restore_ok=True, not_started=True)
+    assert result == {"result": "not_started", "primary": "clock_unresolved", "milestone": False}
+    broken = lc.final_result([], [], restore_ok=False, not_started=True)
+    assert broken["result"] == "not_started_restore_failed" and broken["milestone"] is False
+    # An abort recorded elsewhere (marker, boot change) still outranks it.
+    assert lc.final_result(["A04"], [], restore_ok=True, not_started=True)["primary"] == "A04"
+
+
+def test_only_a_report_that_never_measured_is_start_refused():
+    assert not lc.not_started(None)
+    assert not lc.not_started({"reason": "completed", "measurement": None})
+    assert not lc.not_started({**NOT_STARTED, "measurement": {"start_us": 1}})
+    assert not lc.not_started({**NOT_STARTED, "online_abort": {"code": "protection_violation"}})
+    # A measured report that ended with this reason keeps its failure codes.
+    measured = {**good_report(), "reason": "clock_unresolved"}
+    assert "F01" in lc.check_report(measured, 600)["codes"]
+    # A signalled child is still A07 (killed by something else).
+    signalled = {
+        "marker": "completed",
+        "service_result": "success",
+        "report": NOT_STARTED,
+        "child_exit": None,
+        "child_signalled": True,
+        "guardian_stopped_child": False,
+    }
+    assert lc.abort_codes(**signalled) == ["A07"]
+    # Other early reasons keep their existing F01 / A07 handling.
+    other = {**NOT_STARTED, "reason": "initial_eco_timeout"}
+    assert lc.check_report(other, 600)["codes"] == ["F01"]

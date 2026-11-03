@@ -268,6 +268,39 @@ def test_post_run_settles_abort_and_failure_codes(tmp_path):
     assert info["abort_codes"] == [] and info["failure_codes"] == ["F01", "F06"]
 
 
+def test_clock_unresolved_before_the_measurement_is_neither_a07_nor_f06_nor_a_failure(tmp_path):
+    report = {
+        "reason": "clock_unresolved",
+        "measurement": None,
+        "measurement_error": "trial_incomplete",
+        "online_abort": None,
+        "session_final": {"version": 3},
+    }
+    child = {"exit": 3, "signalled": False, "guardian_stopped_child": False}
+    g, d = guard(tmp_path, report=report, child=child)
+    info = g.post_run()
+    assert info["abort_codes"] == [] and info["failure_codes"] == []
+    assert info["max_generation"] == 3  # the restore needs a version above the mode's last
+    assert info["not_started"] is True and info["reason"] == "clock_unresolved"
+    # The guardian's saved result feeds the final verdict: no milestone, not F, not A.
+    out = g.run()
+    assert out["ok"]
+    collector = environment.Collector(run=lambda argv: "", get_json=lambda n: {}, unit_path="/x")
+    collector.snapshot = lambda: baseline()
+    final = rg.final_verdict(d, collector, baseline())
+    assert final["result"] == "not_started" and final["primary"] == "clock_unresolved"
+    assert final["milestone"] is False
+    # Any other non-zero exit with the same report is still not A07.
+    other, _ = guard(tmp_path / "other", report=report, child={**child, "exit": 1})
+    assert other.post_run()["abort_codes"] == []
+    # An ordinary early stop after the same kind of report keeps its handling.
+    early, _ = guard(
+        tmp_path / "early", report={**report, "reason": "ack_lost", "samples": []}, child=child
+    )
+    info = early.post_run()
+    assert info["not_started"] is False and info["failure_codes"] == ["F01"]
+
+
 def test_final_verdict_uses_the_restore_result_and_remaining_units(tmp_path):
     g, d = guard(tmp_path, report={"reason": "completed"})
     out = g.run()

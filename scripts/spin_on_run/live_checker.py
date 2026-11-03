@@ -33,6 +33,11 @@ ONLINE_REASONS = {
     "window_below_50": "A13",
     "protection_violation": "A14",
 }
+# v2 spec D2: the native start gate waited for the 200 ppm estimate and gave up
+# before any measurement began. That is "start refused, nothing measured": not a
+# pass, not a failure (F), not an abort (A07). The attempt is consumed and the
+# milestone is not reached.
+NOT_STARTED_REASON = "clock_unresolved"
 ABORT_ORDER = [f"A{n:02d}" for n in range(1, 15)]
 FAIL_ORDER = [f"F{n:02d}" for n in range(1, 8)]
 MARKER_ONLY = {"A06", "A10"}
@@ -83,10 +88,30 @@ def hold_stats(holds: list, start: int, end: int) -> tuple[int, int]:
     return total, longest
 
 
+def not_started(report: object) -> bool:
+    """The report of a trial that ended in the start gate with `clock_unresolved`.
+
+    Requires the reason and no measurement interval (the trial never reached the
+    measurement) and no online abort record, so a report that merely carries the
+    reason after a measurement began is not mistaken for it.
+    """
+    return (
+        isinstance(report, dict)
+        and report.get("reason") == NOT_STARTED_REASON
+        and report.get("measurement") is None
+        and not report.get("online_abort")
+    )
+
+
 def check_report(report: dict | None, seconds: int) -> dict:
-    """Failure codes F01-F07 for a finished trial; `report` None means unreadable."""
+    """Failure codes F01-F07 for a finished trial; `report` None means unreadable.
+
+    A start refused with `clock_unresolved` and no measurement has no failure codes.
+    """
     codes: list[str] = []
     notes: list[str] = []
+    if not_started(report):
+        return {"codes": [], "notes": [f"{NOT_STARTED_REASON}:not started"], "windows": None}
 
     def add(code: str, note: str) -> None:
         if code not in codes:
@@ -200,15 +225,31 @@ def abort_codes(
     reason = report.get("reason") if isinstance(report, dict) else None
     if child_exit == 20 and reason in ONLINE_REASONS:
         codes.append(ONLINE_REASONS[reason])
-    elif (child_exit not in (0, 3, None) or child_signalled) and not guardian_stopped_child:
+    elif (
+        (child_exit not in (0, 3, None) or child_signalled)
+        and not guardian_stopped_child
+        and not (not_started(report) and not child_signalled)
+    ):
         codes.append("A07")
     return list(dict.fromkeys(codes))  # recorded order: the first one is the primary reason
 
 
-def final_result(aborts: list[str], failures: list[str], *, restore_ok: bool) -> dict:
-    """Aborts outrank failures; a pass with a failed restore is not a milestone."""
+def final_result(
+    aborts: list[str], failures: list[str], *, restore_ok: bool, not_started: bool = False
+) -> dict:
+    """Aborts outrank failures; a pass with a failed restore is not a milestone.
+
+    A start refused by the native clock gate is neither: no abort, no failure, no
+    milestone (the trial was not evaluable).
+    """
     if aborts:
         return {"result": "aborted", "primary": aborts[0], "milestone": False}
+    if not_started:
+        return {
+            "result": "not_started" if restore_ok else "not_started_restore_failed",
+            "primary": NOT_STARTED_REASON,
+            "milestone": False,
+        }
     if failures:
         return {"result": "failed", "primary": failures[0], "milestone": False}
     if not restore_ok:

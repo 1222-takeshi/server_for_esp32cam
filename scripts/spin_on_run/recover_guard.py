@@ -158,6 +158,7 @@ class Guard:
             guardian_stopped_child=bool(child.get("guardian_stopped_child")),
         )
         info["abort_codes"] = aborts
+        info["not_started"] = not aborts and live_checker.not_started(report)
         info["failure_codes"] = (
             [] if aborts else live_checker.check_report(report, self.seconds)["codes"]
         )
@@ -356,7 +357,14 @@ def _max_generation(report: object) -> int | None:
     try:
         return max(g for _at, g in report["measurement"]["generation_epochs"])
     except (TypeError, KeyError, ValueError):
-        return None
+        pass
+    if live_checker.not_started(report):
+        # No epochs exist before the measurement; the mode's last version, from the
+        # session's final status, is what the restore's ACK must exceed.
+        version = (report.get("session_final") or {}).get("version")
+        if type(version) is int:
+            return version
+    return None
 
 
 def final_verdict(run_dir: Path, collector: environment.Collector, baseline: dict) -> dict:
@@ -371,7 +379,9 @@ def final_verdict(run_dir: Path, collector: environment.Collector, baseline: dic
         # guardian cannot read the camera boot id while the service is stopped, so the
         # change is confirmed here, after the restore (plan 10.1, last bullet).
         aborts = [*aborts, "A04"]
-    final = live_checker.final_result(aborts, failures, restore_ok=restored)
+    final = live_checker.final_result(
+        aborts, failures, restore_ok=restored, not_started=post.get("not_started") is True
+    )
     final["final_deviations"] = found
     common.write_json(run_dir / "final.json", final)
     return final
