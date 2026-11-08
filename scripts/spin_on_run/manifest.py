@@ -31,8 +31,8 @@ FROZEN_FILES = (
     "manifest.py",
 )
 PLAN = {
-    "plan.md": "abce502d64486e5e360c2a0004af2a82d65200d2410994ceb33d694d84dd5460",
-    "plan.json": "fb776d7d39ff7b2f6a8ee534d72265c87b71684eddfddc261aa0083143b28f0d",
+    "plan.md": "d0a25cbc8009135a6e1186740f105cc1ebd5ae6e5e9d35697490bafcf55c8955",
+    "plan.json": "5da016646d2fb619926e9c6f07edb49fea7f30cbcaa95395ae11c3f09f13f87d",
 }
 
 
