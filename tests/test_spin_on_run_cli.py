@@ -49,7 +49,7 @@ def test_manifest_covers_every_package_file_and_the_field_map(tmp_path, capsys):
     assert set(built["files"]) == on_disk, "every module must be frozen in the manifest"
     assert built["binaries"]["frame-live"] == common.sha256_bytes(b"elf")
     assert built["field_map"]["$.finite_live_gate_passed"] == "continuous_tracking_gate_passed"
-    assert built["plan_sha256"]["plan.md"].startswith("abce502d")
+    assert built["plan_sha256"]["plan.md"].startswith("d0a25cbc")
     assert manifest.verify(built, PACKAGE, {"frame-live": binary}) == []
     binary.write_bytes(b"other")
     assert manifest.verify(built, PACKAGE, {"frame-live": binary}) == ["binary:frame-live"]
