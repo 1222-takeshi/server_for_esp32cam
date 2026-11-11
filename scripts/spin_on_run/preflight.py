@@ -25,6 +25,8 @@ class Context:
     free_bytes: int
     temp_millic: int
     live: bool = False
+    # Units that are this run's own (exact names); anything else under esp32cam-* is unexpected.
+    allowed_units: tuple[str, ...] = ()
     linger: str | None = None
     recover_unit_sha: str | None = None
     recover_unit_expected_sha: str | None = None
@@ -48,7 +50,9 @@ def preflight(ctx: Context, baseline: dict | None = None) -> dict:
         ctx.notes.append(
             f"camera boot id differs from the last confirmed: {snap.get('camera_boot_id')}"
         )
-    o05 += environment.deviations(base, snap, "preflight")
+    o05 += environment.deviations(
+        base, snap, "preflight", allowed_units=ctx.allowed_units
+    )
     if snap.get("last_firmware_version") in (None, environment.UNVERIFIED):
         o07.append("firmware identity (device record read path) unverified")
     for label, expected in ctx.expected_hashes.items():
