@@ -360,6 +360,22 @@ def test_the_live_gate_does_not_flag_its_own_trial_and_recover_units(world):
     snapshot = _with_units(TRIAL + ".service", units.RECOVER_UNIT)
     result = evaluate(cfg, out, live=True, snapshot=snapshot)
     assert _unexpected(result) == [], result
+    assert result["O05"] == [], result
+    assert result["ok"], result
+
+
+def test_a_foreign_esp32cam_unit_still_fails_the_live_recover_check(world):
+    _tmp, cfg, out = world
+    snapshot = _with_units(TRIAL + ".service", "esp32cam-other.service")
+    result = evaluate(cfg, out, live=True, snapshot=snapshot)
+    assert result["O05"] and not result["ok"], result
+
+
+def test_a_live_config_without_offline_unit_is_evaluated(world):
+    _tmp, cfg, out = world
+    live_cfg = {k: v for k, v in cfg.items() if k != "offline_unit"}
+    result = evaluate(live_cfg, out, live=True, snapshot=_with_units(TRIAL + ".service"))
+    assert result["ok"], result
 
 
 def test_another_esp32cam_unit_is_still_unexpected(world):
