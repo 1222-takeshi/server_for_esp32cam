@@ -338,3 +338,48 @@ def test_the_follow_up_fails_and_settles_o08_when_frozen_code_changed(tmp_path):
 
 def test_the_gate_module_is_frozen():
     assert "start_gate.py" in manifest.FROZEN_FILES
+
+
+def _with_units(*names):
+    return {**SNAPSHOT, "units_active": ["esp32cam-server.service", *names]}
+
+
+def _unexpected(result):
+    return [x for x in result["O05"] if "unexpected_unit" in x]
+
+
+def test_the_offline_gate_does_not_flag_its_own_unit(world):
+    _tmp, cfg, out = world
+    result = evaluate(cfg, out, snapshot=_with_units("off.service"))
+    assert _unexpected(result) == [], result
+    assert result["ok"], result
+
+
+def test_the_live_gate_does_not_flag_its_own_trial_and_recover_units(world):
+    _tmp, cfg, out = world
+    snapshot = _with_units(TRIAL + ".service", units.RECOVER_UNIT)
+    result = evaluate(cfg, out, live=True, snapshot=snapshot)
+    assert _unexpected(result) == [], result
+
+
+def test_another_esp32cam_unit_is_still_unexpected(world):
+    _tmp, cfg, out = world
+    other = "esp32cam-other.service"
+    assert _unexpected(evaluate(cfg, out, snapshot=_with_units(other)))
+    assert _unexpected(evaluate(cfg, out, live=True, snapshot=_with_units(other)))
+    # An allowed unit does not excuse a different one running next to it.
+    assert _unexpected(evaluate(cfg, out, snapshot=_with_units("off.service", other)))
+
+
+@pytest.mark.parametrize(
+    "name", ["off", "off.service.bak", "xoff.service", "off-2.service", "OFF.service", "off.timer"]
+)
+def test_near_miss_unit_names_are_still_unexpected(world, name):
+    _tmp, cfg, out = world
+    assert _unexpected(evaluate(cfg, out, snapshot=_with_units(name)))
+
+
+@pytest.mark.parametrize("name", [TRIAL, TRIAL + "-x.service", "x" + TRIAL + ".service"])
+def test_near_miss_live_unit_names_are_still_unexpected(world, name):
+    _tmp, cfg, out = world
+    assert _unexpected(evaluate(cfg, out, live=True, snapshot=_with_units(name)))
