@@ -393,13 +393,13 @@ def final_verdict(run_dir: Path, collector: environment.Collector, baseline: dic
     return final
 
 
-def check_only(ops: Ops, baseline: dict) -> list[str]:
+def check_only(ops: Ops, baseline: dict, allowed_units: tuple[str, ...] = ()) -> list[str]:
     """`recover --check`: read-only look at what a restore would rely on."""
     problems = []
     try:
         snapshot = ops.snapshot()
         problems += environment.deviations(
-            baseline, snapshot, "restored", allowed_units=(SELF_UNIT,)
+            baseline, snapshot, "restored", allowed_units=(SELF_UNIT, *allowed_units)
         )
         ops.mode()
         ops.ready()

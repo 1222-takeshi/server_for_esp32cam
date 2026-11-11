@@ -103,9 +103,10 @@ def evaluate(
     if thread:  # candidate M runs the registered unmodified worker
         hashes["pr616_worker"] = _sha(cfg.get("pr616_worker"))
         expected["pr616_worker"] = common.HASHES["pr616_worker"]
-    own_units = (cfg["offline_unit"] + ".service",)
     if live:
         own_units = (cfg["trial_unit"] + ".service", units.RECOVER_UNIT)
+    else:
+        own_units = (cfg["offline_unit"] + ".service",)
     ctx = preflight.Context(
         snapshot=snapshot,
         file_hashes=hashes,
@@ -133,7 +134,10 @@ def evaluate(
         except Exception:  # noqa: BLE001
             linger = ""
         ctx.linger = linger.partition("=")[2] or None
-        problems = ["no_ops"] if ops is None else recover_guard.check_only(ops, baseline)
+        if ops is None:
+            problems = ["no_ops"]
+        else:
+            problems = recover_guard.check_only(ops, baseline, allowed_units=own_units)
         ctx.recover_check_exit = 0 if not problems else 1
         ctx.old_guard_conflict = _old_guard_conflict(run, cfg.get("old_guard_units"))
         if "launch_env" in cfg:
