@@ -295,3 +295,126 @@ def test_system_ops_stop_fails_when_the_service_is_still_active():
     )
     with pytest.raises(RuntimeError):
         ops.stop_service()
+
+
+class Replay:
+    """Fake clock plus scripted snapshot reader: nothing here really sleeps."""
+
+    def __init__(self, reads):
+        self.reads, self.calls, self.now, self.slept = list(reads), 0, 1000.0, []
+
+    def clock(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.slept.append(seconds)
+        self.now += seconds
+
+    def read(self):
+        self.calls += 1
+        return self.reads[min(self.calls, len(self.reads)) - 1]
+
+    def run(self, base, phase="restored", first=None):
+        return environment.deviations_with_recheck(
+            base,
+            first or collect(mode=PENDING),
+            phase,
+            self.read,
+            sleep=self.sleep,
+            clock=self.clock,
+        )
+
+
+PENDING = {"mode": {"state": "pending"}}
+
+
+def pend():
+    return collect(mode=PENDING)
+
+
+def ok():
+    return collect()
+
+
+def test_pending_then_two_active_reads_pass_and_record_the_reads():
+    replay = Replay([ok(), ok()])
+    found, record = replay.run(collect())
+    assert found == []
+    assert record["rechecked"] and record["rereads"] == 2
+    assert replay.slept == [2, 2] and record["pending_seconds"] == 2
+    assert record["anomaly"] is None
+    assert [r["state"] for r in record["reads"]] == ["pending", "active", "active"]
+    assert set(record["reads"][0]) == {"t", *environment.RESTORED_MODE}
+
+
+def test_ten_pending_reads_fail_with_the_unchanged_code():
+    replay = Replay([pend()])
+    found, record = replay.run(collect())
+    assert found == ["mode_not_restored"] and replay.calls == 10
+    assert record["rereads"] == 10 and record["pending_seconds"] == 20
+    assert record["anomaly"] == "pending_over_15s"
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"mode": {"effective_mode": "tracking"}},
+        {"mode": {"acknowledged": False}},
+        {"mode": {"boot_id": 99}},  # camera_boot_id (a FIXED_KEY)
+    ],
+)
+def test_change_during_the_recheck_fails(change):
+    replay = Replay([pend(), collect(mode=change)])
+    found, record = replay.run(collect())
+    assert found and replay.calls == 2 and record["rereads"] == 2
+
+
+def test_fixed_key_change_during_the_recheck_fails():
+    replay = Replay([ok(), collect(FakeRun(boot_id="boot-2\n"))])
+    found, _ = replay.run(collect())
+    assert "invariant:pi_boot_id" in found
+
+
+@pytest.mark.parametrize("mode", [{"state": "degraded"}, {"state": "pending", "ready": 1}])
+def test_no_recheck_unless_the_only_deviation_is_pending(mode):
+    now = collect(mode={"mode": mode})
+    if "ready" in mode:  # ready comes from /ready, not /mode
+        now = collect(mode={"mode": {"state": "pending"}, "ready": {"status": "starting"}})
+    replay = Replay([ok()])
+    found, record = replay.run(collect(), first=now)
+    assert "mode_not_restored" in found and replay.calls == 0 and not record["rechecked"]
+    assert replay.slept == []
+
+
+def test_live_phase_never_rechecks():
+    replay = Replay([ok()])
+    found, record = replay.run(collect(), phase="live", first=pend())
+    assert replay.calls == 0 and not record["rechecked"] and found == environment.deviations(
+        collect(), pend(), "live"
+    )
+
+
+def test_fall_back_to_pending_keeps_going_until_two_consecutive_matches():
+    replay = Replay([ok(), pend(), ok(), ok()])
+    assert replay.run(collect())[0] == [] and replay.calls == 4
+
+
+def test_two_consecutive_matches_on_the_tenth_reread_pass_and_no_eleventh():
+    replay = Replay([pend()] * 8 + [ok(), ok(), ok()])
+    found, record = replay.run(collect())
+    assert found == [] and replay.calls == 10 and record["rereads"] == 10
+    replay = Replay([pend()] * 9 + [ok(), ok()])  # only one match fits in the 10
+    found, _ = replay.run(collect())
+    assert found == ["mode_not_restored"] and replay.calls == 10
+
+
+def test_pending_over_fifteen_seconds_is_flagged_even_when_it_passes():
+    replay = Replay([pend()] * 8 + [ok(), ok()])
+    found, record = replay.run(collect())
+    assert found == [] and record["anomaly"] == "pending_over_15s"
+
+
+def test_the_recheck_runs_on_the_fake_clock_only():
+    replay = Replay([pend()])
+    replay.run(collect())
+    assert replay.slept == [2] * 10 and replay.now == 1020.0
