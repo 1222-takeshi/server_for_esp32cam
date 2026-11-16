@@ -36,9 +36,10 @@ def run_post(
         common.write_json(out_dir / "after.json", snapshot)
         if offline_unit in snapshot["units_active"]:
             result["reasons"].append("offline_unit_active")
-        result["reasons"] += environment.deviations(
-            baseline, snapshot, "restored", allowed_units=(post_unit,)
+        found, result["mode_recheck"] = environment.deviations_with_recheck(
+            baseline, snapshot, "restored", collector.snapshot, allowed_units=(post_unit,)
         )
+        result["reasons"] += found
         result["pass"] = not result["reasons"]
     except Exception as error:  # noqa: BLE001 - every failure must be recorded
         result["reasons"].append(f"post_error:{type(error).__name__}")
@@ -91,7 +92,9 @@ def final_check(
         extra.append("O08")
         notes.append("post-result.json did not pass")
     try:
-        deviation = environment.deviations(baseline, collector.snapshot(), "restored")
+        deviation, _ = environment.deviations_with_recheck(
+            baseline, collector.snapshot(), "restored", collector.snapshot
+        )
     except Exception as error:  # noqa: BLE001
         deviation = [f"final_error:{type(error).__name__}"]
     if deviation:

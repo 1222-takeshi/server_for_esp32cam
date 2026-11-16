@@ -193,7 +193,8 @@ def test_post_run_passes_in_a_restored_environment(tmp_path):
     result = post_runner.run_post(
         out, collector, base, offline_unit="esp32cam-off.service", post_unit="esp32cam-post.service"
     )
-    assert result == {"pass": True, "reasons": []}
+    assert result["pass"] is True and result["reasons"] == []
+    assert result["mode_recheck"]["rechecked"] is False
     assert stat.S_IMODE((out / "after.json").stat().st_mode) == 0o400
     assert post_runner.finalize_post(out, "success") is None
     final = post_runner.final_check(out, collector, base)

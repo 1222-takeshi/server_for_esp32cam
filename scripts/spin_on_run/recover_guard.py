@@ -221,9 +221,17 @@ class Guard:
         started = self.ops.monotonic()
         snapshot = self.ops.snapshot()
         self.save(f"after.attempt{attempt}.json", snapshot)
-        found = environment.deviations(
-            self.baseline, snapshot, "restored", allowed_units=(SELF_UNIT,)
+        found, recheck = environment.deviations_with_recheck(
+            self.baseline,
+            snapshot,
+            "restored",
+            self.ops.snapshot,
+            allowed_units=(SELF_UNIT,),
+            sleep=self.ops.sleep,
+            clock=self.ops.monotonic,
         )
+        if recheck["rechecked"]:
+            self.save(f"mode-recheck.attempt{attempt}.json", recheck)
         return Result(not found and self.within(started, R5_S), ",".join(found))
 
     def r6(self) -> Result:
@@ -371,7 +379,9 @@ def _max_generation(report: object) -> int | None:
 
 def final_verdict(run_dir: Path, collector: environment.Collector, baseline: dict) -> dict:
     """Run by the frozen checker after the guard unit is inactive: no unit may remain."""
-    found = environment.deviations(baseline, collector.snapshot(), "restored")
+    found, recheck = environment.deviations_with_recheck(
+        baseline, collector.snapshot(), "restored", collector.snapshot
+    )
     result = json.loads((run_dir / "restore-result.json").read_text())
     post = result.get("post", {})
     aborts, failures = post.get("abort_codes", ["A06"]), post.get("failure_codes", [])
@@ -389,6 +399,7 @@ def final_verdict(run_dir: Path, collector: environment.Collector, baseline: dic
         interval_unjudgeable=post.get("interval_unjudgeable") is True,
     )
     final["final_deviations"] = found
+    final["mode_recheck"] = recheck
     common.write_json(run_dir / "final.json", final)
     return final
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -222,3 +223,71 @@ def deviations(
         found.append(f"unknown_phase:{phase}")
     found += [f"unexpected_unit:{u}" for u in extra]
     return found
+
+
+RECHECK_PHASES = ("offline", "restored", "preflight")
+RECHECK_INTERVAL_S = 2
+RECHECK_MAX_READS = 10
+RECHECK_MATCHES = 2
+PENDING_ANOMALY_S = 15
+
+
+def _only_pending(snapshot: dict) -> bool:
+    mode = snapshot.get("mode", {})
+    off = [key for key, value in RESTORED_MODE.items() if mode.get(key) != value]
+    return off == ["state"] and mode.get("state") == "pending"
+
+
+def deviations_with_recheck(
+    baseline: dict,
+    current: dict,
+    phase: str,
+    read: Callable[[], dict],
+    *,
+    allowed_units: tuple[str, ...] = (),
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.time,
+) -> tuple[list[str], dict]:
+    """`deviations`, but a lone `state == "pending"` is re-read before it fails.
+
+    The server computes `active` from frame timing, so load can hold it at
+    `pending` for a while. Re-read every 2 s, at most 10 times; pass on two
+    consecutive full matches. Any other change (the other mode fields, fixed
+    keys, unit checks) fails at once. Returns the deviations and a record.
+    """
+    found = deviations(baseline, current, phase, allowed_units=allowed_units)
+    record: dict = {"rechecked": False, "rereads": 0, "pending_seconds": 0, "anomaly": None}
+    if phase not in RECHECK_PHASES or found != ["mode_not_restored"] or not _only_pending(current):
+        return found, record
+
+    def entry(snapshot: dict) -> dict:
+        mode = snapshot.get("mode", {})
+        return {"t": clock(), **{key: mode.get(key) for key in RESTORED_MODE}}
+
+    reads = [entry(current)]
+    record |= {"rechecked": True, "reads": reads}
+    streak, result = 0, ["mode_not_restored"]
+    while record["rereads"] < RECHECK_MAX_READS:
+        sleep(RECHECK_INTERVAL_S)
+        snapshot = read()
+        record["rereads"] += 1
+        reads.append(entry(snapshot))
+        found = deviations(baseline, snapshot, phase, allowed_units=allowed_units)
+        if found == []:
+            streak += 1
+            if streak == RECHECK_MATCHES:
+                result = []
+                break
+        elif found == ["mode_not_restored"] and _only_pending(snapshot):
+            streak = 0
+        else:
+            result = found
+            break
+    record["pending_seconds"] = sum(
+        after["t"] - before["t"]
+        for before, after in zip(reads, reads[1:], strict=False)
+        if before["state"] == "pending"
+    )
+    if record["pending_seconds"] > PENDING_ANOMALY_S:
+        record["anomaly"] = "pending_over_15s"
+    return result, record
