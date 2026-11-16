@@ -124,13 +124,20 @@ def _offline_config(cfg: dict, out_dir: Path, *, thread: bool) -> offline_runner
     collector = _collector(cfg)
     baseline = json.loads(Path(cfg["baseline"]).read_text())
 
+    rechecks = []
+
     def deviations() -> list[str]:
-        return environment.deviations(
+        found, record = environment.deviations_with_recheck(
             baseline,
             collector.snapshot(),
             "offline",
+            collector.snapshot,
             allowed_units=(cfg["offline_unit"] + ".service",),
         )
+        if record["rechecked"]:
+            rechecks.append(record)
+            common.write_json(out_dir / f"mode-recheck.offline.{len(rechecks)}.json", record)
+        return found
 
     platform = offline_runner.LinuxPlatform(deviations)
     run_cfg = offline_runner.Config(

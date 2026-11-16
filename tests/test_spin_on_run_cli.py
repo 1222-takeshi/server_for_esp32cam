@@ -243,6 +243,9 @@ def test_the_offline_monitor_rechecks_a_pending_mode(tmp_path, monkeypatch):
         cli.offline_runner, "LinuxPlatform", lambda deviations: seen.setdefault("d", deviations)
     )
     monkeypatch.setattr(cli.offline_runner, "Runner", lambda *a, **k: None)
+    (tmp_path / "out").mkdir()
     cli._offline_config(cfg, tmp_path / "out", thread=False)
     assert seen["d"]() == []  # pending, then active twice
     assert reads["left"] == 0
+    saved = json.loads((tmp_path / "out" / "mode-recheck.offline.1.json").read_text())
+    assert saved["rechecked"] is True and saved["rereads"] == 2

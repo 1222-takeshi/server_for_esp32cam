@@ -221,17 +221,19 @@ class Guard:
         started = self.ops.monotonic()
         snapshot = self.ops.snapshot()
         self.save(f"after.attempt{attempt}.json", snapshot)
-        found, recheck = environment.deviations_with_recheck(
+        # The recheck can add 20 s, and R5 has not been shown to fit its 30 s limit
+        # with it, so R5 judges the plain read; the record is still kept.
+        found, record = environment.deviations_with_recheck(
             self.baseline,
             snapshot,
             "restored",
             self.ops.snapshot,
             allowed_units=(SELF_UNIT,),
+            recheck=False,
             sleep=self.ops.sleep,
             clock=self.ops.monotonic,
         )
-        if recheck["rechecked"]:
-            self.save(f"mode-recheck.attempt{attempt}.json", recheck)
+        self.save(f"mode-recheck.attempt{attempt}.json", record)
         return Result(not found and self.within(started, R5_S), ",".join(found))
 
     def r6(self) -> Result:

@@ -92,11 +92,12 @@ def final_check(
         extra.append("O08")
         notes.append("post-result.json did not pass")
     try:
-        deviation, _ = environment.deviations_with_recheck(
+        deviation, recheck = environment.deviations_with_recheck(
             baseline, collector.snapshot(), "restored", collector.snapshot
         )
     except Exception as error:  # noqa: BLE001
         deviation = [f"final_error:{type(error).__name__}"]
+        recheck = {"rechecked": False, "error": type(error).__name__}
     if deviation:
         extra.append("O08")
         notes += deviation
@@ -113,6 +114,7 @@ def final_check(
         "notes": notes,
         "verdict": verdict,
         "stop_codes_known": all(c in metrics.STOP_RESULT_ROW for c in codes),
+        "mode_recheck": recheck,
     }
     common.write_json(out_dir / "final.json", final)
     return final

@@ -114,6 +114,7 @@ def evaluate(
         free_bytes=free_bytes(out_dir if out_dir.exists() else out_dir.parent),
         temp_millic=temp_millic(),
         live=live,
+        read_snapshot=collector.snapshot,
         allowed_units=own_units,
         notes=notes,
     )

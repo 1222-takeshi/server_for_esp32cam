@@ -6,6 +6,7 @@ something the experiment depends on that cannot be established at all.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from . import environment
@@ -25,6 +26,10 @@ class Context:
     free_bytes: int
     temp_millic: int
     live: bool = False
+    # Re-reads the environment; with it, a lone `pending` mode is rechecked.
+    read_snapshot: Callable[[], dict] | None = None
+    recheck_sleep: Callable[[float], None] | None = None
+    recheck_clock: Callable[[], float] | None = None
     # Units that are this run's own (exact names); anything else under esp32cam-* is unexpected.
     allowed_units: tuple[str, ...] = ()
     linger: str | None = None
@@ -50,9 +55,21 @@ def preflight(ctx: Context, baseline: dict | None = None) -> dict:
         ctx.notes.append(
             f"camera boot id differs from the last confirmed: {snap.get('camera_boot_id')}"
         )
-    o05 += environment.deviations(
-        base, snap, "preflight", allowed_units=ctx.allowed_units
-    )
+    try:
+        found, recheck = environment.deviations_with_recheck(
+            base,
+            snap,
+            "preflight",
+            ctx.read_snapshot or (lambda: snap),
+            allowed_units=ctx.allowed_units,
+            recheck=ctx.read_snapshot is not None,
+            sleep=ctx.recheck_sleep,
+            clock=ctx.recheck_clock,
+        )
+    except Exception as error:  # noqa: BLE001 - an unreadable recheck forbids the start
+        found = ["mode_not_restored", f"mode_recheck_error:{type(error).__name__}"]
+        recheck = {"rechecked": True, "error": type(error).__name__}
+    o05 += found
     if snap.get("last_firmware_version") in (None, environment.UNVERIFIED):
         o07.append("firmware identity (device record read path) unverified")
     for label, expected in ctx.expected_hashes.items():
@@ -83,4 +100,10 @@ def preflight(ctx: Context, baseline: dict | None = None) -> dict:
                 o05.append("frame_log_env")
             if ctx.frame_log_exists:
                 o05.append("frame_log_exists")
-    return {"ok": not (o05 or o07), "O05": o05, "O07": o07, "notes": ctx.notes}
+    return {
+        "ok": not (o05 or o07),
+        "O05": o05,
+        "O07": o07,
+        "notes": ctx.notes,
+        "mode_recheck": recheck,
+    }

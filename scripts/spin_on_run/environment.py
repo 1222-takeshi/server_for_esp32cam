@@ -228,6 +228,7 @@ def deviations(
 RECHECK_PHASES = ("offline", "restored", "preflight")
 RECHECK_INTERVAL_S = 2
 RECHECK_MAX_READS = 10
+RECHECK_WINDOW_S = 20
 RECHECK_MATCHES = 2
 PENDING_ANOMALY_S = 15
 
@@ -245,33 +246,62 @@ def deviations_with_recheck(
     read: Callable[[], dict],
     *,
     allowed_units: tuple[str, ...] = (),
-    sleep: Callable[[float], None] = time.sleep,
-    clock: Callable[[], float] = time.time,
+    recheck: bool = True,
+    sleep: Callable[[float], None] | None = None,
+    clock: Callable[[], float] | None = None,
 ) -> tuple[list[str], dict]:
     """`deviations`, but a lone `state == "pending"` is re-read before it fails.
 
     The server computes `active` from frame timing, so load can hold it at
-    `pending` for a while. Re-read every 2 s, at most 10 times; pass on two
-    consecutive full matches. Any other change (the other mode fields, fixed
-    keys, unit checks) fails at once. Returns the deviations and a record.
+    `pending` for a while. Re-read every 2 s, at most 10 times, inside a 20 s
+    window measured on `clock` (monotonic) from this call, read time included:
+    no re-read starts after the window ends, and a read that completes after it
+    does not count. Pass on two consecutive full matches. Any other change (the
+    other mode fields, fixed keys, unit checks) fails at once. `recheck=False`
+    only records. Returns the deviations and a record that is complete for every
+    call, including when nothing was re-read.
     """
+    sleep = sleep or time.sleep
+    clock = clock or time.monotonic
+    started = clock()
     found = deviations(baseline, current, phase, allowed_units=allowed_units)
-    record: dict = {"rechecked": False, "rereads": 0, "pending_seconds": 0, "anomaly": None}
-    if phase not in RECHECK_PHASES or found != ["mode_not_restored"] or not _only_pending(current):
+
+    def entry(snapshot: dict, at: float) -> dict:
+        mode = snapshot.get("mode", {})
+        return {"t": at, **{key: mode.get(key) for key in RESTORED_MODE}}
+
+    reads = [entry(current, started)]
+    record: dict = {
+        "rechecked": False,
+        "rereads": 0,
+        "pending_seconds": 0,
+        "elapsed_seconds": 0,
+        "anomaly": None,
+        "reads": reads,
+    }
+    if (
+        not recheck
+        or phase not in RECHECK_PHASES
+        or found != ["mode_not_restored"]
+        or not _only_pending(current)
+    ):
         return found, record
 
-    def entry(snapshot: dict) -> dict:
-        mode = snapshot.get("mode", {})
-        return {"t": clock(), **{key: mode.get(key) for key in RESTORED_MODE}}
-
-    reads = [entry(current)]
-    record |= {"rechecked": True, "reads": reads}
+    record["rechecked"] = True
+    deadline = started + RECHECK_WINDOW_S
     streak, result = 0, ["mode_not_restored"]
     while record["rereads"] < RECHECK_MAX_READS:
+        if clock() + RECHECK_INTERVAL_S > deadline:
+            break
         sleep(RECHECK_INTERVAL_S)
+        if clock() > deadline:
+            break
         snapshot = read()
+        done = clock()
         record["rereads"] += 1
-        reads.append(entry(snapshot))
+        reads.append(entry(snapshot, done))
+        if done > deadline:
+            break  # completed after the window: it proves nothing
         found = deviations(baseline, snapshot, phase, allowed_units=allowed_units)
         if found == []:
             streak += 1
@@ -288,6 +318,7 @@ def deviations_with_recheck(
         for before, after in zip(reads, reads[1:], strict=False)
         if before["state"] == "pending"
     )
+    record["elapsed_seconds"] = reads[-1]["t"] - started
     if record["pending_seconds"] > PENDING_ANOMALY_S:
         record["anomaly"] = "pending_over_15s"
     return result, record
