@@ -188,3 +188,61 @@ def test_live_preflight_needs_the_guard_linger_and_no_standing_guard_conflict():
             setattr(built, k, v)
         got = preflight.preflight(built)
         assert not got["ok"] and (got[key] if text is None else text in got[key])
+
+
+def test_the_offline_monitor_rechecks_a_pending_mode(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from scripts.spin_on_run import environment
+
+    now = [0.0]
+    monkeypatch.setattr(
+        environment,
+        "time",
+        SimpleNamespace(sleep=lambda s: now.__setitem__(0, now[0] + s), monotonic=lambda: now[0]),
+    )
+    snap = {
+        "unit_sha": common.HASHES["original_unit"],
+        "dropin_paths": "",
+        "service_active": True,
+        "units_active": ["esp32cam-server.service"],
+        "mode": {
+            "ready": True,
+            "state": "active",
+            "requested_mode": "eco",
+            "effective_mode": "eco",
+            "acknowledged": True,
+            "actuation_state": "hold",
+        },
+    }
+    reads = {"left": 1}
+
+    class Collector:
+        def snapshot(self):
+            value = json.loads(json.dumps(snap))
+            if reads["left"] > 0:
+                reads["left"] -= 1
+                value["mode"]["state"] = "pending"
+            return value
+
+    (tmp_path / "golden.json").write_text("[]")
+    (tmp_path / "baseline.json").write_text(json.dumps(snap))
+    cfg = {
+        "golden": str(tmp_path / "golden.json"),
+        "baseline": str(tmp_path / "baseline.json"),
+        "worker": "w",
+        "model": "m",
+        "ort": "o",
+        "input": "i",
+        "offline_unit": "esp32cam-off",
+    }
+    seen = {}
+    monkeypatch.setattr(cli, "_collector", lambda _cfg: Collector())
+    monkeypatch.setattr(cli.quality, "load_golden", lambda _text: [])
+    monkeypatch.setattr(
+        cli.offline_runner, "LinuxPlatform", lambda deviations: seen.setdefault("d", deviations)
+    )
+    monkeypatch.setattr(cli.offline_runner, "Runner", lambda *a, **k: None)
+    cli._offline_config(cfg, tmp_path / "out", thread=False)
+    assert seen["d"]() == []  # pending, then active twice
+    assert reads["left"] == 0

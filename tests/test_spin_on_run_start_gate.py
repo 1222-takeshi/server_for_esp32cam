@@ -399,3 +399,59 @@ def test_near_miss_unit_names_are_still_unexpected(world, name):
 def test_near_miss_live_unit_names_are_still_unexpected(world, name):
     _tmp, cfg, out = world
     assert _unexpected(evaluate(cfg, out, live=True, snapshot=_with_units(name)))
+
+
+class PendingThenActive(FakeCollector):
+    def __init__(self, pending_reads):
+        super().__init__()
+        self.pending = pending_reads
+
+    def snapshot(self):
+        value = super().snapshot()
+        if self.pending > 0:
+            self.pending -= 1
+            value["mode"]["state"] = "pending"
+        return value
+
+
+def gate_with(cfg, out, collector):
+    return start_gate.evaluate(
+        cfg,
+        live=False,
+        collector=collector,
+        baseline=copy.deepcopy(SNAPSHOT),
+        out_dir=out,
+        free_bytes=lambda _p: 3 * 1024**3,
+        temp_millic=lambda: 50_000,
+        run=run_fake(),
+    )
+
+
+def test_preflight_rechecks_a_pending_mode_and_records_it(world, monkeypatch):
+    from types import SimpleNamespace
+
+    now = [0.0]
+    monkeypatch.setattr(
+        environment,
+        "time",
+        SimpleNamespace(sleep=lambda s: now.__setitem__(0, now[0] + s), monotonic=lambda: now[0]),
+    )
+    _tmp, cfg, out = world
+    gate = gate_with(cfg, out, PendingThenActive(1))
+    assert gate["ok"], gate
+    assert gate["mode_recheck"]["rechecked"] is True and gate["mode_recheck"]["rereads"] == 2
+
+
+def test_preflight_still_fails_when_the_mode_stays_pending(world, monkeypatch):
+    from types import SimpleNamespace
+
+    now = [0.0]
+    monkeypatch.setattr(
+        environment,
+        "time",
+        SimpleNamespace(sleep=lambda s: now.__setitem__(0, now[0] + s), monotonic=lambda: now[0]),
+    )
+    _tmp, cfg, out = world
+    gate = gate_with(cfg, out, PendingThenActive(99))
+    assert not gate["ok"] and "mode_not_restored" in gate["O05"]
+    assert gate["mode_recheck"]["rereads"] == 10

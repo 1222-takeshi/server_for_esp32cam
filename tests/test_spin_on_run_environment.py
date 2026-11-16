@@ -390,8 +390,10 @@ def test_no_recheck_unless_the_only_deviation_is_pending(mode):
 def test_live_phase_never_rechecks():
     replay = Replay([ok()])
     found, record = replay.run(collect(), phase="live", first=pend())
-    assert replay.calls == 0 and not record["rechecked"] and found == environment.deviations(
-        collect(), pend(), "live"
+    assert (
+        replay.calls == 0
+        and not record["rechecked"]
+        and found == environment.deviations(collect(), pend(), "live")
     )
 
 
@@ -419,3 +421,104 @@ def test_the_recheck_runs_on_the_fake_clock_only():
     replay = Replay([pend()])
     replay.run(collect())
     assert replay.slept == [2] * 10 and replay.now == 1020.0
+
+
+class SlowReplay(Replay):
+    """Every read takes `cost` seconds on the fake clock; read starts are recorded."""
+
+    def __init__(self, reads, cost):
+        super().__init__(reads)
+        self.cost, self.starts = cost, []
+
+    def read(self):
+        self.starts.append(self.now)
+        self.now += self.cost
+        return super().read()
+
+
+def test_a_pass_after_the_twenty_second_window_does_not_count():
+    # 2 s sleep + 0.5 s read: the second match would complete at 25 s.
+    replay = SlowReplay([pend()] * 8 + [ok(), ok()], 0.5)
+    found, record = replay.run(collect())
+    assert found == ["mode_not_restored"]
+    assert replay.now - 1000.0 <= environment.RECHECK_WINDOW_S
+    assert all(start - 1000.0 <= environment.RECHECK_WINDOW_S for start in replay.starts)
+    assert record["rereads"] == replay.calls < 10
+
+
+def test_the_second_match_completing_exactly_at_the_window_end_passes():
+    replay = SlowReplay([pend()] * 6 + [ok(), ok()], 0.5)  # completes at 17.5 s and 20.0 s
+    found, record = replay.run(collect())
+    assert found == [] and record["rereads"] == 8
+
+
+def test_no_reread_starts_after_the_window_ends():
+    replay = SlowReplay([pend()] * 8 + [ok(), ok()], 0.5)
+    replay.run(collect())
+    assert replay.calls == 8  # a ninth read would start at 22 s
+
+
+def test_a_slow_first_match_cannot_be_followed_by_a_late_second_one():
+    replay = SlowReplay([ok(), ok(), ok()], 15)  # first match done at 17 s, second at 34 s
+    found, record = replay.run(collect())
+    assert found == ["mode_not_restored"] and replay.calls <= 2
+    assert record["rereads"] == replay.calls
+
+
+def test_the_record_is_complete_even_when_no_recheck_happened():
+    found, record = Replay([ok()]).run(collect(), first=ok())
+    assert found == [] and record["rechecked"] is False and record["rereads"] == 0
+    assert record["pending_seconds"] == 0 and record["anomaly"] is None
+    assert [r["state"] for r in record["reads"]] == ["active"]
+    assert set(record["reads"][0]) == {"t", *environment.RESTORED_MODE}
+
+
+class ScriptedMode:
+    """`get_json` whose first /mode read is pending, as under a trial's load."""
+
+    def __init__(self, pending_reads=1):
+        self.pending, self.plain = pending_reads, get_json()
+
+    def __call__(self, name):
+        data = self.plain(name)
+        if name == "mode" and self.pending > 0:
+            self.pending -= 1
+            return {**data, "state": "pending"}
+        return data
+
+
+@pytest.fixture
+def fast_clock(monkeypatch):
+    from types import SimpleNamespace
+
+    now = [0.0]
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    monkeypatch.setattr(
+        environment,
+        "time",
+        SimpleNamespace(sleep=sleep, monotonic=lambda: now[0], time=lambda: now[0]),
+    )
+
+
+def test_final_check_keeps_the_recheck_record_in_its_output(tmp_path, fast_clock):
+    out, base = write_baseline(tmp_path)
+    prepare_result(out)
+    common.write_json(out / "post-result.json", {"pass": True, "reasons": []})
+    collector = environment.Collector(run=FakeRun(), get_json=ScriptedMode(), unit_path=UNIT)
+    final = post_runner.final_check(out, collector, base)
+    assert final["codes"] == [] and final["mode_recheck"]["rechecked"] is True
+    assert final["mode_recheck"]["rereads"] == 2
+    assert [r["state"] for r in final["mode_recheck"]["reads"]] == ["pending", "active", "active"]
+    assert json.loads((out / "final.json").read_text())["mode_recheck"] == final["mode_recheck"]
+
+
+def test_final_check_records_a_no_recheck_result_too(tmp_path):
+    out, base = write_baseline(tmp_path)
+    prepare_result(out)
+    common.write_json(out / "post-result.json", {"pass": True, "reasons": []})
+    collector = environment.Collector(run=FakeRun(), get_json=get_json(), unit_path=UNIT)
+    final = post_runner.final_check(out, collector, base)
+    assert final["mode_recheck"]["rechecked"] is False and final["mode_recheck"]["reads"]

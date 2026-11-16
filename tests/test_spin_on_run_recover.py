@@ -583,3 +583,35 @@ def test_a_camera_boot_change_during_the_trial_is_a_child_exit_first_and_a04_aft
     quiet.run()
     final = rg.final_verdict(d2, collector, baseline())
     assert final["primary"] == "A04" and final["milestone"] is False
+
+
+class PendingOps(FakeOps):
+    """The first snapshot reads `pending`; later ones are active."""
+
+    def snapshot(self):
+        value = super().snapshot()
+        if self.snapshots == 1:
+            value["mode"] = {**value["mode"], "state": "pending"}
+        return value
+
+
+def test_r5_does_not_recheck_a_pending_mode(tmp_path):
+    ops = PendingOps()
+    g, _ = guard(tmp_path, ops=ops)
+    before = ops.t
+    result = g.r5(1)
+    assert not result.ok and "mode_not_restored" in result.detail
+    assert ops.snapshots == 1 and ops.t == before  # one read, no waiting
+
+
+def test_r5_saves_the_mode_record_for_every_attempt(tmp_path):
+    g, d = guard(tmp_path, ops=FakeOps())
+    assert g.r5(1).ok
+    record = json.loads((d / "mode-recheck.attempt1.json").read_text())
+    assert record["rechecked"] is False and record["rereads"] == 0
+    assert [r["state"] for r in record["reads"]] == ["active"]
+    pending_dir = tmp_path / "p"
+    g2, d2 = guard(pending_dir, ops=PendingOps())
+    assert not g2.r5(1).ok
+    saved = json.loads((d2 / "mode-recheck.attempt1.json").read_text())
+    assert [r["state"] for r in saved["reads"]] == ["pending"] and saved["rechecked"] is False

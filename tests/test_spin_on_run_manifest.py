@@ -10,8 +10,7 @@ REGISTERED = {
     "plan.json": "5da016646d2fb619926e9c6f07edb49fea7f30cbcaa95395ae11c3f09f13f87d",
 }
 REGISTERED_DIR = (
-    Path.home()
-    / ".local/share/esp32cam-training/hold-stability-573-20261028/spin-on-run-v2-plan"
+    Path.home() / ".local/share/esp32cam-training/hold-stability-573-20261028/spin-on-run-v2-plan"
 )
 
 
