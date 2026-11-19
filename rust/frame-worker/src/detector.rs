@@ -68,6 +68,38 @@ impl SpinPolicy {
     }
 }
 
+/// Intra-op thread count. The fixed profile is 3; the bench binary may select
+/// another count with an explicit experiment setting. Library defaults never
+/// read the environment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IntraThreads(u32);
+
+impl IntraThreads {
+    pub const FIXED: u32 = 3;
+    pub fn parse(value: std::result::Result<String, std::env::VarError>) -> Result<Self> {
+        match value {
+            Err(std::env::VarError::NotPresent) => Ok(Self(Self::FIXED)),
+            Err(_) => Err("invalid intra threads setting".into()),
+            Ok(value) => match value.as_str() {
+                "1" => Ok(Self(1)),
+                "2" => Ok(Self(2)),
+                "3" => Ok(Self(3)),
+                "4" => Ok(Self(4)),
+                _ => Err("invalid intra threads setting".into()),
+            },
+        }
+    }
+    pub fn count(self) -> usize {
+        self.0 as usize
+    }
+}
+
+impl Default for IntraThreads {
+    fn default() -> Self {
+        Self(Self::FIXED)
+    }
+}
+
 /// Session config entries added on top of the fixed builder options.
 pub fn session_config_entries(
     partition: TaskPartition,
@@ -251,6 +283,16 @@ impl Detector {
         partition: TaskPartition,
         spin: SpinPolicy,
     ) -> Result<Self> {
+        Self::new_with_settings(model, runtime, partition, spin, IntraThreads::default())
+    }
+
+    pub fn new_with_settings(
+        model: &Path,
+        runtime: &Path,
+        partition: TaskPartition,
+        spin: SpinPolicy,
+        intra_threads: IntraThreads,
+    ) -> Result<Self> {
         let runtime = runtime.canonicalize()?;
         verify_runtime(&runtime)?;
         let mut bytes = Vec::new();
@@ -262,7 +304,7 @@ impl Detector {
         }
         ort::init_from(&runtime)?.commit();
         let builder = Session::builder()?
-            .with_intra_threads(3)?
+            .with_intra_threads(intra_threads.count())?
             .with_inter_threads(1)?
             .with_parallel_execution(false)?
             .with_intra_op_spinning(spin.intra_op_spinning())?

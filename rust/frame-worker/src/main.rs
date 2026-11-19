@@ -1,6 +1,8 @@
 //! Finite offline experiment worker. It neither listens on a port nor drives motors.
 use esp32cam_frame_worker::{
-    detector::{Detector, Result, SpinPolicy, TaskPartition, postprocess, prepare_rgb},
+    detector::{
+        Detector, IntraThreads, Result, SpinPolicy, TaskPartition, postprocess, prepare_rgb,
+    },
     jpeg, replay,
 };
 use serde_json::json;
@@ -17,9 +19,15 @@ fn execute() -> Result<()> {
     }
     let partition = TaskPartition::parse(std::env::var("ESP32CAM_RUST_BENCH_DYNAMIC_BLOCKS"))?;
     let spin = SpinPolicy::parse(std::env::var("ESP32CAM_RUST_BENCH_SPIN_ON_RUN"))?;
+    let intra_threads = IntraThreads::parse(std::env::var("ESP32CAM_RUST_BENCH_INTRA_THREADS"))?;
     let gap = replay::parse_gap(std::env::var("ESP32CAM_RUST_BENCH_FRAME_GAP_MS"))?;
-    let mut detector =
-        Detector::new_with_policy(Path::new(&args[1]), Path::new(&args[2]), partition, spin)?;
+    let mut detector = Detector::new_with_settings(
+        Path::new(&args[1]),
+        Path::new(&args[2]),
+        partition,
+        spin,
+        intra_threads,
+    )?;
     let wall = Instant::now();
     replay::run_with_gap(
         &mut io::stdin().lock(),
@@ -52,7 +60,7 @@ fn execute() -> Result<()> {
             );
             Ok(json!({"dynamic_block_base":partition.base(),
             // Selected configuration only; not an ORT readback.
-            "spin_on_run":spin==SpinPolicy::RunOnly,"intra_op_spinning":spin.intra_op_spinning(),"force_spinning_stop":spin.force_spinning_stop(),"runtime_build":ort::info(),"input_sha256":input_sha,"raw_sha256":raw_sha,"detections":detections,
+            "spin_on_run":spin==SpinPolicy::RunOnly,"intra_threads":intra_threads.count(),"intra_op_spinning":spin.intra_op_spinning(),"force_spinning_stop":spin.force_spinning_stop(),"runtime_build":ort::info(),"input_sha256":input_sha,"raw_sha256":raw_sha,"detections":detections,
             "decode_us":decoded.as_micros(),"prepare_us":(prepared-decoded).as_micros(),
             "infer_us":(inferred-prepared).as_micros(),"post_us":(total-inferred).as_micros(),
             "total_us":total.as_micros(),"wall_us":wall.elapsed().as_micros(),"usage":replay::usage()}))

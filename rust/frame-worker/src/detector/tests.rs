@@ -45,6 +45,24 @@ fn spin_policy_is_opt_in_strict_and_only_ever_requests_one() {
 }
 
 #[test]
+fn intra_threads_default_to_the_fixed_profile_and_parse_strictly() {
+    assert_eq!(IntraThreads::default().count(), 3);
+    assert_eq!(
+        IntraThreads::parse(Err(std::env::VarError::NotPresent))
+            .unwrap()
+            .count(),
+        3
+    );
+    for (value, want) in [("1", 1), ("2", 2), ("3", 3), ("4", 4)] {
+        assert_eq!(IntraThreads::parse(Ok(value.into())).unwrap().count(), want);
+    }
+    for value in ["", "0", "5", "02", " 2", "2 ", "-1", "2\n", "two"] {
+        assert!(IntraThreads::parse(Ok(value.into())).is_err());
+    }
+    assert!(IntraThreads::parse(Err(std::env::VarError::NotUnicode("x".into()))).is_err());
+}
+
+#[test]
 fn session_config_entries_keep_the_default_profile_and_add_only_the_selected_keys() {
     assert!(session_config_entries(TaskPartition::Static, SpinPolicy::Off).is_empty());
     assert_eq!(
@@ -75,7 +93,9 @@ fn detector_builder_uses_only_the_per_session_internal_pool() {
         assert!(!production.contains(forbidden), "{forbidden}");
     }
     for fixed in [
-        ".with_intra_threads(3)",
+        ".with_intra_threads(intra_threads.count())",
+        "pub const FIXED: u32 = 3",
+        "IntraThreads::default()",
         ".with_inter_threads(1)",
         ".with_parallel_execution(false)",
         ".with_inter_op_spinning(false)",
