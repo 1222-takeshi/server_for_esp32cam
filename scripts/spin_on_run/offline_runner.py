@@ -127,6 +127,7 @@ class Config:
     out_dir: Path
     clk_tck: int
     prefix: list[str] = field(default_factory=lambda: ["taskset", "--cpu-list", "1-3"])
+    candidate_prefix: list[str] | None = None
     idle_s: float = IDLE_BETWEEN_RUNS_S
     monitor_period_s: float = 1.0
     child_limit_s: float = CHILD_LIMIT_S
@@ -229,9 +230,15 @@ class Runner:
                 raise Stop("O04", f"temp={self.vitals[-1]['temp_millic']}")
             self.platform.sleep(min(self.cfg.monitor_period_s, 1.0))
 
+    def prefix_for(self, condition: str) -> list[str]:
+        """Spawn prefix for a condition; candidate B may carry its own (plan v4-E)."""
+        if condition == "B" and self.cfg.candidate_prefix is not None:
+            return self.cfg.candidate_prefix
+        return self.cfg.prefix
+
     # -- one run -----------------------------------------------------------
     def spawn(self, condition: str, stderr_path: Path):
-        argv = [*self.cfg.prefix, str(self.cfg.worker), str(self.cfg.model), str(self.cfg.ort)]
+        argv = [*self.prefix_for(condition), str(self.cfg.worker), str(self.cfg.model), str(self.cfg.ort)]
         paced = self.cfg.pace_gap_s is not None
         if paced:
             self._frames = split_frames(Path(self.cfg.input_path).read_bytes())

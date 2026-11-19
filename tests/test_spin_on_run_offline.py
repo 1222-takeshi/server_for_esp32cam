@@ -125,6 +125,24 @@ def test_candidate_env_reaches_only_condition_b_and_can_override_the_spin_switch
     assert offline_runner.env_with_candidate("B") == offline_runner.child_env("B")
 
 
+def test_candidate_prefix_applies_to_condition_b_only(tmp_path):
+    cfg = offline_runner.Config(
+        worker=tmp_path / "w",
+        model=tmp_path / "m",
+        ort=tmp_path / "o",
+        input_path=tmp_path / "i",
+        golden=[],
+        out_dir=tmp_path / "out",
+        clk_tck=100,
+        candidate_prefix=["taskset", "--cpu-list", "0-3"],
+    )
+    runner = offline_runner.Runner(cfg, FakePlatform())
+    assert runner.prefix_for("A") == ["taskset", "--cpu-list", "1-3"]
+    assert runner.prefix_for("B") == ["taskset", "--cpu-list", "0-3"]
+    cfg.candidate_prefix = None
+    assert runner.prefix_for("B") == ["taskset", "--cpu-list", "1-3"]
+
+
 def test_full_dry_run_completes_all_sixteen_runs_and_decides(setup):
     runner, out = setup("ok")
     result = runner.run()
