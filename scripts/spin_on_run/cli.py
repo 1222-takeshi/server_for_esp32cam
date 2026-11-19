@@ -149,6 +149,7 @@ def _offline_config(cfg: dict, out_dir: Path, *, thread: bool) -> offline_runner
         golden=golden,
         out_dir=out_dir,
         clk_tck=clk,
+        candidate_env=dict(cfg.get("candidate_env", {})),
     )
     if thread:
         thread_cpu.configure(run_cfg, platform)

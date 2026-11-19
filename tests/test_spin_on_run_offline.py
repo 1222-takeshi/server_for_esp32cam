@@ -110,6 +110,21 @@ def test_child_env_carries_only_the_two_experiment_switches_and_path():
     assert b["ESP32CAM_RUST_BENCH_SPIN_ON_RUN"] == "1" and len(b) == 3
 
 
+def test_candidate_env_reaches_only_condition_b_and_can_override_the_spin_switch():
+    candidate = {"ESP32CAM_RUST_BENCH_INTRA_THREADS": "2"}
+    a = offline_runner.env_with_candidate("A", {}, candidate)
+    b = offline_runner.env_with_candidate("B", {}, candidate)
+    assert "ESP32CAM_RUST_BENCH_INTRA_THREADS" not in a
+    assert b["ESP32CAM_RUST_BENCH_INTRA_THREADS"] == "2"
+    assert b["ESP32CAM_RUST_BENCH_SPIN_ON_RUN"] == "1"
+    off = offline_runner.env_with_candidate(
+        "B", {}, {**candidate, "ESP32CAM_RUST_BENCH_SPIN_ON_RUN": "0"}
+    )
+    assert off["ESP32CAM_RUST_BENCH_SPIN_ON_RUN"] == "0"
+    assert offline_runner.env_with_candidate("A") == offline_runner.child_env("A")
+    assert offline_runner.env_with_candidate("B") == offline_runner.child_env("B")
+
+
 def test_full_dry_run_completes_all_sixteen_runs_and_decides(setup):
     runner, out = setup("ok")
     result = runner.run()

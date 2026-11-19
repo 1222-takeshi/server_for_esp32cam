@@ -133,6 +133,7 @@ class Config:
     temp_wait_s: float = START_TEMP_WAIT_S
     order: str = ORDER
     extra_env: dict = field(default_factory=dict)
+    candidate_env: dict = field(default_factory=dict)
     env_for: Callable[[str, dict], dict] = None  # condition -> child environment
     start_hook: Callable[[int, str], object] = None  # (child pid, condition) -> handle
     stop_hook: Callable[[object], object] = None  # handle -> collected data
@@ -150,6 +151,22 @@ def child_env(condition: str, extra: dict | None = None) -> dict:
     }
     env.update(extra or {})
     return env
+
+
+def env_with_candidate(
+    condition: str, extra: dict | None = None, candidate_env: dict | None = None
+) -> dict:
+    """`child_env`, with `candidate_env` merged over condition B only.
+
+    A candidate that needs more than the built-in spin switch (plan v4:
+    the intra-op thread count, or forcing the spin switch back off for B)
+    is expressed in the trial config instead of new condition letters.
+    Condition A always sees exactly `extra`.
+    """
+    merged = dict(extra or {})
+    if condition == "B":
+        merged.update(candidate_env or {})
+    return child_env(condition, merged)
 
 
 class Runner:
@@ -225,7 +242,11 @@ class Runner:
             stdin=stdin,
             stdout=subprocess.PIPE,
             stderr=stderr,
-            env=(self.cfg.env_for or child_env)(condition, self.cfg.extra_env),
+            env=(
+                self.cfg.env_for(condition, self.cfg.extra_env)
+                if self.cfg.env_for is not None
+                else env_with_candidate(condition, self.cfg.extra_env, self.cfg.candidate_env)
+            ),
         )
         if paced:
             stdin = child.stdin
