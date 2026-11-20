@@ -70,6 +70,13 @@ def _collector(cfg: dict) -> environment.Collector:
     )
 
 
+def _block_mode_enabled(config_path: str) -> bool:
+    try:
+        return bool(_config(config_path).get("block_size"))
+    except (OSError, ValueError, KeyError):
+        return False
+
+
 def cmd_units(args: argparse.Namespace) -> int:
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=False)
@@ -97,7 +104,8 @@ def cmd_units(args: argparse.Namespace) -> int:
             out / "offline-systemd-run.json",
             {
                 "offline": units.offline_systemd_run(
-                    offline, args.root, args.config, args.run_dir, thread=args.thread
+                    offline, args.root, args.config, args.run_dir, thread=args.thread,
+                    runtime_max_s=7200 if _block_mode_enabled(args.config) else None,
                 ),
                 "post": units.post_systemd_run(post, offline, args.root, args.config, args.run_dir),
             },
@@ -151,6 +159,9 @@ def _offline_config(cfg: dict, out_dir: Path, *, thread: bool) -> offline_runner
         clk_tck=clk,
         candidate_env=dict(cfg.get("candidate_env", {})),
         candidate_prefix=cfg.get("candidate_prefix"),
+        block_size=int(cfg.get("block_size", 0) or 0),
+        block_max_retries=int(cfg.get("block_max_retries", 3)),
+        block_wait_s=float(cfg.get("block_wait_s", 600)),
     )
     if thread:
         thread_cpu.configure(run_cfg, platform)

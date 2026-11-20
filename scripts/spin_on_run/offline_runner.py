@@ -135,6 +135,13 @@ class Config:
     order: str = ORDER
     extra_env: dict = field(default_factory=dict)
     candidate_env: dict = field(default_factory=dict)
+    # Block mode (0 = legacy single pass): runs are executed in blocks of
+    # this size; a block stopped by an environment deviation (O05) is
+    # discarded and redone once the environment is clean again. Verdict
+    # inputs and thresholds are identical either way.
+    block_size: int = 0
+    block_max_retries: int = 3
+    block_wait_s: float = 600.0
     env_for: Callable[[str, dict], dict] = None  # condition -> child environment
     start_hook: Callable[[int, str], object] = None  # (child pid, condition) -> handle
     stop_hook: Callable[[object], object] = None  # handle -> collected data
@@ -192,12 +199,19 @@ class Runner:
 
     # -- monitoring --------------------------------------------------------
     def sample(self, now: float) -> None:
-        """One vitals sample; raises Stop for thermal, capacity or stale values."""
+        self._sample(now, strict=True)
+
+    def _sample(self, now: float, *, strict: bool) -> None:
+        """One vitals sample; raises Stop for thermal, capacity or stale values.
+
+        Non-strict samples (block-mode waits) skip the deviation check so
+        vitals keep flowing while the environment is known to deviate.
+        """
         try:
             temp, throttled = self.platform.temp_millic(), self.platform.throttled()
             free = self.platform.free_bytes(self.cfg.out_dir)
             used = self.platform.stage_bytes(self.cfg.out_dir)
-            deviation = self.platform.environment_deviations()
+            deviation = self.platform.environment_deviations() if strict else []
         except (OSError, ValueError, subprocess.SubprocessError) as error:
             if now - self._last_sample > MONITOR_MAX_AGE_S:
                 raise Stop("O06", f"monitor stale: {type(error).__name__}") from error
@@ -387,12 +401,11 @@ class Runner:
         self._vitals_file = open(self.cfg.out_dir / "vitals.jsonl", "x")  # noqa: SIM115
         marker = "completed"
         try:
-            self.sample(self.platform.monotonic())
-            for index, condition in enumerate(self.cfg.order):
-                self.wait_start_temperature()
-                self.run_one(index, condition)
-                if index < len(self.cfg.order) - 1:
-                    self.platform.sleep(self.cfg.idle_s)
+            if self.cfg.block_size:
+                self._wait_environment_clean()
+            else:
+                self.sample(self.platform.monotonic())
+            self._run_all()
             self.evaluate_metrics()
         except Stop as stop:
             self.record(stop.code, stop.detail)
@@ -405,6 +418,60 @@ class Runner:
         os.chmod(self.cfg.out_dir / "vitals.jsonl", 0o400)
         common.write_new(self.cfg.out_dir / "marker", marker + "\n")
         return self.summarize(marker)
+
+    def _run_all(self) -> None:
+        order = self.cfg.order
+        if not self.cfg.block_size:
+            for index, condition in enumerate(order):
+                self.wait_start_temperature()
+                self.run_one(index, condition)
+                if index < len(order) - 1:
+                    self.platform.sleep(self.cfg.idle_s)
+            return
+        index = 0
+        attempts: dict[int, int] = {}
+        while index < len(order):
+            block_end = min(index + self.cfg.block_size, len(order))
+            runs_before, windows_before = len(self.runs), len(self.windows)
+            current = index
+            try:
+                while current < block_end:
+                    self.wait_start_temperature()
+                    self.run_one(current, order[current])
+                    if current < len(order) - 1:
+                        self.platform.sleep(self.cfg.idle_s)
+                    current += 1
+            except Stop as stop:
+                if stop.code != "O05" or attempts.get(index, 0) >= self.cfg.block_max_retries:
+                    raise
+                attempts[index] = attempts.get(index, 0) + 1
+                self.details.append(f"block_retry:{index}:{attempts[index]}:{stop.detail}")
+                self._discard_block(index, current, runs_before, windows_before)
+                self._wait_environment_clean()
+                continue
+            index = block_end
+
+    def _discard_block(self, block_start: int, failed: int, runs_before: int, windows_before: int) -> None:
+        del self.runs[runs_before:]
+        del self.windows[windows_before:]
+        for index in range(block_start, failed + 1):
+            for name in (f"run{index:02d}-{self.cfg.order[index]}.jsonl", f"run{index:02d}.stderr"):
+                try:
+                    (self.cfg.out_dir / name).unlink()
+                except FileNotFoundError:
+                    pass
+
+    def _wait_environment_clean(self) -> None:
+        """Block mode: keep sampling vitals until no deviations remain."""
+        deadline = self.platform.monotonic() + self.cfg.block_wait_s
+        while True:
+            now = self.platform.monotonic()
+            self._sample(now, strict=False)
+            if not self.platform.environment_deviations():
+                return
+            if now >= deadline:
+                raise Stop("O05", "environment_not_restored_wait")
+            self.platform.sleep(self.cfg.monitor_period_s)
 
     def evaluate_metrics(self) -> None:
         """Before the marker is written: a malformed per-row field is O06 (plan 5.4, 9.1).

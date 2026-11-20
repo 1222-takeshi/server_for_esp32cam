@@ -310,3 +310,74 @@ class _NoProc:
 
     def self_ticks(self, pid):
         raise FileNotFoundError
+
+
+class EpisodePlatform(FakePlatform):
+    """Deviations switch on for chosen run starts, then clear after some polls."""
+
+    def __init__(self, spoil_starts=(), clear_after_polls=2):
+        super().__init__()
+        self.starts = 0
+        self.spoil_starts = set(spoil_starts)
+        self.clear_after_polls = clear_after_polls
+        self._polls_left = None
+
+    def note_start(self):
+        index = self.starts
+        self.starts += 1
+        if index in self.spoil_starts:
+            self.deviations = ["mode_not_restored"]
+            self._polls_left = self.clear_after_polls
+
+    def environment_deviations(self):
+        if self.deviations and self._polls_left is not None:
+            self._polls_left -= 1
+            if self._polls_left < 0:
+                self.deviations = []
+                self._polls_left = None
+        return list(self.deviations)
+
+
+def _block_setup(setup, mode, platform, **overrides):
+    overrides.setdefault("start_hook", lambda pid, condition: platform.note_start())
+    overrides.setdefault("block_size", 4)
+    return setup(mode, platform, **overrides)
+
+
+def test_block_mode_redoes_only_the_spoiled_block(setup):
+    platform = EpisodePlatform(spoil_starts={6})
+    runner, out = _block_setup(setup, "ok", platform)
+    result = runner.run()
+    assert result["marker"] == "completed" and result["codes"] == []
+    assert result["runs_completed"] == 16
+    assert [r["condition"] for r in runner.runs] == list("ABBABAABABBABAAB")
+    assert "block_retry:4:1" in "".join(result["details"])
+    assert platform.starts == 19  # 16 runs + 3 starts in the discarded attempt
+    assert len(list(out.glob("run*-?.jsonl"))) == 16
+
+
+def test_block_mode_gives_up_after_max_retries(setup):
+    platform = EpisodePlatform(spoil_starts={4, 5, 6})
+    runner, out = _block_setup(setup, "ok", platform, block_max_retries=2)
+    result = runner.run()
+    assert result["codes"] == ["O05"] and result["verdict"]["id"] == "V1"
+    assert result["runs_completed"] == 4
+    details = "".join(result["details"])
+    assert "block_retry:4:1" in details and "block_retry:4:2" in details
+
+
+def test_block_mode_waits_for_a_clean_environment_at_start(setup):
+    platform = EpisodePlatform(clear_after_polls=None)
+    platform.deviations = ["mode_not_restored"]
+    runner, out = _block_setup(setup, "ok", platform, block_wait_s=0.3)
+    result = runner.run()
+    assert result["codes"] == ["O05"] and result["runs_completed"] == 0
+
+
+def test_block_mode_does_not_retry_quality_failures(setup):
+    platform = EpisodePlatform()
+    runner, out = _block_setup(setup, "mismatch_b", platform)
+    result = runner.run()
+    assert result["codes"] == ["O01"]
+    assert "block_retry" not in "".join(result["details"])
+    assert platform.starts == 2

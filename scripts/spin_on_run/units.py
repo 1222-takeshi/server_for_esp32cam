@@ -142,15 +142,16 @@ def live_systemd_run(unit: str, seconds: int, root: str, config: str, run_dir: s
 
 
 def offline_systemd_run(
-    unit: str, root: str, config: str, out_dir: str, *, thread: bool
+    unit: str, root: str, config: str, out_dir: str, *, thread: bool, runtime_max_s: int | None = None
 ) -> list[str]:
     """The offline unit; its stop starts the follow-up unit without blocking."""
+    runtime_max = runtime_max_s if runtime_max_s is not None else (900 if thread else 1500)
     return [
         "systemd-run",
         "--user",
         f"--unit={unit}",
         f"--property=WorkingDirectory={root}",
-        "--property=RuntimeMaxSec=" + ("900" if thread else "1500"),
+        f"--property=RuntimeMaxSec={runtime_max}",
         "--property=TimeoutStopSec=30",
         "--property=KillMode=control-group",
         f"--property=ExecStopPost={_exec(root, 'offline-post', config, out_dir, 'launch')}",

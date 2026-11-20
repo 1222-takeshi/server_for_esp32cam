@@ -122,6 +122,9 @@ def test_offline_post_unit_is_a_300_second_oneshot_after_the_offline_unit():
     assert "--property=RuntimeMaxSec=900" in units.offline_systemd_run(
         "m", "/r", "/c", "/o", thread=True
     )
+    assert "--property=RuntimeMaxSec=7200" in units.offline_systemd_run(
+        "o", "/root", "/c.json", "/out", thread=False, runtime_max_s=7200
+    )
 
 
 def test_launch_request_never_contains_credential_values():
