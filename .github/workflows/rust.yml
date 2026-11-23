@@ -12,7 +12,8 @@ concurrency:
   cancel-in-progress: true
 jobs:
   rust:
-    runs-on: ubuntu-latest
+    # #622: run on the DGX Spark self-hosted runner (ARM64).
+    runs-on: [self-hosted, Linux, ARM64, dgx-spark]
     timeout-minutes: 15
     env:
       TURBOJPEG_SOURCE: explicit
