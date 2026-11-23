@@ -57,7 +57,8 @@ jobs:
   compile-operating-firmware:
     needs: changes
     if: needs.changes.outputs.operating_firmware == 'true'
-    runs-on: ubuntu-latest
+    # #622: run on the DGX Spark self-hosted runner (ARM64).
+    runs-on: [self-hosted, Linux, ARM64, dgx-spark]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -124,7 +125,8 @@ jobs:
           python -m coverage report --format=markdown >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
 
   dependency-audit:
-    runs-on: ubuntu-latest
+    # #622: run on the DGX Spark self-hosted runner (ARM64).
+    runs-on: [self-hosted, Linux, ARM64, dgx-spark]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
