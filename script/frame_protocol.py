@@ -146,6 +146,14 @@ class ClockWindow:
     A delayed exchange cannot discard still-valid tighter evidence. Each sample
     keeps its original expiry; new exchanges never renew an older sample.
     Empty intersections and definitely future captures fail closed.
+
+    Judgment walks the samples newest first. A sample taken before the
+    camera clock was stepped, or over an asymmetric path, can date a frame
+    in the future and would otherwise veto every frame for its full 10 s
+    lifetime, even while fresh exchanges keep agreeing with each other.
+    Once two fresh samples agree on an interval, one older dissenting
+    sample no longer vetoes the frame. A dissent by either of the two
+    freshest samples still fails closed.
     """
 
     def __init__(self) -> None:
@@ -159,14 +167,21 @@ class ClockWindow:
         self.samples.append(sample)
 
     def age_bounds_us(self, frame: CameraFrame, received_us: int) -> tuple[int, int] | None:
-        low, high = 0, None
-        for sample in self.samples:
-            if (sample.boot_id != frame.boot_id or sample.received_us > received_us
-                    or received_us - sample.received_us > 10_000_000):
-                continue
+        live = [
+            sample for sample in self.samples
+            if not (sample.boot_id != frame.boot_id or sample.received_us > received_us
+                    or received_us - sample.received_us > 10_000_000)
+        ]
+        agreed: list[tuple[int, int]] = []
+        for sample in reversed(live):
             bounds = sample.age_bounds_us(frame, received_us)
             if bounds is None:
+                if len(agreed) >= 2:
+                    break
                 return None
-            low = max(low, bounds[0])
-            high = bounds[1] if high is None else min(high, bounds[1])
-        return (low, high) if high is not None and low <= high else None
+            agreed.append(bounds)
+        if not agreed:
+            return None
+        low = max(bounds[0] for bounds in agreed)
+        high = min(bounds[1] for bounds in agreed)
+        return (low, high) if low <= high else None
