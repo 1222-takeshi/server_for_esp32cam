@@ -27,6 +27,11 @@ from script.frame_protocol import (
 TEXT_LIMIT = 512
 UINT64_MAX = 2**64 - 1
 MAX_PIXELS = 1_000_000
+# Clock exchanges slower than this carry the least reliable offsets
+# (production round trips measure ~12 ms at p50 and ~39 ms at p99), so
+# their samples still count as clock contact but are not admitted to the
+# clock window that frame ages are judged against.
+MAX_CLOCK_SAMPLE_ROUND_TRIP_US = 100_000
 
 
 class SinkFailure(RuntimeError):
@@ -436,7 +441,10 @@ class CaptureReceiver:
                             sample = ClockSample.from_exchange(item["boot_id"],
                                                                item["device_us"],
                                                                pending[1], received)
-                            clock_window.add(sample)
+                            admitted = (received - pending[1]
+                                        <= MAX_CLOCK_SAMPLE_ROUND_TRIP_US)
+                            if admitted:
+                                clock_window.add(sample)
                             boot = item["boot_id"]
                             pending = None
                             self._emit(status="clock", boot_id=boot,
@@ -446,7 +454,8 @@ class CaptureReceiver:
                                        offset_high_us=sample.offset_high_us,
                                        round_trip_us=received - sample.received_us +
                                        sample.offset_high_us - sample.offset_low_us,
-                                       drift_bound_ppm=200)
+                                       drift_bound_ppm=200,
+                                       sample_admitted=admitted)
                         else:
                             if boot is not None and item["boot_id"] != boot:
                                 raise ValueError("boot_mismatch")
