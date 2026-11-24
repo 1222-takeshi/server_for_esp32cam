@@ -172,3 +172,42 @@ def test_clock_window_contains_true_age_at_both_drift_limits(drift_ppm, captured
     frame = decode_frame(packet(captured=captured, sent=captured+20_000))
     low, high = window.age_bounds_us(frame, host(captured)+age)
     assert low <= age <= high
+
+
+def _window_with(*samples):
+    window = ClockWindow()
+    for sample in samples:
+        window.add(sample)
+    return window
+
+
+def test_clock_window_ignores_one_stale_dissenter_after_two_fresh_agree():
+    # True offset is +10,000us (host = device + 10,000). The oldest sample
+    # predates a +60ms camera clock step, so its offset (+70,000us) dates
+    # the frame in the future; the two fresh samples agree with each other.
+    stale = ClockSample.from_exchange(11, 500_000, 569_900, 570_100)
+    fresh1 = ClockSample.from_exchange(11, 1_000_000, 1_009_900, 1_010_100)
+    fresh2 = ClockSample.from_exchange(11, 2_000_000, 2_009_900, 2_010_100)
+    frame = decode_frame(packet(captured=2_100_000, sent=2_125_000))
+    assert stale.age_bounds_us(frame, 2_150_000) is None
+    window = _window_with(stale, fresh1, fresh2)
+    low, high = window.age_bounds_us(frame, 2_150_000)
+    assert low <= 40_000 <= high
+
+
+def test_clock_window_fails_closed_when_the_freshest_sample_dissents():
+    fresh1 = ClockSample.from_exchange(11, 1_000_000, 1_009_900, 1_010_100)
+    fresh2 = ClockSample.from_exchange(11, 2_000_000, 2_009_900, 2_010_100)
+    dissenting = ClockSample.from_exchange(11, 2_050_000, 2_119_900, 2_120_100)
+    frame = decode_frame(packet(captured=2_100_000, sent=2_125_000))
+    assert dissenting.age_bounds_us(frame, 2_150_000) is None
+    window = _window_with(fresh1, fresh2, dissenting)
+    assert window.age_bounds_us(frame, 2_150_000) is None
+
+
+def test_clock_window_one_agreeing_sample_does_not_override_a_dissenter():
+    stale = ClockSample.from_exchange(11, 500_000, 569_900, 570_100)
+    fresh = ClockSample.from_exchange(11, 2_000_000, 2_009_900, 2_010_100)
+    frame = decode_frame(packet(captured=2_100_000, sent=2_125_000))
+    window = _window_with(stale, fresh)
+    assert window.age_bounds_us(frame, 2_150_000) is None
