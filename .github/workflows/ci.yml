@@ -22,7 +22,9 @@ concurrency:
 
 jobs:
   changes:
-    runs-on: ubuntu-latest
+    # #622: run on the DGX Spark self-hosted runner (ARM64) so CI does not
+    # depend on hosted-runner billing state.
+    runs-on: [self-hosted, Linux, ARM64, dgx-spark]
     timeout-minutes: 5
     permissions:
       # Job-level `permissions:` replaces (not merges with) the
@@ -163,7 +165,8 @@ jobs:
     # ESP32 core + compiling the sketch) is one of the slower jobs here and
     # has no bearing on script/docs/tests-only changes. See #350.
     if: needs.changes.outputs.esp32_example == 'true'
-    runs-on: ubuntu-latest
+    # #622: run on the DGX Spark self-hosted runner (ARM64).
+    runs-on: [self-hosted, Linux, ARM64, dgx-spark]
     # The Arduino toolchain cache key includes hashFiles of this workflow
     # file, so any future edit to it invalidates the cache -- give this job
     # enough headroom for a fully cold core download + compile, not just
