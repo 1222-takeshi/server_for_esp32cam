@@ -857,3 +857,26 @@ def test_real_transport_applies_backpressure_when_consumer_stalls():
                 producer.join(timeout=2)
                 serving.join(timeout=2)
             assert not producer.is_alive()
+
+
+class SlowClock:
+    """Advances 60 ms per call, so a ping/pong exchange exceeds 100 ms."""
+
+    def __init__(self):
+        self.value = 2_000_000
+
+    def __call__(self):
+        self.value += 60_000
+        return self.value
+
+
+def test_slow_clock_exchange_is_contact_but_not_admitted_to_the_window():
+    events = []
+    app = create_receiver(device_api_key="private", clock_us=SlowClock(),
+                          event_sink=events.append)
+    socket = Socket(["PONG", frame()])
+    app.handle(socket, "esp32cam-01", "private")
+    clock_events = [event for event in events if event["status"] == "clock"]
+    assert clock_events and clock_events[0]["sample_admitted"] is False
+    dropped = [event for event in events if event["status"] == "dropped"]
+    assert dropped and dropped[0]["reason"] == "clock_expired"
