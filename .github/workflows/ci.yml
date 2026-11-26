@@ -161,21 +161,29 @@ jobs:
   compile-esp32-example:
     needs: changes
     # Skip on pushes/PRs that don't touch the example sketch or this
-    # workflow file -- arduino/compile-sketches (downloading the Arduino
-    # ESP32 core + compiling the sketch) is one of the slower jobs here and
-    # has no bearing on script/docs/tests-only changes. See #350.
+    # workflow file -- installing the Arduino ESP32 core + compiling the
+    # sketch is one of the slower jobs here and has no bearing on
+    # script/docs/tests-only changes. See #350.
     if: needs.changes.outputs.esp32_example == 'true'
-    # #622: stays hosted for now. The arduino/compile-sketches action
-    # downloads an x86_64 arduino-cli, which cannot execute on the ARM64
-    # DGX runner (Exec format error); the missing host tools (python, yq,
-    # pipx) were already provisioned on the DGX side, so this is the
-    # remaining blocker.
-    runs-on: ubuntu-latest
+    # #622: runs on the DGX self-hosted runner like every other job. The
+    # arduino/compile-sketches action cannot be used here: it downloads an
+    # x86_64 arduino-cli, which cannot execute on the ARM64 runner. The
+    # official arduino-cli ships a Linux ARM64 build, so this job installs
+    # it directly (version and SHA256 pinned below) and drives the same
+    # core install + compile steps the action wrapped. The ESP32 core
+    # version is pinned too (verified on the DGX runner, 2026-11-27);
+    # bump it deliberately, like this repo's other pins.
+    runs-on: [self-hosted, Linux, ARM64, dgx-spark]
     # The Arduino toolchain cache key includes hashFiles of this workflow
     # file, so any future edit to it invalidates the cache -- give this job
     # enough headroom for a fully cold core download + compile, not just
     # the warm-cache case.
     timeout-minutes: 30
+    env:
+      ARDUINO_CLI_VERSION: "1.6.0"
+      ARDUINO_CLI_SHA256: "2ed4e1436bb3be1265966af8eba95dd25e28f3a9f92d0a58d371ed14dbaf550f"
+      ESP32_CORE_VERSION: "4.0.0"
+      ESP32_INDEX_URL: "https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json"
     steps:
       - uses: actions/checkout@v4
       - name: Cache Arduino CLI data
@@ -187,17 +195,20 @@ jobs:
           key: arduino15-esp32cam-${{ hashFiles('.github/workflows/ci.yml') }}
           restore-keys: |
             arduino15-esp32cam-
+      - name: Install arduino-cli (Linux ARM64)
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl -fsSL -o arduino-cli.tar.gz "https://github.com/arduino/arduino-cli/releases/download/v${ARDUINO_CLI_VERSION}/arduino-cli_${ARDUINO_CLI_VERSION}_Linux_ARM64.tar.gz"
+          echo "${ARDUINO_CLI_SHA256}  arduino-cli.tar.gz" | sha256sum -c -
+          mkdir -p arduino-cli-bin
+          tar xzf arduino-cli.tar.gz -C arduino-cli-bin
+          echo "$RUNNER_TEMP/arduino-cli-bin" >> "$GITHUB_PATH"
+      - name: Install ESP32 core
+        run: |
+          arduino-cli core update-index --additional-urls "$ESP32_INDEX_URL"
+          arduino-cli core install "esp32:esp32@${ESP32_CORE_VERSION}" --additional-urls "$ESP32_INDEX_URL"
       - name: Prepare config.h for CI
         run: cp examples/esp32cam_snapshot_upload/config.h.example examples/esp32cam_snapshot_upload/config.h
       - name: Compile ESP32-CAM example
-        # arduino/compile-sketches v1.1.2
-        uses: arduino/compile-sketches@25426ace8a446e747a3d3d7a9da759a6925613aa
-        with:
-          fqbn: esp32:esp32:esp32cam
-          platforms: |
-            - name: esp32:esp32
-              source-url: https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
-          libraries: "[]"
-          sketch-paths: |
-            - examples/esp32cam_snapshot_upload
-          verbose: true
+        run: arduino-cli compile --fqbn esp32:esp32:esp32cam --verbose examples/esp32cam_snapshot_upload
