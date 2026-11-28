@@ -29,6 +29,12 @@ marker/flockで管理された停止済みsocketだけ再作成し、他のdata/
 serviceのExecStartは既存collectorの子をsupervisorへ変更します。Gunicorn/nativeworkerは同じ
 process group・stdout/stderrを継承するため、サービス合計30MiBのログ枠を共用します。
 
+clock_expiredの調査時だけ`ESP32CAM_CLOCK_DIAGNOSTICS=1`を設定すると、clock交換ごとと
+clock_expired dropごとの記録を`~/.local/state/esp32cam/logs/clock-diagnostics.jsonl`へ追記します。
+このファイルはrotationせず上記30MiBの枠外なので、調査後はflagを外してファイルを退避・削除します。
+trackingは交換間隔が最短50msのため増加が速くなります。この記録に未対応の版の`log_runner`は
+ファイルが残っていると起動できないため、rollback前にも必ず退避・削除してください。
+
 ```sh
 python -m script.log_runner --directory /home/ubuntu/.local/state/esp32cam/logs -- \
   python -m script.operating_service supervise -- \
