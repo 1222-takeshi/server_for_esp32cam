@@ -2,6 +2,7 @@ import json
 import re
 import stat
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,6 +14,13 @@ PACKAGE = Path(cli.__file__).parent
 def test_units_command_writes_dry_run_files_without_credentials(tmp_path):
     out = tmp_path / "live"
     assert cli.main(["units", "--kind", "live", "--date", "20261105", "--out", str(out)]) == 0
+    # Byte-for-byte output from the harness before candidate prefixes.
+    assert common.sha256_bytes((out / units.RECOVER_UNIT).read_bytes()) == (
+        "c14797af6b41a27427577c6e6f8530875e27402d04e9f5e72917b3dc247f23d7"
+    )
+    assert common.sha256_bytes((out / "launch-request.dry-run.json").read_bytes()) == (
+        "4f746ee977a9eecbbed02898b70ad0372571018ea81540fded94e151d6b3f283"
+    )
     request = json.loads((out / "launch-request.dry-run.json").read_text())
     assert "placeholder" not in json.dumps(request)
     assert request["env"]["ESP32CAM_RUST_TRIAL_SPIN_ON_RUN"] == "1"
@@ -33,6 +41,62 @@ def test_units_command_writes_dry_run_files_without_credentials(tmp_path):
     assert plan["post"][2] == "--unit=esp32cam-spin-on-run-v1-offline-post-20261105"
     with pytest.raises(FileExistsError):
         cli.main(["units", "--kind", "live", "--date", "20261105", "--out", str(out)])
+
+
+def test_live_candidate_prefix_wraps_only_the_native_command(tmp_path, monkeypatch):
+    config = tmp_path / "config.json"
+    out = tmp_path / "rendered"
+    prefix = ["taskset", "--cpu-list", "1-3", "/opt/priority helper"]
+    env = units.live_env(
+        nonce="0" * 16, camera_boot=1, seconds=600,
+        credentials={"ESP32CAM_DEVICE_API_KEYS": "test"}, run_dir=str(tmp_path),
+    )
+    launch_env = tmp_path / "launch-env.json"
+    launch_env.write_text(json.dumps(env))
+    cfg = {
+        "candidate_prefix": prefix, "frame_live": "frame-live", "model": "m",
+        "ort": "r", "seconds": 600, "launch_env": str(launch_env),
+    }
+    config.write_text(json.dumps(cfg))
+    assert cli.main([
+        "units", "--kind", "live", "--date", "20261105", "--out", str(out),
+        "--config", str(config),
+    ]) == 0
+    request = json.loads((out / "launch-request.dry-run.json").read_text())
+    assert request["argv"] == prefix + ["frame-live", "m", "r", "0.0.0.0:8766", "esp32cam-01"]
+    assert request["unit_properties"][-3:] == [str(config), "/home/ubuntu/spin-on-run/run", "execute"]
+    assert request["env"]["ESP32CAM_RUST_TRIAL_SPIN_ON_RUN"] == "1"
+
+    def execute(**kwargs):
+        assert kwargs["argv"] == request["argv"]
+        assert kwargs["env"] == env
+        return {"codes": []}
+
+    monkeypatch.setattr(cli.live_guardian, "execute", execute)
+    ops = SimpleNamespace(collector=None, stop_service=None)
+    assert cli._execute(cfg, tmp_path, {}, ops) == 0
+
+
+def test_live_verdict_prints_and_persists_the_run_result(tmp_path, monkeypatch, capsys):
+    snapshot = ctx().snapshot
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(json.dumps(snapshot))
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"baseline": str(baseline)}))
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "restore-result.json").write_text(
+        json.dumps({
+            "ok": True,
+            "post": {"abort_codes": [], "failure_codes": [], "within_deadline": True},
+        })
+    )
+    monkeypatch.setattr(cli, "_collector", lambda _cfg: SimpleNamespace(snapshot=lambda: snapshot))
+
+    assert cli.main(["live-verdict", str(config), str(run_dir)]) == 0
+    verdict = json.loads(capsys.readouterr().out)
+    assert verdict["result"] == "passed"
+    assert verdict == json.loads((run_dir / "final.json").read_text())
 
 
 def test_manifest_covers_every_package_file_and_the_field_map(tmp_path, capsys):
