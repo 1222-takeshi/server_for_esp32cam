@@ -82,6 +82,10 @@ def cmd_units(args: argparse.Namespace) -> int:
     out.mkdir(parents=True, exist_ok=False)
     date = args.date
     if args.kind == "live":
+        try:
+            cfg = _config(args.config)
+        except FileNotFoundError:
+            cfg = {}  # A dry run can render units before a deployment config exists.
         trial = units.trial_unit(args.seconds, date)
         env = units.live_env(
             nonce="0" * 16,
@@ -91,7 +95,8 @@ def cmd_units(args: argparse.Namespace) -> int:
             run_dir=args.run_dir,
         )
         run = units.live_systemd_run(trial, args.seconds, args.root, args.config, args.run_dir)
-        request = units.launch_request(env, units.native_argv("frame-live", "m", "r"), run)
+        argv = units.native_argv("frame-live", "m", "r", candidate_prefix=cfg.get("candidate_prefix"))
+        request = units.launch_request(env, argv, run)
         common.write_json(out / "launch-request.dry-run.json", request)
         common.write_new(
             out / units.RECOVER_UNIT,
@@ -216,6 +221,14 @@ def cmd_offline_post(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_live_verdict(args: argparse.Namespace) -> int:
+    cfg = _config(args.config)
+    baseline = json.loads(Path(cfg["baseline"]).read_text())
+    verdict = recover_guard.final_verdict(Path(args.out), _collector(cfg), baseline)
+    print(json.dumps(verdict))
+    return 0
+
+
 def cmd_live(args: argparse.Namespace) -> int:
     cfg = _config(args.config)
     run_dir = Path(args.out)
@@ -270,12 +283,15 @@ def _execute(cfg: dict, run_dir: Path, baseline: dict, ops: system_ops.SystemOps
         return subprocess.Popen(argv, env=env, stdin=subprocess.PIPE, stdout=stdout, stderr=stderr)
 
     env = json.loads(Path(cfg["launch_env"]).read_text())
+    # As in offline condition B, the spawn prefix leaves the spin setting intact.
     units.validate_live_env(env)
     units.check_frame_log(env, str(run_dir))
     summary = live_guardian.execute(
         run_dir=run_dir,
         seconds=cfg["seconds"],
-        argv=units.native_argv(cfg["frame_live"], cfg["model"], cfg["ort"]),
+        argv=units.native_argv(
+            cfg["frame_live"], cfg["model"], cfg["ort"], candidate_prefix=cfg.get("candidate_prefix")
+        ),
         env=env,
         nonce=env["ESP32CAM_RUST_TRIAL_NONCE"],
         checker_factory=lambda d: live_guardian.Checker(
@@ -326,6 +342,10 @@ def parser() -> argparse.ArgumentParser:
     lv.add_argument("out")
     lv.add_argument("step", choices=["execute", "enqueue", "recover", "check"])
     lv.set_defaults(handler=cmd_live)
+    verdict = sub.add_parser("live-verdict", help="write and print the final live verdict after recovery")
+    verdict.add_argument("config")
+    verdict.add_argument("out", help="live run directory")
+    verdict.set_defaults(handler=cmd_live_verdict)
     r2_sampler.add_subcommand(sub)
     return top
 

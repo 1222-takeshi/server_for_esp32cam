@@ -332,7 +332,6 @@ def test_the_cli_hands_the_service_stop_of_its_ops_to_the_guardian(tmp_path, mon
         cli.live_guardian, "execute", lambda **kw: captured.update(kw) or {"codes": []}
     )
     monkeypatch.setattr(cli.units, "validate_live_env", lambda env: None)
-    monkeypatch.setattr(cli.units, "native_argv", lambda *a: ["frame-live"])
     env_file = tmp_path / "env.json"
     env_file.write_text(
         json.dumps(

@@ -110,8 +110,15 @@ def check_frame_log(env: dict[str, str], run_dir: str) -> None:
         raise ValueError("ESP32CAM_RUST_TRIAL_FRAME_LOG is not <run dir>/frames.jsonl")
 
 
-def native_argv(binary: str, model: str, runtime: str) -> list[str]:
-    return [binary, model, runtime, "0.0.0.0:8766", "esp32cam-01"]
+def native_argv(
+    binary: str, model: str, runtime: str, *, candidate_prefix: list[str] | None = None
+) -> list[str]:
+    if candidate_prefix is not None and (
+        not isinstance(candidate_prefix, list)
+        or any(not isinstance(arg, str) for arg in candidate_prefix)
+    ):
+        raise ValueError("candidate_prefix must be a list of strings")
+    return [*(candidate_prefix or []), binary, model, runtime, "0.0.0.0:8766", "esp32cam-01"]
 
 
 def cli_command(root: str, *args: str) -> list[str]:
