@@ -17,6 +17,7 @@ from websockets.datastructures import MultipleValuesError
 from websockets.exceptions import ConnectionClosed
 from websockets.sync.server import serve
 
+from script.clock_diagnostics import ClockDiagnostics
 from script.detector import Detection
 from script.frame_protocol import (
     ClockSample, ClockWindow, FrameOrder, HEADER, MAX_GENERATION, MAX_JPEG_BYTES, PROFILE_HEADER,
@@ -146,6 +147,7 @@ class CaptureReceiver:
         self._key = key
         self.detector = detector
         self.sink = event_sink or (lambda event: None)
+        self.clock_diagnostics = ClockDiagnostics.from_env()
         self.result_sink, self.profile, self.continuous = result_sink, profile, continuous
         self.health_check = health_check
         self.clock_us = clock_us or (lambda: time.monotonic_ns() // 1000)
@@ -446,6 +448,7 @@ class CaptureReceiver:
                             if admitted:
                                 clock_window.add(sample)
                             boot = item["boot_id"]
+                            ping_sent_us = pending[1]
                             pending = None
                             self._emit(status="clock", boot_id=boot,
                                        clock_device_us=item["device_us"],
@@ -456,6 +459,11 @@ class CaptureReceiver:
                                        sample.offset_high_us - sample.offset_low_us,
                                        drift_bound_ppm=200,
                                        sample_admitted=admitted)
+                            if self.clock_diagnostics is not None:
+                                self.clock_diagnostics.exchange(
+                                    window=clock_window, sample=sample,
+                                    rtt_us=received - ping_sent_us,
+                                    received_us=received, admitted=admitted)
                         else:
                             if boot is not None and item["boot_id"] != boot:
                                 raise ValueError("boot_mismatch")
@@ -501,6 +509,9 @@ class CaptureReceiver:
                     age = clock_window.age_bounds_us(frame, received)
                     if age is None:
                         reason = "clock_expired"
+                        if self.clock_diagnostics is not None:
+                            self.clock_diagnostics.expired(
+                                window=clock_window, frame=frame, received_us=received)
                     elif age[1] > self.max_age_us:
                         reason = "stale_capture"
                     else:

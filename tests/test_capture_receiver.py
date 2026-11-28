@@ -13,7 +13,9 @@ from websockets.exceptions import InvalidStatus
 from websockets.sync.client import connect
 
 from script.capture_receiver import create_receiver, serve_live
+from script.clock_diagnostics import ClockDiagnostics
 from script.detector import Detection
+from script.frame_protocol import ClockSample, ClockWindow, decode_frame
 
 
 def jpeg():
@@ -880,3 +882,114 @@ def test_slow_clock_exchange_is_contact_but_not_admitted_to_the_window():
     assert clock_events and clock_events[0]["sample_admitted"] is False
     dropped = [event for event in events if event["status"] == "dropped"]
     assert dropped and dropped[0]["reason"] == "clock_expired"
+
+
+def diagnostic_records(home):
+    path = home / ".local/state/esp32cam/logs/clock-diagnostics.jsonl"
+    return [json.loads(line) for line in path.read_text().splitlines()]
+
+
+def run_exchange(clock):
+    events = []
+    app = create_receiver(device_api_key="private", clock_us=clock, event_sink=events.append)
+    app.handle(Socket(["PONG", frame()]), "esp32cam-01", "private")
+    return events
+
+
+@pytest.mark.parametrize("flag", [None, "", "0", "true"])
+@pytest.mark.parametrize("clock", [Clock, SlowClock])
+def test_clock_diagnostics_off_writes_nothing(monkeypatch, tmp_path, flag, clock):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    if flag is None:
+        monkeypatch.delenv("ESP32CAM_CLOCK_DIAGNOSTICS", raising=False)
+    else:
+        monkeypatch.setenv("ESP32CAM_CLOCK_DIAGNOSTICS", flag)
+    run_exchange(clock())
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("clock", [Clock, SlowClock])
+def test_clock_diagnostics_do_not_change_events(monkeypatch, tmp_path, clock):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("ESP32CAM_CLOCK_DIAGNOSTICS", raising=False)
+    off = run_exchange(clock())
+    monkeypatch.setenv("ESP32CAM_CLOCK_DIAGNOSTICS", "1")
+    assert run_exchange(clock()) == off
+
+
+def test_clock_diagnostics_record_admitted_exchange(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ESP32CAM_CLOCK_DIAGNOSTICS", "1")
+    events = run_exchange(Clock())
+    contact = next(event for event in events if event["status"] == "clock")
+    [record] = diagnostic_records(tmp_path)
+    assert record.pop("ts") > 1_000_000_000_000_000
+    rtt = record.pop("rtt_us")
+    assert 0 < rtt <= 100_000
+    assert record == {
+        "type": "clock_exchange", "device_us": 1_000_000,
+        "offset_low_us": contact["offset_low_us"],
+        "offset_high_us": contact["offset_high_us"],
+        "admitted": True, "reject_reason": None, "live_samples": 1,
+        "bounds_low_us": 0,
+        "bounds_high_us": contact["offset_high_us"] - contact["offset_low_us"],
+    }
+    assert record["bounds_high_us"] == rtt
+
+
+def test_clock_diagnostics_record_rejected_exchange_and_drop(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ESP32CAM_CLOCK_DIAGNOSTICS", "1")
+    run_exchange(SlowClock())
+    exchange, drop = diagnostic_records(tmp_path)
+    assert exchange["admitted"] is False
+    assert exchange["reject_reason"] == "rtt_over_limit"
+    assert exchange["rtt_us"] > 100_000
+    assert exchange["live_samples"] == 0
+    assert exchange["bounds_low_us"] is exchange["bounds_high_us"] is None
+    assert set(drop) == {"type", "ts", "captured_us", "host_received_us", "samples",
+                         "newest_is_none"}
+    assert drop["type"] == "clock_expired_state"
+    assert drop["captured_us"] == 1_000_100
+    assert drop["samples"] == [] and drop["newest_is_none"] is False
+
+
+def test_clock_diagnostics_record_live_samples_at_drop(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ESP32CAM_CLOCK_DIAGNOSTICS", "1")
+    # Captured far in the device's future, so the only live sample returns None.
+    _, events = receiver(["PONG", frame(captured=9_000_000, sent=9_000_010)])
+    assert any(event.get("reason") == "clock_expired" for event in events)
+    drop = diagnostic_records(tmp_path)[-1]
+    [sample] = drop["samples"]
+    assert sample["age_us"] > 0
+    assert sample["low_us"] is sample["high_us"] is None
+    assert drop["newest_is_none"] is True
+
+
+def test_clock_diagnostics_report_individual_sample_bounds_newest_first(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ESP32CAM_CLOCK_DIAGNOSTICS", "1")
+    window = ClockWindow()
+    older = ClockSample.from_exchange(7, 1_000_000, 1_009_900, 1_010_100)
+    newer = ClockSample.from_exchange(7, 2_000_000, 2_009_900, 2_010_100)
+    window.add(older)
+    window.add(newer)
+    captured = decode_frame(frame(captured=2_100_000, sent=2_100_010))
+    ClockDiagnostics.from_env().expired(window=window, frame=captured, received_us=2_150_000)
+    [drop] = diagnostic_records(tmp_path)
+    assert [(s["age_us"], (s["low_us"], s["high_us"])) for s in drop["samples"]] == [
+        (2_150_000 - sample.received_us, sample.age_bounds_us(captured, 2_150_000))
+        for sample in (newer, older)]
+    assert drop["newest_is_none"] is False
+
+
+def test_clock_diagnostics_write_failure_is_swallowed(monkeypatch, tmp_path):
+    blocker = tmp_path / "home"
+    blocker.write_text("not a directory")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("ESP32CAM_CLOCK_DIAGNOSTICS", raising=False)
+    expected = run_exchange(SlowClock())
+    monkeypatch.setenv("HOME", str(blocker))
+    monkeypatch.setenv("ESP32CAM_CLOCK_DIAGNOSTICS", "1")
+    assert run_exchange(SlowClock()) == expected
