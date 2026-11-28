@@ -39,3 +39,11 @@ required-features = ["jpeg", "transport"]
 name = "frame-clock"
 path = "src/clock_main.rs"
 required-features = ["clock-probe"]
+
+# Release builds are the deployed artifact (docs/rust-worker.md). Fat-LTO-free
+# thin LTO + a single codegen unit shrinks the binary and lets the hot
+# decode/preprocess path inline across crates. `panic` is intentionally left at
+# the default (unwind) so worker thread panic handling is unchanged.
+[profile.release]
+lto = "thin"
+codegen-units = 1
