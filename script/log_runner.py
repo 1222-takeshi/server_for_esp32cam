@@ -22,6 +22,8 @@ from pathlib import Path
 _MARKER = ".esp32cam-runtime-logs"
 _IDENTITY = "esp32cam-runtime-logs-v1\n"
 _INPUT_LIMIT = 8192
+# Written by script.clock_diagnostics; tolerated here but not rotated or counted.
+_SIDECAR = "clock-diagnostics.jsonl"
 
 
 class LogBudget:
@@ -61,12 +63,12 @@ class LogBudget:
             raise ValueError("Log directory must be privately owned")
         files = list(directory.iterdir())
         for path in files:
-            valid = (path.name in {self.marker_name, "runtime.log", ".writer.lock"}
+            valid = (path.name in {self.marker_name, "runtime.log", ".writer.lock", _SIDECAR}
                      or re.fullmatch(r"runtime\.log\.[1-9]", path.name))
             if not valid or path.is_symlink() or not stat.S_ISREG(path.stat().st_mode):
                 raise ValueError("Directory contains unmanaged data")
         marker = directory / self.marker_name
-        if files and not marker.exists():
+        if any(path.name != _SIDECAR for path in files) and not marker.exists():
             raise ValueError("Existing data is not a managed log directory")
         if marker.exists():
             if (marker.stat().st_size != len(self.directory_identity)

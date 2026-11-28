@@ -215,3 +215,18 @@ def test_gevent_process_is_rejected_before_thread_or_file_creation(tmp_path, mon
     with pytest.raises(ValueError, match="native"):
         DiagnosticLog(tmp_path / "diagnostics")
     assert not (tmp_path / "diagnostics").exists()
+
+
+@pytest.mark.parametrize("initialized", [True, False])
+def test_log_budget_tolerates_clock_diagnostics_file(tmp_path, initialized):
+    directory = tmp_path / "logs"
+    directory.mkdir(mode=0o700)
+    if initialized:
+        LogBudget(directory)._lock_file.close()
+    sidecar = directory / "clock-diagnostics.jsonl"
+    sidecar.write_text("{}\n")
+    budget = LogBudget(directory)
+    budget.line("still collecting")
+    assert budget.write_errors == 0
+    assert "still collecting" in (directory / "runtime.log").read_text()
+    assert sidecar.read_text() == "{}\n"
