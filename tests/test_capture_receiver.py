@@ -12,6 +12,7 @@ from PIL import Image
 from websockets.exceptions import InvalidStatus
 from websockets.sync.client import connect
 
+from script import clock_diagnostics
 from script.capture_receiver import create_receiver, serve_live
 from script.clock_diagnostics import ClockDiagnostics
 from script.detector import Detection
@@ -993,3 +994,48 @@ def test_clock_diagnostics_write_failure_is_swallowed(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(blocker))
     monkeypatch.setenv("ESP32CAM_CLOCK_DIAGNOSTICS", "1")
     assert run_exchange(SlowClock()) == expected
+
+
+def diagnostic_writer(monkeypatch, tmp_path, cap=None):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ESP32CAM_CLOCK_DIAGNOSTICS", "1")
+    if cap is not None:
+        monkeypatch.setattr(clock_diagnostics, "MAX_BYTES", cap)
+    path = tmp_path / ".local/state/esp32cam/logs/clock-diagnostics.jsonl"
+    return ClockDiagnostics.from_env(), path
+
+
+def test_clock_diagnostics_write_records_below_cap(monkeypatch, tmp_path):
+    writer, path = diagnostic_writer(monkeypatch, tmp_path, cap=1000)
+    for number in range(3):
+        writer._write({"n": number})
+    assert diagnostic_records(tmp_path) == [{"n": 0}, {"n": 1}, {"n": 2}]
+    assert path.stat().st_size < 1000
+
+
+def test_clock_diagnostics_stop_at_cap_with_one_marker(monkeypatch, tmp_path):
+    writer, path = diagnostic_writer(monkeypatch, tmp_path, cap=300)
+    for _ in range(20):
+        writer._write({"pad": "x" * 40})
+    *records, marker = diagnostic_records(tmp_path)
+    assert records and all(record == {"pad": "x" * 40} for record in records)
+    assert set(marker) == {"type", "ts"} and marker["type"] == "diagnostics_capped"
+    assert path.stat().st_size <= 300
+    capped = path.read_bytes()
+    writer._write({})  # Would still fit, but the writer has stopped for good.
+    path.write_bytes(b"")
+    writer._write({})
+    assert path.read_bytes() == b""
+    assert capped.count(b"diagnostics_capped") == 1
+
+
+@pytest.mark.parametrize("excess", [0, 1])
+def test_clock_diagnostics_leave_full_file_untouched(monkeypatch, tmp_path, excess):
+    writer, path = diagnostic_writer(monkeypatch, tmp_path)
+    path.parent.mkdir(mode=0o700, parents=True)
+    size = 67_108_864 + excess
+    with path.open("wb") as handle:
+        handle.truncate(size)  # Sparse, so the real limit is cheap to exercise.
+    writer._write({"n": 0})
+    writer._write({"n": 1})
+    assert path.stat().st_size == size

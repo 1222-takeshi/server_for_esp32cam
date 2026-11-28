@@ -15,6 +15,7 @@ from threading import Lock
 from script.frame_protocol import CameraFrame
 
 FILENAME = "clock-diagnostics.jsonl"
+MAX_BYTES = 64 * 1024 * 1024
 
 
 def _live(window, boot_id, now_us):
@@ -27,6 +28,7 @@ class ClockDiagnostics:
     def __init__(self):
         self._lock = Lock()
         self._handle = None
+        self._capped = False
 
     @classmethod
     def from_env(cls):
@@ -74,11 +76,22 @@ class ClockDiagnostics:
     def _write(self, record):
         line = (json.dumps(record, separators=(",", ":")) + "\n").encode()
         with self._lock:
+            if self._capped:
+                return
             if self._handle is None:
                 directory = Path.home() / ".local/state/esp32cam/logs"
                 # Private, as the log collector sharing this directory requires.
                 directory.mkdir(mode=0o700, parents=True, exist_ok=True)
                 flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
                 self._handle = os.fdopen(os.open(directory / FILENAME, flags, 0o600), "ab")
+            marker = (json.dumps({"type": "diagnostics_capped", "ts": time.time_ns() // 1000},
+                                 separators=(",", ":")) + "\n").encode()
+            size = os.fstat(self._handle.fileno()).st_size
+            # Keep room for the marker so the file never grows past the cap.
+            if size + len(line) + len(marker) > MAX_BYTES:
+                self._capped = True
+                if size + len(marker) > MAX_BYTES:
+                    return
+                line = marker
             self._handle.write(line)
             self._handle.flush()

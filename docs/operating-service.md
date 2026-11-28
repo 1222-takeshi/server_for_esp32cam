@@ -32,6 +32,8 @@ process group・stdout/stderrを継承するため、サービス合計30MiBの�
 clock_expiredの調査時だけ`ESP32CAM_CLOCK_DIAGNOSTICS=1`を設定すると、clock交換ごとと
 clock_expired dropごとの記録を`~/.local/state/esp32cam/logs/clock-diagnostics.jsonl`へ追記します。
 このファイルはrotationせず上記30MiBの枠外なので、調査後はflagを外してファイルを退避・削除します。
+ファイルは64 MiBを超えません。上限に達するとそのprocessは記録を停止し、余裕があれば最後に
+`diagnostics_capped`行を1つ書きます。
 trackingは交換間隔が最短50msのため増加が速くなります。この記録に未対応の版の`log_runner`は
 ファイルが残っていると起動できないため、rollback前にも必ず退避・削除してください。
 
